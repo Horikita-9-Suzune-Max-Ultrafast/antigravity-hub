@@ -27,8 +27,20 @@ export async function buildUi(options = {}) {
   const template = fs.readFileSync(path.join(uiDir, 'index.html'), 'utf8');
 
   const html = template
-    .replace('/* INLINE_STYLES */', cssCode)
-    .replace('/* INLINE_SCRIPT */', jsCode);
+    .replace('/* INLINE_STYLES */', () => cssCode)
+    .replace('/* INLINE_SCRIPT */', () => jsCode);
+
+  // Verify embedded script parses cleanly as valid JavaScript (guards against template substitution corruption)
+  const scriptMatch = /<script>([\s\S]*?)<\/script>/i.exec(html);
+  if (!scriptMatch || !scriptMatch[1].trim()) {
+    throw new Error('Bundled UI is missing inline <script> block');
+  }
+  try {
+    // eslint-disable-next-line no-new-func
+    new Function(scriptMatch[1]);
+  } catch (err) {
+    throw new Error(`Bundled UI inline script failed JS syntax validation: ${err.message}`);
+  }
 
   // Verify MCP App CSP compliance (no external scripts/stylesheets, < 10 MiB)
   if (/<(?:script|link)\b[^>]+(?:src|href)\s*=\s*["']https?:\/\//i.test(html)) {

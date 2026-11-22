@@ -1022,12 +1022,16 @@ async function refreshAll(animated = true, manual = false) {
   }
   try {
     await loadContext(animated);
-    await Promise.all([loadCalls(manual), loadQuota(), loadVault()]);
+    await Promise.allSettled([loadCalls(manual), loadQuota(), loadVault()]);
     if (state.inSettings) {
-      await loadConfigAndDoctor();
+      await loadConfigAndDoctor().catch(() => {});
     }
     if (manual) showToast('已增量同步最新数据');
   } catch (err) {
+    if (!state.contextData) {
+      const attr = document.getElementById('ctxAttribution');
+      if (attr) attr.textContent = `数据加载异常：${err.message}`;
+    }
     if (manual) showToast(`同步失败：${err.message}`);
   } finally {
     refreshInFlight = false;
@@ -1472,6 +1476,11 @@ function bindEvents() {
 // ==================== Bootstrap ====================
 async function init() {
   bindEvents();
+  renderSelects();
+  requestAnimationFrame(() => {
+    positionIndicator('mainSegNav', 'mainSegIndicator');
+    positionIndicator('callsModeNav', 'callsModeIndicator');
+  });
 
   const ro = new ResizeObserver(() => {
     positionIndicator('mainSegNav', 'mainSegIndicator');
@@ -1526,6 +1535,8 @@ async function init() {
       const caps = mcpApp.getHostCapabilities();
       state.canUpdateModelContext = Boolean(caps?.updateModelContext);
     } catch (err) {
+      const attr = document.getElementById('ctxAttribution');
+      if (attr) attr.textContent = `宿主连接失败：${err.message}`;
       showToast(`宿主连接异常：${err.message}`);
     }
   } else {

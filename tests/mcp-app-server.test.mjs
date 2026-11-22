@@ -107,6 +107,9 @@ test('MCP App Stdio Server serves ui:// single-file HTML, exposes 5 model + 7 ap
     assert.ok(html.length > 5000 && Buffer.byteLength(html, 'utf8') < 10 * 1024 * 1024);
     assert.ok(!/<(?:script|link)\b[^>]+(?:src|href)\s*=\s*["']https?:\/\//i.test(html), 'UI HTML must have zero external script/link URLs');
     assert.ok(!html.includes('runLiveChangeDemo'), 'Formal UI must remove temporary preview demo controls');
+    const scriptMatch = /<script>([\s\S]*?)<\/script>/i.exec(html);
+    assert.ok(scriptMatch && scriptMatch[1].length > 1000, 'Inline script must exist');
+    assert.doesNotThrow(() => new Function(scriptMatch[1]), 'Inline script must be syntactically valid JavaScript');
 
     // 3. tools/list — verify exact 5 model-visible + 7 app-only isolation
     const toolsResp = await client.request('tools/list');
