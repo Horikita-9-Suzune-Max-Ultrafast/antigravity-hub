@@ -14,6 +14,7 @@
   "scripts": {
     "build:ui": "node --no-warnings src/ui/build-ui.mjs",
     "deploy": "node --no-warnings scripts/deploy.mjs",
+    "pack:release": "node --no-warnings scripts/pack-release.mjs",
     "doctor": "node --no-warnings scripts/doctor.mjs",
     "test": "node --no-warnings --test tests/*.test.mjs"
   },

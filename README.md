@@ -1,14 +1,21 @@
 # context-cache
 
-**Antigravity 原生上下文缓存、多 Agent 实时遥测与合规额度观测插件（MCP App）**
+**简体中文** | [English](./README.en.md)
+
+**Antigravity 原生上下文缓存、多 Agent 实时遥测与跨会话记忆插件（MCP App）**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 [![Node.js >= 24](https://img.shields.io/badge/Node.js-%3E%3D24-339933.svg)](https://nodejs.org/)
 [![Zero Runtime Deps](https://img.shields.io/badge/Runtime%20Deps-0-brightgreen.svg)](#架构与设计原则)
 
-`context-cache` 是为 **Google Antigravity** 打造的原生 MCP App 观测与跨会话记忆插件，集 **上下文构成透视、主/子 Agent 实时 TPS 与缓存击穿归因、5h/7d 分组额度滑动窗口与校准、Git 感知跨会话记忆库与交接胶囊、抗宿主更新自愈底座** 于一体。
+`context-cache` 是为 **Google Antigravity** 打造的原生 MCP App 观测与跨会话记忆插件，集 **上下文构成透视、主/子 Agent 实时 TPS 与缓存击穿归因、5h/7d 分组额度参考窗口、Git 感知跨会话记忆库与双视图交接胶囊、抗宿主更新自愈底座** 于一体。
 
 **核心目标：实时监控 0 模型 Token 消耗、对业务代码仓库零写入污染、Antigravity 升级改版不崩不丢数据。**
+
+> [!NOTE]
+> **关于「额度参考」与已知边界的诚实说明**
+> - **额度参考功能目前尚不完善（仅作参考）**：由于 Antigravity 暂无公开文档化的插件额度查询 API，本插件严守合规边界、**不探测任何未文档化的内部私有接口**。当前「额度」页仅基于本地观测到的调用日志与手动基线校准做加权推演，**不代表官方账号后台的实时精确余额**，且在跨设备使用或未及时手动校准时存在明显误差；系统已预留标准 `QuotaProvider` 扩展口，待官方提供公开接口后即可无缝接入。
+> - **首字延迟（TTFT）**：官方 `transcript.jsonl` 暂未暴露流式 TTFT，调用明细中的耗时列如实展示**单步模型耗时**（已预留 `ttft_ms` / `ttftMs` 字段兼容，未来官方补充后自动切换）。
 
 ---
 
@@ -21,14 +28,14 @@
 
 ### 2. 主 / 子 Agent 实时调用明细与 TPS 监控（Live Calls & Telemetry）
 - 自动识别主对话 `transcript.jsonl` 中的 `invoke_subagent` 调用并追踪所有子 Agent（编号 `主`、`子1`、`子2`…），支持按步查看、按 Agent / 模型维度汇总与多维筛选。
-- **双源计时与吞吐**：优先使用 `PreInvocation` → `PostInvocation` 实测 `hook_ms`，缺失时平滑回退至 `hybrid_tool_split` / `transcript_fallback`，并预留未来官方 `ttft_ms` 字段兼容。
+- **双源计时与吞吐**：优先使用 `PreInvocation` → `PostInvocation` 实测 `hook_ms`，缺失时平滑回退至 `hybrid_tool_split` / `transcript_fallback`。
 - **前缀缓存击穿自动归因**：自动区分 `model_changed`、`idle_ttl_expired`、`context_compacted_or_reset`、`prefix_mutated_unknown` 四类原因，支持行内展开单步解剖抽屉。
 - **零模型 Token 消耗预警与单行状态条**：本地实时检测 4 类异常（上下文超警戒线、缓存击穿、子 Agent 突发高耗、连续 3 步低速 `< 15 tok/s`）；支持在聊天流中通过 `metadata.user_markdown`（`systemMessage: ""`）展示仅用户可见的单行 TPS/Cache 状态条。
 
-### 3. 5h / 7d 分组额度滑动窗口与基线校准（Quota & Usage）
-- 严守合规边界，**不探测任何未文档化的内部私有接口**。
-- 按 `Gemini 模型`、`Claude 与 GPT 模型`、`Gemini 4 Argon` 三组维护 5 小时与 7 天本地滑动窗口统计、近 7 天缓存复用趋势图与节省费用估算。
-- 支持面板内一键对照设置页校准剩余百分比与重置倒计时，后续按加权消耗自动推演扣减，到期自动滚动新周期；同时预留标准 `QuotaProvider` 扩展口。
+### 3. 5h / 7d 分组额度参考窗口（实验性 / 参考性质）
+- 按 `Gemini 模型`、`Claude 与 GPT 模型`、`Gemini 4 Argon` 三组统计近 5 小时与 7 天本地实测调用与缓存复用趋势图，估算缓存节省费用。
+- 支持面板内手动对照 Antigravity 设置页校准基线百分比与重置倒计时，后续按加权消耗做本地推演扣减并到期滚动。
+- **当前局限**：依赖手动校准且仅统计本机观测到的会话，尚未接入官方实时额度数据，结果仅供趋势与用量参考。
 
 ### 4. Git 感知跨会话记忆库与双视图交接胶囊（Context Vault）
 - 对目标业务仓库严格**只读探测** Git 指纹、分支与 `HEAD`（绝不在业务仓库写入任何缓存文件），按 `project_id + branch` 隔离存储 `working_state`、`decision`、`architecture`、`pitfall` 与 `Stop` 自动 `checkpoint`。
@@ -54,7 +61,7 @@
 1. **零运行时依赖**：Core Engine、Hooks、MCP Server、CLI 纯基于 Node.js 24 原生能力（含 `node:sqlite`）；仅开发期使用 `@modelcontextprotocol/ext-apps` + `esbuild` 将前端打包为单一零外链静态 HTML，部署产物**零 `node_modules`**。
 2. **外置真相源 + 可重建派生索引**：Markdown 与追加式 JSONL 真相源独立存放于 `%USERPROFILE%\.context-cache`（支持 `CONTEXT_CACHE_DATA_DIR` 覆盖），SQLite WAL + FTS5（`index.sqlite`）随时可删并无损重建。
 3. **极薄 Fail-Open Hook 层**：仅挂载 `SessionStart`、`PreInvocation`、`PostInvocation`、`Stop`（**不挂载 `PreToolUse`**，绝不干扰原生命令审批）；统一 5s 硬超时、camelCase/snake_case 多版本兼容、脱敏 `schema-drift.jsonl` 录制与 3 次连续异常熔断（任何异常恒定返回 `{}`，退出码 `0`）。
-4. **Windows 含空格路径免疫**：`hooks.json` 使用相对路径 + `--no-warnings`，`mcp_config.json` 由部署脚本按目标路径动态渲染，源码库零本机路径硬编码。
+4. **Windows 含空格路径免疫**：`hooks.json` 使用相对路径 + `--no-warnings`，Release 包使用 Antigravity 原生 `${PLUGIN_ROOT}` 变量展开，源码库零本机路径硬编码。
 5. **不改宿主敏感配置**：部署与自愈绝不修改 Antigravity 程序文件或 `~/.gemini/config/config.json`。
 
 ---
@@ -66,7 +73,22 @@
 - **Git**（用于只读识别仓库指纹与分支）
 - **Google Antigravity**
 
-### 安装、测试与部署
+### 方式一：下载 Release 免构建插件包（推荐，零 `npm install`）
+
+1. 前往 [Releases](https://github.com/Horikita-9-Suzune-Max-Ultrafast/context-cache/releases) 下载 `context-cache-v1.0.0-plugin.zip`（内部为全明文可读 `.mjs` 源码 + 预编译单文件 UI，零 `node_modules`）。
+2. 解压至 Antigravity 插件目录，使目录结构为 `~/.gemini/config/plugins/context-cache/plugin.json`：
+   - **Windows PowerShell**：
+     ```powershell
+     Expand-Archive -Path .\context-cache-v1.0.0-plugin.zip -DestinationPath "$env:USERPROFILE\.gemini\config\plugins" -Force
+     ```
+   - **macOS / Linux**：
+     ```bash
+     mkdir -p ~/.gemini/config/plugins
+     unzip -o context-cache-v1.0.0-plugin.zip -d ~/.gemini/config/plugins
+     ```
+3. Antigravity 会自动发现并加载插件（无需重启）。
+
+### 方式二：从源码克隆、测试并部署
 
 ```powershell
 # 1. 克隆仓库
@@ -82,11 +104,12 @@ npm test
 # 4. 构建单文件 MCP App UI 并幂等部署至 ~/.gemini/config/plugins/context-cache
 npm run deploy
 
-# 5. 运行健康体检
+# 5. 运行健康体检（或打包便携 Release 压缩包）
 npm run doctor
+npm run pack:release
 ```
 
-部署完成后，Antigravity 会自动发现插件（无需重启）：
+部署完成后：
 - 在左侧边栏打开 **`Context Monitor`**（全页视图）；
 - 或在对话右侧边栏 `+` 菜单打开 **`Context & Telemetry`**（侧边栏视图）；
 - 点击右上角齿轮图标进入 **「插件设置」** 调整轮询周期、单行状态条、告警阈值、独立悬浮小窗或执行 Doctor 维护。
@@ -107,7 +130,7 @@ node --no-warnings bin/ctx.mjs save --kind decision --title "标题" --summary "
 # FTS5 全文检索记忆库
 node --no-warnings bin/ctx.mjs search "缓存击穿"
 
-# 查看会话调用明细与 TPS / 额度统计
+# 查看会话调用明细与 TPS / 额度参考统计
 node --no-warnings bin/ctx.mjs calls
 node --no-warnings bin/ctx.mjs quota
 
@@ -148,9 +171,11 @@ context-cache/
 │   ├── mcp/server.mjs                   # 零依赖 MCP Stdio Server（5 Model + 7 App-Only）
 │   └── ui/                              # 单文件自包含 MCP App 前端与 esbuild 打包脚本
 ├── plugin/                              # Antigravity 插件清单、Hooks、Rules、Skills 与图标
-├── scripts/                             # deploy.mjs 与 doctor.mjs
+├── scripts/                             # deploy.mjs、pack-release.mjs 与 doctor.mjs
 ├── tests/                               # 7 个端到端 / 单元 / 韧性测试文件
 ├── LICENSE                              # MIT License
+├── README.md                            # 简体中文文档
+├── README.en.md                         # English documentation
 └── package.json
 ```
 
