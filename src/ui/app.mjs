@@ -54,11 +54,13 @@ const state = {
   config: {
     pollIntervalSec: 5,
     auxAutoOpen: true,
-    popout: { enabled: false, autoLaunchFromSidebar: true, size: '460x720', position: null },
+    popout: { enabled: false, autoLaunchFromSidebar: true, alwaysOnTop: true, size: '460x720', position: null },
     uiBanner: { enabled: true },
     sessionStartBudgetTokens: 450,
     alerts: { contextWarningPct: 75, cacheDropThresholdPct: 50 },
   },
+  windowPinned: true,
+  windowCollapsed: false,
   doctorReport: null,
   knownCallIds: new Set(),
   freshCallId: null,
@@ -72,15 +74,37 @@ let heartbeatTimer = null;
 let boundsTimer = null;
 let toastTimer = null;
 let refreshInFlight = false;
+let refreshSeq = 0;
 let lastSavedBoundsKey = '';
 
-// Detect standalone popout mode (?token=...) vs MCP App iframe mode
+// Detect standalone popout mode (?token=...) & native frameless WebView2 mode (?native=1)
 const urlParams = new URLSearchParams(window.location.search);
 const popoutToken = urlParams.get('token');
+const isNativePopout = Boolean(popoutToken && urlParams.get('native') === '1');
+const initialThemeParam = urlParams.get('theme');
+if (popoutToken && urlParams.get('topmost') === '0') {
+  state.windowPinned = false;
+}
 const popoutClientId = popoutToken
   ? `pop-${Math.random().toString(36).slice(2, 10)}-${Date.now().toString(36)}`
   : null;
 let mcpApp = null;
+
+function postHostWindowMsg(cmd) {
+  try {
+    window.chrome?.webview?.postMessage?.(String(cmd));
+  } catch {
+    // ignore outside native WebView2 host
+  }
+}
+
+function detectCurrentTheme() {
+  const dt = document.documentElement.dataset.theme;
+  if (dt === 'dark' || dt === 'light') return dt;
+  if (document.documentElement.classList.contains('dark')) return 'dark';
+  if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) return 'dark';
+  return 'light';
+}
 
 function esc(str) {
   return String(str ?? '')
@@ -267,29 +291,130 @@ function renderFollowToggle() {
     : `<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="7" width="9" height="6.5" rx="1.5"/><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2"/></svg>`;
 }
 
+function formatShortModel(model) {
+  const m = String(model || '').trim();
+  if (!m) return '—';
+  let s = m
+    .replace(/^gemini-/i, '')
+    .replace(/^claude-/i, '')
+    .replace(/-tiered-/i, '-')
+    .replace(/hydrogen/i, 'hydro')
+    .replace(/-xhigh$/i, '-xh')
+    .replace(/-high$/i, '-H')
+    .replace(/-medium$/i, '-M')
+    .replace(/-low$/i, '-L');
+  return s;
+}
+
+function clampOpenSelectMenus() {
+  requestAnimationFrame(() => {
+    const vw = window.innerWidth || document.documentElement.clientWidth || 360;
+    const pad = 8;
+    document.querySelectorAll('.agy-select-menu[data-open="true"]').forEach((menu) => {
+      menu.style.left = '';
+      menu.style.right = '';
+      menu.style.maxWidth = `${Math.max(160, vw - pad * 2)}px`;
+      const rect = menu.getBoundingClientRect();
+      if (rect.left < pad) {
+        // Menu overflowed left edge (e.g. align-right menu wrapped to left column): anchor to left
+        menu.style.left = '0';
+        menu.style.right = 'auto';
+        const r2 = menu.getBoundingClientRect();
+        if (r2.right > vw - pad) {
+          menu.style.left = `${Math.max(pad - r2.left, vw - pad - r2.right)}px`;
+        }
+      } else if (rect.right > vw - pad) {
+        menu.style.left = 'auto';
+        menu.style.right = '0';
+        const r2 = menu.getBoundingClientRect();
+        if (r2.left < pad) {
+          menu.style.right = `${Math.max(0, r2.left - pad)}px`;
+        }
+      }
+    });
+  });
+}
+
+function renderSessionSelect() {
+  const host = document.getElementById('sessionSelectHost');
+  if (!host) return;
+  const sessions = state.contextData?.sessions || [];
+  const isAggregate = state.pinnedConversationId === '__active_all__' || state.activeConversationId === '__active_all__';
+  const isAuto = !isAggregate && state.followMode === 'auto';
+  const activeId = isAggregate ? '__active_all__' : isAuto ? state.activeConversationId : state.pinnedConversationId || state.activeConversationId;
+  const matched = sessions.find((s) => s.id === activeId) || sessions[0] || null;
+  const isOpen = state.openSelectId === 'sessionSelect';
+  const activeCount = sessions.filter((s) => s.isActive).length;
+  const titleText = isAggregate
+    ? `当前运行汇总${activeCount ? ` (${activeCount} 活跃)` : ' (主+子)'}`
+    : matched
+      ? (matched.isSubagent && matched.subTag ? `${matched.subTag} · ${matched.label}` : matched.label)
+      : '等待会话记录';
+
+  const modeChipHtml = isAggregate
+    ? `<span class="session-mode-chip" data-mode="aggregate"><span class="session-mode-dot"></span><span>汇总</span></span>`
+    : isAuto
+      ? `<span class="session-mode-chip" data-mode="auto"><span class="session-mode-dot"></span><span>自动</span></span>`
+      : `<span class="session-mode-chip" data-mode="pinned"><span>锁定</span></span>`;
+
+  const checkSvg = `<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" class="shrink-0"><path d="M3.5 8.5L6.5 11.5L12.5 4.8" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+
+  const sessionsHtml = sessions.length
+    ? sessions
+        .map((s) => {
+          const isCur = !isAggregate && s.id === (matched?.id || activeId);
+          return `
+        <button type="button" class="agy-select-opt" data-selected="${isCur}" data-select-pick="sessionSelect" data-select-val="${esc(s.id)}">
+          <span class="flex items-center gap-1.5 min-w-0">
+            ${s.isActive ? `<span class="session-live-dot" title="近期运行中"></span>` : ''}
+            ${s.isSubagent ? `<span class="session-sub-pill">${esc(s.subTag || '子')}</span>` : ''}
+            <span class="truncate">${esc(s.label)}</span>
+          </span>
+          <span class="flex items-center gap-2 shrink-0">
+            ${s.stepCount ? `<span class="session-opt-meta mono-num">${s.stepCount}步</span>` : ''}
+            ${isCur ? checkSvg : ''}
+          </span>
+        </button>`;
+        })
+        .join('')
+    : `<div class="px-2.5 py-2 text-xs text-muted">当前工作区暂无会话记录</div>`;
+
+  host.innerHTML = `
+    <button type="button" class="agy-select-trigger w-full" aria-expanded="${isOpen}" data-select-toggle="sessionSelect">
+      <span class="session-trigger-inner">
+        ${modeChipHtml}
+        <span class="truncate text-fg">${esc(titleText)}</span>
+      </span>
+      <svg class="agy-select-chevron" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7">
+        <path d="M4.2 6.2L8 10l3.8-3.8" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    </button>
+    <div class="agy-select-menu w-full" data-open="${isOpen}">
+      <button type="button" class="agy-select-opt" data-selected="${isAuto}" data-select-pick="sessionSelect" data-select-val="__auto__">
+        <span class="flex items-center gap-2 min-w-0">
+          <span class="session-mode-chip" data-mode="auto"><span class="session-mode-dot"></span><span>自动</span></span>
+          <span class="truncate">跟随当前选中 / 活跃对话</span>
+        </span>
+        ${isAuto ? checkSvg : ''}
+      </button>
+      <button type="button" class="agy-select-opt" data-selected="${isAggregate}" data-select-pick="sessionSelect" data-select-val="__active_all__">
+        <span class="flex items-center gap-2 min-w-0">
+          <span class="session-mode-chip" data-mode="aggregate"><span class="session-mode-dot"></span><span>汇总</span></span>
+          <span class="truncate">当前运行中的全部对话 (主+子)</span>
+        </span>
+        ${isAggregate ? checkSvg : ''}
+      </button>
+      <div class="session-menu-divider"></div>
+      <div class="session-menu-caption">对话与子代理列表（点击切换所有视图）</div>
+      ${sessionsHtml}
+    </div>
+  `;
+}
+
 function renderSelects() {
   renderPollSelect();
   renderFollowToggle();
-
-  const sessions = state.contextData?.sessions || [];
-  const activeId = state.followMode === 'pinned' ? state.pinnedConversationId : state.activeConversationId;
-  const matched = sessions.find((s) => s.id === activeId) || sessions[0] || null;
-  const sessionOpts = [
-    { value: '__auto__', label: '自动跟随当前活跃对话（实时）' },
-    ...(sessions.length
-      ? sessions.map((s) => ({ value: s.id, label: s.label }))
-      : [{ value: '', label: '当前工作区（等待会话记录）' }]),
-  ];
-  const triggerLabel = matched
-    ? `${state.followMode === 'auto' ? '自动 · ' : ''}${matched.label}`
-    : '自动跟随 · 等待会话记录';
-  renderCustomSelect('sessionSelectHost', {
-    id: 'sessionSelect',
-    value: activeId || '__auto__',
-    options: sessionOpts,
-    fullWidth: true,
-    triggerLabel,
-  });
+  renderSessionSelect();
 
   renderCustomSelect('agentSelectHost', {
     id: 'agentSelect',
@@ -361,6 +486,8 @@ function renderSelects() {
     value: state.config.popout?.size || '460x720',
     options: POPOUT_SIZES,
   });
+
+  clampOpenSelectMenus();
 }
 
 async function handleSelectPick(id, val) {
@@ -371,8 +498,19 @@ async function handleSelectPick(id, val) {
       state.pinnedConversationId = null;
       resetSessionViewState();
       renderSelects();
-      await refreshAll(true, false);
-      showToast('已开启自动跟随当前活跃对话');
+      await refreshAll(true, false, true);
+      showToast('已开启自动跟随当前选中 / 活跃对话');
+      return;
+    }
+
+    if (val === '__active_all__') {
+      state.followMode = 'pinned';
+      state.pinnedConversationId = '__active_all__';
+      state.activeConversationId = '__active_all__';
+      resetSessionViewState();
+      renderSelects();
+      await refreshAll(true, false, true);
+      showToast('已切换至「当前运行中的全部对话」汇总视图');
       return;
     }
 
@@ -381,7 +519,7 @@ async function handleSelectPick(id, val) {
       state.activeConversationId = val;
       resetSessionViewState();
       renderSelects();
-      await refreshAll(true, false);
+      await refreshAll(true, false, true);
       return;
     }
 
@@ -390,7 +528,7 @@ async function handleSelectPick(id, val) {
     resetSessionViewState();
     renderSelects();
     await callAppTool('app_config_manage', { action: 'set_active_session', conversationId: val }).catch(() => {});
-    await refreshAll(true, false);
+    await refreshAll(true, false, true);
     showToast('已同步切换所有监控视图至所选对话');
     return;
   }
@@ -524,6 +662,11 @@ function renderContext(animated = false) {
   prevDisplay.tps = tps;
   prevDisplay.free = free;
   prevDisplay.cost = cost;
+
+  const miniEl = document.getElementById('titleBarMiniSummary');
+  if (miniEl) {
+    miniEl.textContent = `${pct.toFixed(1)}% · ${cache.toFixed(0)}% Cache`;
+  }
 
   document.getElementById('ctxAttribution').textContent = ctx.attribution || '';
 
@@ -671,24 +814,34 @@ function renderCalls() {
         const totalOut = Math.max(1, c.thinkingTokensEst + c.contentTokensEst);
         const thinkRatio = Math.round((c.thinkingTokensEst / totalOut) * 100);
 
+        const shortModel = formatShortModel(c.model);
+        const sourceText = c.sourceLabel || `${c.agentTag} · ${String(c.conversationId || '').slice(0, 8)}`;
+
         return `
         <tr class="call-row ${c.callUid === state.freshCallId ? 'row-fresh' : ''}" data-call-id="${esc(c.callUid)}" data-expanded="${isExp}">
-          <td class="whitespace-nowrap mono-num">
+          <td class="cell-step whitespace-nowrap mono-num">
             <span class="agent-badge" style="${badgeStyle}">${esc(c.agentTag)}</span>
             <span>#${c.stepIndex}</span>
+            <span class="cell-inline-model" title="${esc(c.model)}">${esc(shortModel)}</span>
           </td>
-          <td class="whitespace-nowrap mono-num text-muted">${esc(c.model)}</td>
-          <td class="text-right whitespace-nowrap mono-num font-semibold ${c.effectiveTps < 15 ? 'text-warning' : ''}">${c.effectiveTps.toFixed(1)} tok/s</td>
-          <td class="text-right whitespace-nowrap mono-num text-muted">${durText}</td>
-          <td class="text-right whitespace-nowrap mono-num">
+          <td class="cell-model col-model-cell mono-num text-muted" title="${esc(c.model)}">${esc(shortModel)}</td>
+          <td class="cell-tps text-right whitespace-nowrap mono-num font-semibold ${c.effectiveTps < 15 ? 'text-warning' : ''}">
+            <span>${c.effectiveTps.toFixed(1)} tok/s</span>
+            <span class="cell-inline-cost">$${c.estimatedCostUsd.toFixed(3)}</span>
+          </td>
+          <td class="cell-dur text-right whitespace-nowrap mono-num text-muted">${durText}</td>
+          <td class="cell-tok text-right whitespace-nowrap mono-num">
+            <span class="cell-inline-dur">${durText} ·</span>
             <span>${fmtK(c.contextTokens)}</span>
             <span class="text-muted"> / ${fmtK(c.thinkingTokensEst)} / ${fmtK(c.contentTokensEst)}</span>
           </td>
-          <td class="text-right whitespace-nowrap mono-num ${cacheCls}">
-            ${c.cacheHitRate.toFixed(1)}%
-            ${c.cacheDrop ? `<span class="ml-1.5 px-2 py-0.5 rounded-full text-xs" style="background: color-mix(in srgb, var(--error) 12%, transparent);">击穿</span>` : ''}
+          <td class="cell-cache text-right whitespace-nowrap mono-num ${cacheCls}">
+            <span class="cache-cell-wrap">
+              <span>${c.cacheHitRate.toFixed(1)}%</span>
+              ${c.cacheDrop ? `<span class="cache-drop-pill">击穿</span>` : ''}
+            </span>
           </td>
-          <td class="text-right whitespace-nowrap mono-num font-medium">$${c.estimatedCostUsd.toFixed(3)}</td>
+          <td class="cell-cost text-right whitespace-nowrap mono-num font-medium">$${c.estimatedCostUsd.toFixed(3)}</td>
         </tr>
         ${
           isExp
@@ -697,14 +850,18 @@ function renderCalls() {
           <td colspan="7" class="px-4 py-3.5">
             <div class="space-y-2.5 text-xs panel-enter">
               <div class="flex flex-wrap items-center justify-between gap-2">
-                <div class="flex flex-wrap items-center gap-3 mono-num">
+                <div class="flex flex-wrap items-center gap-x-3 gap-y-1 mono-num">
                   <span class="font-semibold text-fg">单步解剖 · ${esc(c.agentTag)} #${c.stepIndex}</span>
+                  <span class="text-muted">模型: <span class="text-fg font-medium">${esc(c.model)}</span></span>
                   <span class="text-muted">计时来源: ${esc(c.timingSource)}</span>
-                  <span class="text-muted">缓存命中 ${fmtK(c.cacheReadTokens)} · 新编码 ${fmtK(c.inputTokens)}</span>
                 </div>
                 <span class="mono-num text-muted">思考占比 ${thinkRatio}%</span>
               </div>
-              <div class="flex rounded-full overflow-hidden" style="height: 8px; background: var(--card); border: 1px solid var(--border);">
+              <div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+                <span class="text-muted">信息来源：<span class="text-fg font-medium">${esc(sourceText)}</span></span>
+                <span class="mono-num text-muted">缓存命中 ${fmtK(c.cacheReadTokens)} · 新编码 ${fmtK(c.inputTokens)} · 输出 ${fmtK(c.outputTokens)}</span>
+              </div>
+              <div class="flex rounded-full overflow-hidden w-full" style="height: 8px; background: var(--card); border: 1px solid var(--border); box-sizing: border-box;">
                 <div style="width:${Math.min(100, c.cacheHitRate)}%; background: var(--success);"></div>
                 <div style="width:${Math.max(0, 100 - c.cacheHitRate)}%; background: var(--chart-2);"></div>
               </div>
@@ -730,8 +887,37 @@ function renderCalls() {
   }
 
   const totalCost = list.reduce((s, c) => s + c.estimatedCostUsd, 0);
-  const avgTps = list.length ? list.reduce((s, c) => s + c.effectiveTps, 0) / list.length : 0;
-  document.getElementById('callsFooterStats').textContent = `共 ${list.length} 步 · 均速 ${avgTps.toFixed(1)} tok/s · 估算 $${totalCost.toFixed(3)}`;
+  const totalOutTokens = list.reduce((s, c) => s + (c.outputTokens || 0), 0);
+  const totalDurMs = list.reduce((s, c) => s + (c.durationMs || 0), 0);
+  const avgTps =
+    totalDurMs > 0 && totalOutTokens > 0
+      ? totalOutTokens / (totalDurMs / 1000)
+      : list.length
+        ? list.reduce((s, c) => s + c.effectiveTps, 0) / list.length
+        : 0;
+  const heroSteps = document.getElementById('callsHeroSteps');
+  const heroTps = document.getElementById('callsHeroTps');
+  const heroCost = document.getElementById('callsHeroCost');
+  const heroModel = document.getElementById('callsHeroModel');
+  const totalAll = data?.totalCallsCount ?? list.length;
+  if (heroSteps) {
+    heroSteps.textContent = list.length !== totalAll ? `${list.length} / ${totalAll} 步` : `${list.length} 步`;
+  }
+  if (heroTps) {
+    heroTps.textContent = `${avgTps.toFixed(1)} tok/s`;
+    heroTps.classList.toggle('text-warning', list.length > 0 && avgTps < 15);
+    heroTps.classList.toggle('text-primary', !(list.length > 0 && avgTps < 15));
+  }
+  if (heroCost) {
+    heroCost.textContent = `$${totalCost.toFixed(3)}`;
+  }
+  if (heroModel) {
+    const latestModel = list[0]?.model || data?.summary?.latestModel || '';
+    heroModel.textContent = latestModel ? `模型: ${latestModel}` : '';
+    heroModel.title = latestModel;
+    heroModel.classList.toggle('hidden', !latestModel);
+  }
+  document.getElementById('callsFooterStats').textContent = `共 ${list.length} 步 · 加权均速 ${avgTps.toFixed(1)} tok/s · 估算 $${totalCost.toFixed(3)}`;
 
   const byAgent = data?.summary?.byAgent || [];
   document.getElementById('summaryAgentList').innerHTML = byAgent.length
@@ -1019,16 +1205,30 @@ function exitGlobalLauncherMode() {
 function startPopoutClientLifecycle() {
   if (!popoutToken || !popoutClientId) return;
 
-  const sendHeartbeat = () => {
-    fetch(`/api/popout/heartbeat?token=${encodeURIComponent(popoutToken)}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-cc-token': popoutToken },
-      body: JSON.stringify({ clientId: popoutClientId }),
-    }).catch(() => {});
+  const sendHeartbeat = async () => {
+    try {
+      const resp = await fetch(`/api/popout/heartbeat?token=${encodeURIComponent(popoutToken)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-cc-token': popoutToken },
+        body: JSON.stringify({ clientId: popoutClientId }),
+      });
+      if (!resp.ok) return;
+      const data = await resp.json();
+      if (
+        state.followMode === 'auto' &&
+        data?.activeConversationId &&
+        state.activeConversationId &&
+        data.activeConversationId !== state.activeConversationId
+      ) {
+        void refreshAll(true, false, true);
+      }
+    } catch {
+      // ignore transient heartbeat failure
+    }
   };
 
-  sendHeartbeat();
-  heartbeatTimer = setInterval(sendHeartbeat, 5000);
+  void sendHeartbeat();
+  heartbeatTimer = setInterval(sendHeartbeat, 1800);
 
   let closingSent = false;
   const sendClosing = () => {
@@ -1045,13 +1245,15 @@ function startPopoutClientLifecycle() {
   window.addEventListener('pagehide', sendClosing);
   window.addEventListener('beforeunload', sendClosing);
 
-  // Persist user-resized/moved floating window geometry (debounced)
+  // Persist user-resized/moved floating window geometry (debounced; skip when collapsed to 38px mini-bar)
   let saveBoundsDebounce = null;
   const scheduleBoundsSave = () => {
-    const w = Math.max(360, Math.min(1600, Math.round(window.outerWidth || window.innerWidth || 460)));
-    const h = Math.max(480, Math.min(1200, Math.round(window.outerHeight || window.innerHeight || 720)));
-    const x = Number.isFinite(window.screenX) ? Math.round(window.screenX) : null;
-    const y = Number.isFinite(window.screenY) ? Math.round(window.screenY) : null;
+    if (state.windowCollapsed || (typeof window.innerHeight === 'number' && window.innerHeight < 120)) return;
+    const w = Math.max(360, Math.min(1600, Math.round(isNativePopout ? window.innerWidth : window.outerWidth || window.innerWidth || 460)));
+    const h = Math.max(460, Math.min(1200, Math.round(isNativePopout ? window.innerHeight : window.outerHeight || window.innerHeight || 720)));
+    const dpr = window.devicePixelRatio || 1;
+    const x = Number.isFinite(window.screenX) && window.screenX >= 10 ? Math.round(window.screenX * dpr) : null;
+    const y = Number.isFinite(window.screenY) && window.screenY >= 10 ? Math.round(window.screenY * dpr) : null;
     const key = `${w}x${h}@${x},${y}`;
     if (key === lastSavedBoundsKey) return;
     clearTimeout(saveBoundsDebounce);
@@ -1069,12 +1271,124 @@ function startPopoutClientLifecycle() {
   }, 4000);
 }
 
+function renderNativePinButton() {
+  const btn = document.getElementById('winPinBtn');
+  const lbl = document.getElementById('winPinLabel');
+  if (!btn) return;
+  const pinned = Boolean(state.windowPinned);
+  btn.dataset.pinned = String(pinned);
+  btn.title = pinned ? '已固定置顶在页面最前（点击取消固定）' : '未固定置顶（点击固定在 Antigravity 页面最前）';
+  if (lbl) lbl.textContent = pinned ? '已固定' : '置顶';
+}
+
+function setupNativeFramelessChrome() {
+  if (!isNativePopout) return;
+  document.body.classList.add('native-popout');
+  document.getElementById('appShell')?.classList.add('scroll-thin');
+  document.getElementById('nativeTitleBar')?.classList.remove('hidden');
+  document.getElementById('nativeResizeHandles')?.classList.remove('hidden');
+  renderNativePinButton();
+
+  const toggleNativeCollapse = () => {
+    state.windowCollapsed = !state.windowCollapsed;
+    document.body.classList.toggle('window-collapsed', state.windowCollapsed);
+    const collapsePx = Math.ceil(40 * (window.devicePixelRatio || 1));
+    postHostWindowMsg(state.windowCollapsed ? `collapse:1:${collapsePx}` : 'collapse:0');
+    document.getElementById('titleBarMiniSummary')?.classList.toggle('hidden', !state.windowCollapsed);
+    const minSvg = document.getElementById('winMinSvg');
+    if (minSvg) {
+      minSvg.innerHTML = state.windowCollapsed
+        ? `<path d="M4.2 6.2L8 10l3.8-3.8"/>`
+        : `<path d="M4.2 9.8L8 6l3.8 3.8"/>`;
+    }
+  };
+
+  const titleBar = document.getElementById('nativeTitleBar');
+  if (titleBar) {
+    titleBar.addEventListener('mousedown', (e) => {
+      if (e.button !== 0 || e.detail >= 2) return;
+      if (e.target.closest('button')) return;
+      e.preventDefault();
+      postHostWindowMsg('drag');
+    });
+    titleBar.addEventListener('dblclick', (e) => {
+      if (e.button !== 0) return;
+      if (e.target.closest('button')) return;
+      e.preventDefault();
+      if (state.windowCollapsed) {
+        toggleNativeCollapse();
+      } else {
+        postHostWindowMsg('max');
+      }
+    });
+  }
+
+  // Also allow dragging by grabbing any empty background area of the top header
+  const headerEl = document.querySelector('.agy-header');
+  if (headerEl) {
+    headerEl.addEventListener('mousedown', (e) => {
+      if (e.button !== 0 || e.detail >= 2) return;
+      if (e.target.closest('button, input, textarea, a, .agy-select-wrap, .seg-nav, .acc-body')) return;
+      e.preventDefault();
+      postHostWindowMsg('drag');
+    });
+  }
+
+  document.querySelectorAll('#nativeResizeHandles .win-resize').forEach((handle) => {
+    handle.addEventListener('mousedown', (e) => {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      const ht = handle.dataset.ht;
+      if (ht) postHostWindowMsg(`resize:${ht}`);
+    });
+  });
+
+  document.getElementById('winPinBtn')?.addEventListener('click', () => {
+    state.windowPinned = !state.windowPinned;
+    postHostWindowMsg(state.windowPinned ? 'pin:1' : 'pin:0');
+    renderNativePinButton();
+    void persistConfigPatch({ popout: { alwaysOnTop: state.windowPinned } }).catch(() => {});
+    showToast(state.windowPinned ? '已固定置顶在页面最上方' : '已取消窗口置顶');
+  });
+
+  document.getElementById('winMinBtn')?.addEventListener('click', toggleNativeCollapse);
+  document.getElementById('winMinimizeBtn')?.addEventListener('click', () => {
+    postHostWindowMsg('minimize');
+  });
+  document.getElementById('winMaxBtn')?.addEventListener('click', () => {
+    if (state.windowCollapsed) {
+      toggleNativeCollapse();
+    } else {
+      postHostWindowMsg('max');
+    }
+  });
+  document.getElementById('winCloseBtn')?.addEventListener('click', () => {
+    if (popoutToken && popoutClientId) {
+      const url = `/api/popout/closing?token=${encodeURIComponent(popoutToken)}&clientId=${encodeURIComponent(popoutClientId)}`;
+      const payload = JSON.stringify({ clientId: popoutClientId });
+      if (navigator.sendBeacon) {
+        navigator.sendBeacon(url, new Blob([payload], { type: 'application/json' }));
+      }
+    }
+    postHostWindowMsg('close');
+    window.close();
+  });
+}
+
 function renderSettings() {
   const cfg = state.config;
   document.getElementById('auxAutoSwitch').dataset.on = String(Boolean(cfg.auxAutoOpen));
   const sidebarAutoEl = document.getElementById('sidebarAutoPopoutSwitch');
   if (sidebarAutoEl) {
     sidebarAutoEl.dataset.on = String(cfg.popout?.autoLaunchFromSidebar !== false);
+  }
+  const topMostEl = document.getElementById('popoutTopMostSwitch');
+  if (topMostEl) {
+    topMostEl.dataset.on = String(cfg.popout?.alwaysOnTop !== false);
+  }
+  if (isNativePopout && cfg.popout && typeof cfg.popout.alwaysOnTop === 'boolean') {
+    state.windowPinned = cfg.popout.alwaysOnTop;
+    renderNativePinButton();
   }
   const popOn = Boolean(state.popoutStatus?.running || cfg.popout?.enabled);
   document.getElementById('popoutSwitch').dataset.on = String(popOn);
@@ -1101,7 +1415,7 @@ function renderSettings() {
 
   const rep = state.doctorReport;
   if (rep) {
-    document.getElementById('settingsVersionLabel').textContent = `context-cache v${rep.version || '1.1.0'}`;
+    document.getElementById('settingsVersionLabel').textContent = `context-cache v${rep.version || '1.2.0'}`;
     const pill = document.getElementById('doctorStatusPill');
     pill.textContent = rep.healthy ? '健康' : '需关注';
     pill.style.color = rep.healthy ? 'var(--success)' : 'var(--warning)';
@@ -1251,8 +1565,9 @@ async function persistConfigPatch(patch) {
   renderSelects();
 }
 
-async function refreshAll(animated = true, manual = false) {
-  if (refreshInFlight) return;
+async function refreshAll(animated = true, manual = false, force = false) {
+  if (refreshInFlight && !manual && !force) return;
+  const mySeq = ++refreshSeq;
   refreshInFlight = true;
   if (manual) {
     const svg = document.getElementById('refreshSvg');
@@ -1265,21 +1580,24 @@ async function refreshAll(animated = true, manual = false) {
   }
   try {
     await loadContext(animated);
-    const tasks = [loadCalls(manual), loadVault()];
+    if (mySeq !== refreshSeq) return;
+    const tasks = [loadCalls(manual || force), loadVault()];
     if (FEATURE_FLAGS.showQuotaUi) tasks.push(loadQuota());
     await Promise.allSettled(tasks);
-    if (state.inSettings) {
+    if (state.inSettings && mySeq === refreshSeq) {
       await loadConfigAndDoctor().catch(() => {});
     }
-    if (manual) showToast('已增量同步最新数据');
+    if (manual && mySeq === refreshSeq) showToast('已增量同步最新数据');
   } catch (err) {
     if (!state.contextData) {
       const attr = document.getElementById('ctxAttribution');
       if (attr) attr.textContent = `数据加载异常：${err.message}`;
     }
-    if (manual) showToast(`同步失败：${err.message}`);
+    if (manual && mySeq === refreshSeq) showToast(`同步失败：${err.message}`);
   } finally {
-    refreshInFlight = false;
+    if (mySeq === refreshSeq) {
+      refreshInFlight = false;
+    }
   }
 }
 
@@ -1515,21 +1833,44 @@ function bindEvents() {
     }
   });
 
+  let popoutLaunchBusy = false;
   const handleOpenPopout = async (forceNew = false) => {
-    const res = await callAppTool('app_config_manage', { action: 'open_popout', forceNew });
-    if (res?.config) state.config = res.config;
-    if (res?.popoutStatus) state.popoutStatus = res.popoutStatus;
-    renderSettings();
-    if (state.launcherMode) renderLauncherView();
-    const st = res?.popoutStatus;
-    if (st?.reused) {
-      showToast(`已聚焦现有独立悬浮窗（127.0.0.1:${st.port}）`);
-    } else if (st?.launched) {
-      showToast(`已弹出可拖动 / 可缩放独立悬浮窗（127.0.0.1:${st.port}）`);
-    } else {
-      showToast('未检测到 Edge/Chrome，已保留在当前页内运行');
+    if (isNativePopout) {
+      showToast('当前已在独立悬浮窗中');
+      return state.popoutStatus;
     }
-    return st;
+    if (popoutLaunchBusy) return state.popoutStatus;
+    popoutLaunchBusy = true;
+    const triggerBtns = ['quickPopoutBtn', 'launcherOpenPopoutBtn', 'launchPopoutBtn']
+      .map((id) => document.getElementById(id))
+      .filter(Boolean);
+    triggerBtns.forEach((b) => { b.disabled = true; });
+    try {
+      const res = await callAppTool('app_config_manage', {
+        action: 'open_popout',
+        forceNew,
+        theme: detectCurrentTheme(),
+      });
+      if (res?.config) state.config = res.config;
+      if (res?.popoutStatus) state.popoutStatus = res.popoutStatus;
+      renderSettings();
+      if (state.launcherMode) renderLauncherView();
+      const st = res?.popoutStatus;
+      if (st?.reused) {
+        showToast(`已聚焦现有独立悬浮窗（127.0.0.1:${st.port}）`);
+      } else if (st?.launched) {
+        showToast(`已弹出无框固定悬浮窗（127.0.0.1:${st.port}）`);
+      } else {
+        showToast('未检测到 WebView2 或 Edge/Chrome，已保留在当前页内运行');
+      }
+      return st;
+    } catch (err) {
+      showToast(`唤出独立悬浮窗失败：${err?.message || '未知错误'}`);
+      return null;
+    } finally {
+      popoutLaunchBusy = false;
+      triggerBtns.forEach((b) => { b.disabled = false; });
+    }
   };
 
   document.getElementById('quickPopoutBtn')?.addEventListener('click', () => {
@@ -1714,6 +2055,18 @@ function bindEvents() {
     });
   });
 
+  document.getElementById('popoutTopMostSwitch')?.addEventListener('click', () => {
+    const next = state.config.popout?.alwaysOnTop === false;
+    state.windowPinned = next;
+    if (isNativePopout) {
+      postHostWindowMsg(next ? 'pin:1' : 'pin:0');
+      renderNativePinButton();
+    }
+    void persistConfigPatch({ popout: { alwaysOnTop: next } }).then(() => {
+      showToast(next ? '已开启独立悬浮窗默认固定置顶' : '已关闭默认固定置顶');
+    });
+  });
+
   document.getElementById('popoutSwitch').addEventListener('click', () => {
     const next = !(state.popoutStatus?.running || state.config.popout?.enabled);
     void (async () => {
@@ -1731,20 +2084,7 @@ function bindEvents() {
   });
 
   document.getElementById('launchPopoutBtn').addEventListener('click', () => {
-    void (async () => {
-      const res = await callAppTool('app_config_manage', { action: 'open_popout', forceNew: false });
-      if (res?.config) state.config = res.config;
-      if (res?.popoutStatus) state.popoutStatus = res.popoutStatus;
-      renderSettings();
-      const port = res?.popoutStatus?.port;
-      showToast(
-        res?.popoutStatus?.reused
-          ? `已聚焦现有独立小窗（127.0.0.1:${port}）`
-          : port
-            ? `已弹出无框独立小窗（127.0.0.1:${port} 本地令牌）`
-            : '已启动本地独立小窗服务'
-      );
-    })();
+    void handleOpenPopout(false);
   });
 
   document.getElementById('bannerSwitch').addEventListener('click', () => {
@@ -1819,11 +2159,12 @@ async function init() {
     positionIndicator('mainSegNav', 'mainSegIndicator');
     positionIndicator('callsModeNav', 'callsModeIndicator');
     positionIndicator('capsuleModeNav', 'capsuleModeIndicator');
+    if (state.openSelectId) clampOpenSelectMenus();
   });
   ro.observe(document.getElementById('appShell'));
 
   if (!popoutToken) {
-    mcpApp = new App({ name: 'Context Cache & Telemetry', version: '1.1.0' }, {});
+    mcpApp = new App({ name: 'Context Cache & Telemetry', version: '1.2.0' }, {});
 
     // Register handlers BEFORE connect() per Antigravity mcp-app-development guidelines
     mcpApp.ontoolinput = ({ arguments: args }) => {
@@ -1898,10 +2239,15 @@ async function init() {
       showToast(`宿主连接异常：${err.message}`);
     }
   } else {
-    // Standalone popout window: movable/resizable frameless OS window with heartbeat & bounds memory
+    // Standalone popout window: native frameless OS floating window with TopMost pin, drag/resize & bounds memory
     state.surface = 'popout';
     state.canUpdateModelContext = false;
+    if (initialThemeParam === 'dark' || initialThemeParam === 'light') {
+      applyDocumentTheme(initialThemeParam);
+      postHostWindowMsg(`theme:${initialThemeParam}`);
+    }
     document.getElementById('quickPopoutBtn')?.classList.add('hidden');
+    setupNativeFramelessChrome();
     startPopoutClientLifecycle();
   }
 
@@ -1910,7 +2256,11 @@ async function init() {
   // Left sidebar (global) auto-launches floating OS window when enabled
   if (state.surface === 'global' && state.config.popout?.autoLaunchFromSidebar !== false) {
     try {
-      const res = await callAppTool('app_config_manage', { action: 'open_popout', forceNew: false });
+      const res = await callAppTool('app_config_manage', {
+        action: 'open_popout',
+        forceNew: false,
+        theme: detectCurrentTheme(),
+      });
       if (res?.config) state.config = res.config;
       if (res?.popoutStatus) state.popoutStatus = res.popoutStatus;
       if (res?.popoutStatus?.launched) {

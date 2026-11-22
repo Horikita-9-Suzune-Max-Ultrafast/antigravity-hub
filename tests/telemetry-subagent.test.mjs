@@ -162,3 +162,62 @@ test('Telemetry merges main + invoke_subagent transcripts, computes dual-source 
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('Hook timing matches startMs 1-to-1 and never steals previous step endMs within the same second', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-timing-collision-'));
+  const dataDir = path.join(root, 'data');
+  const appDataDir = path.join(root, 'app');
+  const convId = 'conv-same-sec-collision';
+  const convDir = path.join(appDataDir, 'brain', convId, '.system_generated', 'logs');
+  fs.mkdirSync(convDir, { recursive: true });
+
+  try {
+    // Step 1 starts at 12:39:52.772Z and ends at 12:39:57.538Z (4766ms).
+    // Step 2 starts in the SAME second at 12:39:57.674Z and ends at 12:40:22.600Z (24926ms).
+    // Transcript created_at is truncated to whole seconds (12:39:52Z and 12:39:57Z).
+    const tPrevStart = Date.parse('2026-11-22T12:39:52.772Z');
+    const tPrevEnd = Date.parse('2026-11-22T12:39:57.538Z');
+    const tCurStart = Date.parse('2026-11-22T12:39:57.674Z');
+    const tCurEnd = Date.parse('2026-11-22T12:40:22.600Z');
+
+    recordHookTiming({ conversationId: convId, phase: 'pre', invocationNum: 3, timestampMs: tPrevStart }, { dataDir });
+    recordHookTiming({ conversationId: convId, phase: 'post', invocationNum: 3, timestampMs: tPrevEnd }, { dataDir });
+    recordHookTiming({ conversationId: convId, phase: 'pre', invocationNum: 4, timestampMs: tCurStart }, { dataDir });
+    recordHookTiming({ conversationId: convId, phase: 'post', invocationNum: 4, timestampMs: tCurEnd }, { dataDir });
+
+    const steps = [
+      {
+        step_index: 99,
+        type: 'PLANNER_RESPONSE',
+        created_at: '2026-11-22T12:39:52Z',
+        model: 'gemini-4-hydrogen-high',
+        input_tokens: 1000,
+        cache_read_tokens: 99000,
+        output_tokens: 164,
+        content: 'tool step',
+      },
+      {
+        step_index: 102,
+        type: 'PLANNER_RESPONSE',
+        created_at: '2026-11-22T12:39:57Z',
+        model: 'gemini-4-hydrogen-high',
+        input_tokens: 2161,
+        cache_read_tokens: 100401,
+        output_tokens: 3452,
+        thinking: 'Think',
+        content: 'Final answer',
+      },
+    ];
+    fs.writeFileSync(path.join(convDir, 'transcript.jsonl'), steps.map((s) => JSON.stringify(s)).join('\n') + '\n');
+
+    const report = getTelemetryReport({ conversationId: convId }, { dataDir, appDataDir });
+    const s99 = report.calls.find((c) => c.stepIndex === 99);
+    const s102 = report.calls.find((c) => c.stepIndex === 102);
+
+    assert.equal(s99.durationMs, 4766);
+    assert.equal(s102.durationMs, 24926);
+    assert.ok(s102.effectiveTps > 130 && s102.effectiveTps < 145, `Expected ~138.5 tok/s, got ${s102.effectiveTps}`);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

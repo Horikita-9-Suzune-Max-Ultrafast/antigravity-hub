@@ -110,6 +110,9 @@ test('MCP App Stdio Server serves ui:// single-file HTML, exposes 5 model + 7 ap
     assert.match(html, /class="seg-tab hidden"[^>]*data-tab="quota"/, 'Quota tab must be hidden from user-facing UI');
     assert.ok(html.includes('globalLauncherView'), 'Left-sidebar floating launcher view must exist');
     assert.ok(html.includes('followToggleBtn'), 'Auto-follow toggle button must exist');
+    assert.ok(html.includes('nativeTitleBar') && html.includes('winPinBtn'), 'Custom frameless titlebar and Always-on-Top pin button must exist');
+    assert.ok(html.includes('nativeResizeHandles'), '8-direction resize handles must exist');
+    assert.ok(html.includes('data:image/svg+xml'), 'Inline SVG brand favicon must exist');
     const scriptMatch = /<script>([\s\S]*?)<\/script>/i.exec(html);
     assert.ok(scriptMatch && scriptMatch[1].length > 1000, 'Inline script must exist');
     assert.doesNotThrow(() => new Function(scriptMatch[1]), 'Inline script must be syntactically valid JavaScript');
@@ -195,6 +198,7 @@ test('MCP App Stdio Server serves ui:// single-file HTML, exposes 5 model + 7 ap
     });
     assert.equal(aCfgUpd.result.structuredContent.config.pollIntervalSec, 10);
     assert.equal(aCfgUpd.result.structuredContent.config.popout.autoLaunchFromSidebar, true);
+    assert.equal(aCfgUpd.result.structuredContent.config.popout.alwaysOnTop, true);
 
     const aSyncSess = await client.request('tools/call', {
       name: 'app_config_manage',
@@ -273,5 +277,45 @@ test('PopoutServerManager binds strictly to 127.0.0.1 with token auth, tracks he
     const stopped = await mgr.stop();
     assert.equal(stopped.running, false);
     assert.equal(stopped.port, null);
+  }
+});
+
+test('PopoutServerManager cancels pending stopTimer when start() is called inside grace window', async () => {
+  let autoStopped = false;
+  const mgr = new PopoutServerManager({
+    getHtml: () => '<html><body>ok</body></html>',
+    handleAppTool: async () => ({ structuredContent: {} }),
+    stopGraceMs: 180,
+    onAutoStop: () => {
+      autoStopped = true;
+    },
+  });
+
+  try {
+    const st = await mgr.start();
+    const token = new URL(st.url).searchParams.get('token');
+    await fetch(`http://127.0.0.1:${st.port}/api/popout/heartbeat?token=${token}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ clientId: 'c1' }),
+    });
+    await fetch(`http://127.0.0.1:${st.port}/api/popout/closing?token=${token}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ clientId: 'c1' }),
+    });
+
+    // Re-open inside 180ms grace window: start() must cancel pending stopTimer
+    await new Promise((r) => setTimeout(r, 40));
+    const st2 = await mgr.start();
+    assert.equal(st2.running, true);
+    assert.equal(st2.port, st.port);
+
+    // Wait past original grace window — server must still be alive
+    await new Promise((r) => setTimeout(r, 220));
+    assert.equal(mgr.getStatus().running, true);
+    assert.equal(autoStopped, false);
+  } finally {
+    await mgr.stop();
   }
 });

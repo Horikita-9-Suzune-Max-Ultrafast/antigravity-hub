@@ -105,17 +105,30 @@ test('Session tracker follows active conversation across 3 conversations, switch
     assert.equal(path.resolve(r2.projectDir), path.resolve(projB));
     assert.ok(r2.inventories[1].items.some((i) => i.name.includes('project-beta/AGENTS.md')));
 
-    // 4. Cross-view UI sync picks conv1 -> other open views auto-follow conv1 + projA
+    // 4. Pure UI click in Antigravity sidebar updates annotations/<convId>.pbtxt last_user_view_time (no message sent!)
+    const annDir = path.join(appDataDir, 'annotations');
+    fs.mkdirSync(annDir, { recursive: true });
+    const viewSec = Math.floor((t0 + 35_000) / 1000);
+    fs.writeFileSync(
+      path.join(annDir, `${conv1}.pbtxt`),
+      `title:"Alpha Official Title" last_user_view_time:{seconds:${viewSec} nanos:500000000}\n`
+    );
+    const rView = inspectContext({ followActive: true, projectDir: projB }, opts);
+    assert.equal(rView.conversationId, conv1);
+    assert.equal(rView.followResolvedBy, 'antigravity_view');
+    assert.equal(rView.sessions.find((s) => s.id === conv1)?.label, 'Alpha Official Title');
+
+    // 5. Cross-view UI sync picks conv2 -> other open views auto-follow conv2 + projB
     recordActiveSession(
-      { conversationId: conv1, source: 'ui_sync', event: 'ui_select', updatedAtMs: t0 + 40_000 },
+      { conversationId: conv2, source: 'ui_sync', event: 'ui_select', updatedAtMs: t0 + 40_000 },
       opts
     );
-    const rSync = inspectContext({ followActive: true, projectDir: projB }, opts);
-    assert.equal(rSync.conversationId, conv1);
+    const rSync = inspectContext({ followActive: true, projectDir: projA }, opts);
+    assert.equal(rSync.conversationId, conv2);
     assert.equal(rSync.followResolvedBy, 'ui_sync');
-    assert.equal(path.resolve(rSync.projectDir), path.resolve(projA));
+    assert.equal(path.resolve(rSync.projectDir), path.resolve(projB));
 
-    // 5. Brand new conv3 triggers SessionStart (no transcript file yet) -> auto-follow tracks conv3 & surfaces it in sessions
+    // 6. Brand new conv3 triggers SessionStart (no transcript file yet) -> auto-follow tracks conv3 & surfaces it in sessions
     await handleHookEvent(
       {
         conversationId: conv3,

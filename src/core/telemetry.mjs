@@ -68,20 +68,49 @@ export function recordHookTiming({ conversationId, phase, invocationNum, timesta
 }
 
 /**
- * Match a hook_ms timing sample near a transcript step's timestamp.
+ * Match a hook_ms timing sample near a transcript step's timestamp (1-to-1 consumption).
+ * Transcript `created_at` has 1s granularity marking step start, so match `startMs` first
+ * to avoid stealing the previous step's `endMs` when two steps occur within the same second.
  */
-function findHookTimingMs(timingsEntry, stepTsMs) {
+function findHookTimingMs(timingsEntry, stepTsMs, usedSampleIndices = null) {
   if (!timingsEntry || !Array.isArray(timingsEntry.samples) || !stepTsMs) return null;
-  let best = null;
-  let bestDist = Infinity;
-  for (const s of timingsEntry.samples) {
-    const dist = Math.min(Math.abs(s.startMs - stepTsMs), Math.abs(s.endMs - stepTsMs));
-    if (dist <= 30_000 && dist < bestDist) {
-      best = s.durationMs;
-      bestDist = dist;
+  const samples = timingsEntry.samples;
+  let bestStartIdx = -1;
+  let bestStartDist = Infinity;
+
+  for (let i = 0; i < samples.length; i++) {
+    if (usedSampleIndices && usedSampleIndices.has(i)) continue;
+    const s = samples[i];
+    const startDist = Math.abs(s.startMs - stepTsMs);
+    if (startDist <= 30_000 && startDist < bestStartDist) {
+      bestStartIdx = i;
+      bestStartDist = startDist;
     }
   }
-  return best;
+
+  // Prefer startMs when within 5s (covers 1s transcript truncation + hook dispatch jitter)
+  if (bestStartIdx !== -1 && bestStartDist <= 5_000) {
+    if (usedSampleIndices) usedSampleIndices.add(bestStartIdx);
+    return samples[bestStartIdx].durationMs;
+  }
+
+  // Fallback to endMs only if no startMs matched closely (legacy/end-stamped transcripts)
+  let bestEndIdx = -1;
+  let bestEndDist = Infinity;
+  for (let i = 0; i < samples.length; i++) {
+    if (usedSampleIndices && usedSampleIndices.has(i)) continue;
+    const s = samples[i];
+    const endDist = Math.abs(s.endMs - stepTsMs);
+    if (endDist <= 2_000 && endDist < bestEndDist) {
+      bestEndIdx = i;
+      bestEndDist = endDist;
+    }
+  }
+
+  const chosenIdx = bestEndIdx !== -1 ? bestEndIdx : bestStartIdx;
+  if (chosenIdx === -1) return null;
+  if (usedSampleIndices) usedSampleIndices.add(chosenIdx);
+  return samples[chosenIdx].durationMs;
 }
 
 /**
@@ -109,9 +138,9 @@ function splitOutputTokens(outputTokens, thinkingText, contentText, toolCalls) {
  * 3) hybrid_tool_split (step[i+1].tsMs - step[i].tsMs when next step is tool output or model response)
  * 4) transcript_fallback (delta from previous step or conservative estimate)
  */
-function computeStepDuration(steps, idx, timingsEntry) {
+function computeStepDuration(steps, idx, timingsEntry, usedSampleIndices = null) {
   const cur = steps[idx];
-  const hookMs = findHookTimingMs(timingsEntry, cur.tsMs);
+  const hookMs = findHookTimingMs(timingsEntry, cur.tsMs, usedSampleIndices);
   if (hookMs != null) {
     return { durationMs: hookMs, timingSource: 'hook_ms' };
   }
@@ -201,6 +230,7 @@ function buildCallsFromTranscript({
 }) {
   const steps = parseTranscriptFull(transcriptPath);
   const timingsEntry = timingsMap[conversationId];
+  const usedSampleIndices = new Set();
   const calls = [];
   let prev = null;
 
@@ -210,7 +240,7 @@ function buildCallsFromTranscript({
     if (step.inputTokens === 0 && step.cacheReadTokens === 0 && step.outputTokens === 0) continue;
 
     const contextTokens = step.inputTokens + step.cacheReadTokens;
-    const { durationMs, timingSource } = computeStepDuration(steps, i, timingsEntry);
+    const { durationMs, timingSource } = computeStepDuration(steps, i, timingsEntry, usedSampleIndices);
     const effectiveTps = durationMs > 0 ? Number((step.outputTokens / (durationMs / 1000)).toFixed(2)) : 0;
     const cacheHitRate = contextTokens > 0 ? Number(((step.cacheReadTokens / contextTokens) * 100).toFixed(2)) : 0;
     const { thinkingTokensEst, contentTokensEst } = splitOutputTokens(
@@ -554,20 +584,78 @@ export function evaluateAlerts(calls, config, contextPct = null) {
 }
 
 /**
+ * Compute token-weighted average TPS: sum(outputTokens) / sum(durationSec).
+ * Avoids short low-token tool steps skewing overall throughput downward.
+ */
+function calcWeightedAvgTps(calls) {
+  if (!calls || !calls.length) return 0;
+  let totalOut = 0;
+  let totalMs = 0;
+  for (const c of calls) {
+    totalOut += Math.max(0, Number(c.outputTokens) || 0);
+    totalMs += Math.max(0, Number(c.durationMs) || 0);
+  }
+  if (totalMs > 0 && totalOut > 0) {
+    return Number((totalOut / (totalMs / 1000)).toFixed(1));
+  }
+  return Number((calls.reduce((s, c) => s + (c.effectiveTps || 0), 0) / calls.length).toFixed(1));
+}
+
+/**
  * Summarize telemetry calls for UI `明细` tab and KPI strip.
  */
 export function getTelemetryReport(params = {}, options = {}) {
   const config = loadConfig(options);
-  const synced = syncConversationTelemetry(
-    {
-      conversationId: params.conversationId,
-      transcriptPath: params.transcriptPath,
-      force: Boolean(params.force),
-    },
-    options
-  );
+  const recentConvs = listConversations({ ...options, limit: 25, includeRecentSubagents: true });
+  const convLabelMap = new Map(recentConvs.map((c) => [c.conversationId, c.label || c.conversationId.slice(0, 8)]));
 
-  const allCalls = synced.calls;
+  let synced;
+  if (params.conversationId === '__active_all__') {
+    const nowMs = Date.now();
+    const activeWindowMs = 15 * 60 * 1000;
+    let activeList = recentConvs.filter((c) => nowMs - (c.mtimeMs || 0) <= activeWindowMs);
+    if (!activeList.length) activeList = recentConvs.slice(0, 3);
+    const mergedMap = new Map();
+    const mergedSubs = [];
+    for (const conv of activeList) {
+      const res = syncConversationTelemetry(
+        { conversationId: conv.conversationId, transcriptPath: conv.transcriptPath, force: Boolean(params.force) },
+        options
+      );
+      for (const c of res.calls) {
+        if (!mergedMap.has(c.callUid)) mergedMap.set(c.callUid, c);
+      }
+      if (Array.isArray(res.subagents)) mergedSubs.push(...res.subagents);
+    }
+    const mergedCalls = [...mergedMap.values()].sort((a, b) => b.tsMs - a.tsMs || b.stepIndex - a.stepIndex);
+    synced = {
+      conversationId: '__active_all__',
+      calls: mergedCalls,
+      subagents: mergedSubs,
+      syncedNew: 0,
+    };
+  } else {
+    synced = syncConversationTelemetry(
+      {
+        conversationId: params.conversationId,
+        transcriptPath: params.transcriptPath,
+        force: Boolean(params.force),
+      },
+      options
+    );
+  }
+
+  const allCalls = synced.calls.map((c) => {
+    const convLabel = convLabelMap.get(c.conversationId) || c.conversationId.slice(0, 8);
+    const shortId = String(c.conversationId || '').slice(0, 8);
+    const rolePrefix = c.agentType === 'sub' ? `子代理 ${c.agentTag}` : '主对话';
+    return {
+      ...c,
+      sourceLabel: `${rolePrefix} · ${convLabel} (${shortId})`,
+      sourceTitle: convLabel,
+    };
+  });
+
   const filtered = allCalls.filter((c) => {
     if (params.agentFilter && params.agentFilter !== 'all' && c.agentType !== params.agentFilter) return false;
     if (params.modelFilter && params.modelFilter !== 'all' && c.model !== params.modelFilter) return false;
@@ -582,23 +670,26 @@ export function getTelemetryReport(params = {}, options = {}) {
       agentTag: c.agentTag,
       agentType: c.agentType,
       steps: 0,
-      tpsSum: 0,
+      outSum: 0,
+      durSum: 0,
       cacheSum: 0,
       cost: 0,
       maxContext: 0,
       drops: 0,
     };
     ag.steps++;
-    ag.tpsSum += c.effectiveTps;
+    ag.outSum += c.outputTokens || 0;
+    ag.durSum += c.durationMs || 0;
     ag.cacheSum += c.cacheHitRate;
     ag.cost += c.estimatedCostUsd;
     ag.maxContext = Math.max(ag.maxContext, c.contextTokens);
     if (c.cacheDrop) ag.drops++;
     byAgentMap.set(c.agentTag, ag);
 
-    const md = byModelMap.get(c.model) || { model: c.model, steps: 0, tpsSum: 0, cost: 0 };
+    const md = byModelMap.get(c.model) || { model: c.model, steps: 0, outSum: 0, durSum: 0, cost: 0 };
     md.steps++;
-    md.tpsSum += c.effectiveTps;
+    md.outSum += c.outputTokens || 0;
+    md.durSum += c.durationMs || 0;
     md.cost += c.estimatedCostUsd;
     byModelMap.set(c.model, md);
   }
@@ -607,7 +698,7 @@ export function getTelemetryReport(params = {}, options = {}) {
     agentTag: a.agentTag,
     agentType: a.agentType,
     steps: a.steps,
-    avgTps: Number((a.tpsSum / a.steps).toFixed(1)),
+    avgTps: a.durSum > 0 ? Number((a.outSum / (a.durSum / 1000)).toFixed(1)) : 0,
     avgCache: Number((a.cacheSum / a.steps).toFixed(1)),
     cost: Number(a.cost.toFixed(4)),
     maxContext: a.maxContext,
@@ -617,13 +708,13 @@ export function getTelemetryReport(params = {}, options = {}) {
   const byModel = [...byModelMap.values()].map((m) => ({
     model: m.model,
     steps: m.steps,
-    avgTps: Number((m.tpsSum / m.steps).toFixed(1)),
+    avgTps: m.durSum > 0 ? Number((m.outSum / (m.durSum / 1000)).toFixed(1)) : 0,
     cost: Number(m.cost.toFixed(4)),
   }));
 
   const latestMain = allCalls.find((c) => c.agentType === 'main') || allCalls[0] || null;
   const totalCost = allCalls.reduce((s, c) => s + c.estimatedCostUsd, 0);
-  const avgTps = allCalls.length ? allCalls.reduce((s, c) => s + c.effectiveTps, 0) / allCalls.length : 0;
+  const avgTps = calcWeightedAvgTps(allCalls);
 
   return {
     conversationId: synced.conversationId,

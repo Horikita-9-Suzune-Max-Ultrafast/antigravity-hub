@@ -4,11 +4,72 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Context Cache &amp; Telemetry</title>
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 128 128'%3E%3Crect x='14' y='14' width='100' height='100' rx='24' fill='%231D4ED8'/%3E%3Cpath d='M64 34L94 49L64 64L34 49L64 34Z' fill='%23fff'/%3E%3Cpath d='M34 65L64 80L94 65' stroke='%2393C5FD' stroke-width='7' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cpath d='M34 81L64 96L94 81' stroke='%2334D399' stroke-width='7' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3Ccircle cx='91' cy='37' r='7' fill='%2334D399' stroke='%231D4ED8' stroke-width='3'/%3E%3C/svg%3E" />
   <style>
 /* INLINE_STYLES */
   </style>
 </head>
 <body>
+  <!-- 原生无框悬浮窗 8 方向自由缩放热区（仅 native=1 模式显示） -->
+  <div id="nativeResizeHandles" class="hidden" aria-hidden="true">
+    <div class="win-resize win-resize-n" data-ht="12"></div>
+    <div class="win-resize win-resize-s" data-ht="15"></div>
+    <div class="win-resize win-resize-w" data-ht="10"></div>
+    <div class="win-resize win-resize-e" data-ht="11"></div>
+    <div class="win-resize win-resize-nw" data-ht="13"></div>
+    <div class="win-resize win-resize-ne" data-ht="14"></div>
+    <div class="win-resize win-resize-sw" data-ht="16"></div>
+    <div class="win-resize win-resize-se" data-ht="17"></div>
+  </div>
+
+  <!-- 统一 Antigravity 2.0 设计语言的无框自定义顶栏（替代原生 Edge/Windows 标题栏） -->
+  <div id="nativeTitleBar" class="native-titlebar hidden">
+    <div id="titleBarDragZone" class="native-titlebar-drag" title="按住拖动窗口，双击放大 / 还原">
+      <svg width="18" height="18" viewBox="0 0 128 128" fill="none" class="shrink-0">
+        <rect x="10" y="10" width="108" height="108" rx="26" fill="#1D4ED8"/>
+        <rect x="12" y="12" width="104" height="104" rx="24" stroke="#93C5FD" stroke-opacity="0.35" stroke-width="3"/>
+        <path d="M64 32L95 48L64 64L33 48L64 32Z" fill="#FFFFFF" fill-opacity="0.96"/>
+        <path d="M33 65L64 81L95 65" stroke="#93C5FD" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M33 82L64 98L95 82" stroke="#34D399" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+        <circle cx="93" cy="35" r="8" fill="#34D399" stroke="#1D4ED8" stroke-width="3"/>
+      </svg>
+      <span class="native-titlebar-name truncate">Context Monitor</span>
+      <span id="titleBarMiniSummary" class="native-titlebar-mini hidden mono-num">0.0%</span>
+    </div>
+
+    <div class="native-titlebar-actions">
+      <button id="winPinBtn" type="button" data-pinned="true" class="win-pin-btn" title="已固定置顶在页面最前（点击取消固定）">
+        <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M9.8 2.2l4 4-1.4 1.4-1.2-.5-2.7 2.7.5 1.8-1.1 1.1-2.8-2.8-2.9 2.9-.7-.7 2.9-2.9L1.6 6.4l1.1-1.1 1.8.5 2.7-2.7-.5-1.2 1.4-1.4z"/>
+        </svg>
+        <span id="winPinLabel">已固定</span>
+      </button>
+
+      <span class="native-titlebar-sep" aria-hidden="true"></span>
+
+      <button id="winMinBtn" type="button" class="win-ctrl-btn" title="快捷收缩为迷你悬浮条 / 展开">
+        <svg id="winMinSvg" width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M4.2 9.8L8 6l3.8 3.8"/>
+        </svg>
+      </button>
+      <button id="winMinimizeBtn" type="button" class="win-ctrl-btn" title="最小化窗口">
+        <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3.5 8.5h9"/>
+        </svg>
+      </button>
+      <button id="winMaxBtn" type="button" class="win-ctrl-btn" title="放大 / 还原">
+        <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round">
+          <rect x="3" y="3" width="10" height="10" rx="2"/>
+        </svg>
+      </button>
+      <button id="winCloseBtn" type="button" class="win-ctrl-btn win-ctrl-close" title="关闭悬浮窗并释放端口">
+        <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round">
+          <path d="M4 4l8 8M12 4l-8 8"/>
+        </svg>
+      </button>
+    </div>
+  </div>
+
   <!-- 左侧边栏（global）自动弹出独立悬浮窗后的轻量控制卡 -->
   <div id="globalLauncherView" class="launcher-shell hidden">
     <div class="agy-group launcher-card p-5 space-y-4 panel-enter">
@@ -53,7 +114,7 @@
           </button>
         </div>
 
-        <div class="flex items-center gap-2 shrink-0">
+        <div class="header-actions-slot flex items-center gap-2 shrink-0">
           <div class="agy-select-wrap shrink-0" id="pollIntervalHost"></div>
 
           <button id="quickPopoutBtn" type="button" title="弹出可拖动 / 可缩放独立悬浮窗" class="agy-btn agy-btn-secondary agy-icon-btn shrink-0">
@@ -82,12 +143,12 @@
       </div>
 
       <div class="header-meta-row">
-        <span class="agy-pill mono-num" style="height: 28px; background: var(--card);">
-          <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6">
+        <span class="agy-pill mono-num min-w-0 max-w-full" style="height: 28px; background: var(--card);">
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" class="shrink-0">
             <circle cx="5" cy="4" r="1.8"/><circle cx="11" cy="12" r="1.8"/><path d="M5 5.8V12M5 8.5c0-1.6 6-1.2 6 1.7"/>
           </svg>
-          <span id="gitBranchLabel" class="text-fg font-medium">main</span>
-          <span id="gitHeadLabel">@—</span>
+          <span id="gitBranchLabel" class="text-fg font-medium truncate">main</span>
+          <span id="gitHeadLabel" class="shrink-0">@—</span>
         </span>
 
         <button id="alertBtn" type="button" class="agy-btn agy-btn-secondary agy-btn-sm text-xs">
@@ -168,7 +229,7 @@
         </div>
 
         <div class="agy-group px-4 py-3.5 flex flex-wrap items-center justify-between gap-3">
-          <div class="flex items-start gap-2.5 flex-1" style="min-width: 220px;">
+          <div class="flex items-start gap-2.5 flex-1" style="min-width: min(220px, 100%);">
             <span class="dot-sm mt-1.5" style="background: var(--primary);"></span>
             <div class="text-xs leading-relaxed">
               <span class="font-semibold text-fg">构成与缓存体检：</span>
@@ -220,25 +281,55 @@
           </div>
         </div>
 
+        <div id="callsHeroSummary" class="calls-hero-strip agy-group">
+          <div class="calls-hero-item">
+            <span class="calls-hero-label">调用步数</span>
+            <span id="callsHeroSteps" class="calls-hero-val mono-num">0 步</span>
+          </div>
+          <div class="calls-hero-sep" aria-hidden="true"></div>
+          <div class="calls-hero-item">
+            <span class="calls-hero-label">平均有效速度</span>
+            <span id="callsHeroTps" class="calls-hero-val mono-num text-primary">0.0 tok/s</span>
+          </div>
+          <div class="calls-hero-sep" aria-hidden="true"></div>
+          <div class="calls-hero-item">
+            <span class="calls-hero-label">累计估算费用</span>
+            <span id="callsHeroCost" class="calls-hero-val mono-num text-fg">$0.000</span>
+          </div>
+          <div class="calls-hero-sync">
+            <span id="callsHeroModel" class="calls-hero-model mono-num hidden" title="当前活跃模型"></span>
+            <span id="lastUpdatedLabel" class="mono-num text-xs text-muted">等待同步</span>
+          </div>
+        </div>
+
         <div id="callsStepWrap" class="agy-group overflow-hidden">
           <div class="overflow-x-auto scroll-thin">
             <table class="calls-table">
+              <colgroup>
+                <col class="col-step" />
+                <col class="col-model" />
+                <col class="col-tps" />
+                <col class="col-dur" />
+                <col class="col-tok" />
+                <col class="col-cache" />
+                <col class="col-cost" />
+              </colgroup>
               <thead>
                 <tr>
                   <th>步序</th>
                   <th>模型</th>
-                  <th class="text-right">有效速度</th>
-                  <th class="text-right" title="官方日志暂未暴露流式 TTFT，当前展示单步模型耗时；若未来新增 ttft_ms 自动切换">模型耗时 ⓘ</th>
+                  <th class="text-right"><span class="col-full-lbl">有效</span>速度</th>
+                  <th class="text-right" title="官方日志暂未暴露流式 TTFT，当前展示单步模型耗时；若未来新增 ttft_ms 自动切换"><span class="col-full-lbl">模型</span>耗时 ⓘ</th>
                   <th class="text-right">上下文 / 思考 / 正文</th>
-                  <th class="text-right">缓存命中</th>
-                  <th class="text-right">估算费用</th>
+                  <th class="text-right"><span class="col-full-lbl">缓存</span>命中</th>
+                  <th class="text-right"><span class="col-full-lbl">估算</span>费用</th>
                 </tr>
               </thead>
               <tbody id="callsTbody"></tbody>
             </table>
           </div>
-          <div class="px-4 py-2.5 border-t flex flex-wrap items-center justify-between gap-2 text-xs text-muted" style="background: var(--background);">
-            <span id="lastUpdatedLabel" class="mono-num">等待同步</span>
+          <div class="px-4 py-2 border-t flex flex-wrap items-center justify-between gap-2 text-xs text-muted" style="background: var(--background);">
+            <span>点击任意行可展开单步解剖与缓存击穿归因</span>
             <span id="callsFooterStats" class="mono-num text-fg font-medium"></span>
           </div>
         </div>
@@ -296,7 +387,7 @@
             </div>
 
             <div class="flex flex-wrap items-center gap-2">
-              <input id="vaultSearch" type="text" placeholder="FTS5 全文搜索决策、架构地图、踩坑或标签..." class="agy-input flex-1" style="min-width: 200px;" />
+              <input id="vaultSearch" type="text" placeholder="FTS5 全文搜索决策、架构地图、踩坑或标签..." class="agy-input flex-1" style="min-width: min(200px, 100%);" />
               <div class="agy-select-wrap" id="vaultKindSelectHost"></div>
             </div>
           </div>
@@ -312,7 +403,7 @@
             <button id="exitSettingsBtn" type="button" class="agy-btn agy-btn-secondary" style="height: 30px; padding: 0 10px;">← 返回</button>
             <span class="text-base font-semibold">插件设置</span>
           </div>
-          <span id="settingsVersionLabel" class="mono-num text-xs text-muted">context-cache v1.1.0</span>
+          <span id="settingsVersionLabel" class="mono-num text-xs text-muted">context-cache v1.2.0</span>
         </div>
 
         <div class="space-y-2">
@@ -331,9 +422,19 @@
             <div class="px-5 py-3.5 flex items-center justify-between gap-4">
               <div class="min-w-0">
                 <div class="text-sm font-medium">左侧边栏点击时自动弹出独立悬浮窗</div>
-                <div class="text-xs text-muted mt-0.5">点击左侧 Context Monitor 自动拉起可拖动、可缩放的无框小窗；关闭浮窗自动释放端口</div>
+                <div class="text-xs text-muted mt-0.5">点击左侧 Context Monitor 自动拉起无框悬浮窗；关闭浮窗自动释放端口</div>
               </div>
               <button id="sidebarAutoPopoutSwitch" type="button" class="agy-switch" data-on="true">
+                <span class="agy-switch-thumb"></span>
+              </button>
+            </div>
+
+            <div class="px-5 py-3.5 flex items-center justify-between gap-4">
+              <div class="min-w-0">
+                <div class="text-sm font-medium">独立悬浮窗默认固定置顶（Always on Top）</div>
+                <div class="text-xs text-muted mt-0.5">开启后悬浮窗始终固定在 Antigravity 页面最上方，切回聊天也不被遮挡</div>
+              </div>
+              <button id="popoutTopMostSwitch" type="button" class="agy-switch" data-on="true">
                 <span class="agy-switch-thumb"></span>
               </button>
             </div>

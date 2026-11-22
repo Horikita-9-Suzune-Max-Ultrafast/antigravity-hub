@@ -1,9 +1,63 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { getDataPaths, findTranscriptPath } from './paths.mjs';
+import { getDataPaths, getCandidateAppDataDirs, findTranscriptPath } from './paths.mjs';
 import { atomicWriteJson, ensureDataDirs, readJsonSafe } from './storage.mjs';
+import { parseAnnotationPbtxt } from './transcript-parser.mjs';
 
 const MAX_REGISTRY_ENTRIES = 100;
+
+/**
+ * Ultra-fast (<0.2ms) check of the top newest <appDataDir>/annotations/<convId>.pbtxt files
+ * to detect pure UI clicks in Antigravity's conversation sidebar without parsing transcripts.
+ */
+export function peekLatestViewedAnnotation(options = {}) {
+  const candidates = [];
+  for (const appDir of getCandidateAppDataDirs(options)) {
+    const annDir = path.join(appDir, 'annotations');
+    if (!fs.existsSync(annDir)) continue;
+    let files = [];
+    try {
+      files = fs.readdirSync(annDir);
+    } catch {
+      continue;
+    }
+    for (const f of files) {
+      if (!f.endsWith('.pbtxt')) continue;
+      const convId = f.slice(0, -6);
+      const fullPath = path.join(annDir, f);
+      try {
+        const st = fs.statSync(fullPath);
+        candidates.push({ convId, fullPath, mtimeMs: st.mtimeMs, appDir });
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  if (candidates.length === 0) return null;
+  candidates.sort((a, b) => b.mtimeMs - a.mtimeMs);
+
+  let best = null;
+  for (const c of candidates.slice(0, 5)) {
+    const tPath = findTranscriptPath(c.convId, { ...options, appDataDir: c.appDir });
+    if (!tPath) continue;
+    try {
+      const parsed = parseAnnotationPbtxt(fs.readFileSync(c.fullPath, 'utf8'));
+      const viewMs = parsed.lastViewMs || Math.round(c.mtimeMs);
+      if (!best || viewMs > best.lastViewMs) {
+        best = {
+          conversationId: c.convId,
+          title: parsed.title || '',
+          lastViewMs: viewMs,
+          transcriptPath: tPath,
+        };
+      }
+    } catch {
+      // ignore
+    }
+  }
+  return best;
+}
 
 function normalizeDir(dir) {
   if (!dir || typeof dir !== 'string') return '';
@@ -165,21 +219,58 @@ export function resolveTargetSession(
     source = 'explicit';
   } else if (followActive) {
     const activeMs = active?.updatedAtMs || 0;
-    const latestTranscriptMs = newestTranscriptSession?.mtimeMs || 0;
 
-    // Prefer active-session.json when it is at least as recent as the newest transcript
-    // (with 1500ms slack for filesystem mtime granularity) OR when there is no transcript yet.
-    if (active?.conversationId && (!newestTranscriptSession || activeMs >= latestTranscriptMs - 1500)) {
+    // Find the conversation with the newest user-view timestamp (annotations/<id>.pbtxt last_user_view_time)
+    // and the conversation with the newest transcript modification timestamp.
+    let newestViewedSession = null;
+    let newestTranscript = null;
+    for (const s of Array.isArray(sessions) ? sessions : []) {
+      if ((s.lastViewMs || 0) > (newestViewedSession?.lastViewMs || 0)) {
+        newestViewedSession = s;
+      }
+      if ((s.mtimeMs || 0) > (newestTranscript?.mtimeMs || 0)) {
+        newestTranscript = s;
+      }
+    }
+    if (!newestTranscript && newestTranscriptSession) {
+      newestTranscript = newestTranscriptSession;
+    }
+
+    const peekedView = peekLatestViewedAnnotation(options);
+    if (peekedView && (!newestViewedSession || peekedView.lastViewMs >= (newestViewedSession.lastViewMs || 0))) {
+      newestViewedSession = peekedView;
+    }
+
+    const viewMs = newestViewedSession?.lastViewMs || 0;
+    const latestTranscriptMs = newestTranscript?.mtimeMs || 0;
+
+    // Compare the 3 live signals:
+    // 1) Pure UI click in Antigravity sidebar (viewMs from annotations/<id>.pbtxt)
+    // 2) Active session record (Hook SessionStart/PreInvocation/PostInvocation/Stop, or cross-view UI dropdown pick)
+    // 3) Fallback transcript file mtimeMs
+    if (viewMs > 0 && viewMs > activeMs && viewMs >= latestTranscriptMs - 1000) {
+      conversationId = newestViewedSession.conversationId;
+      source = 'antigravity_view';
+      if (!transcriptPath) {
+        transcriptPath = newestViewedSession.transcriptPath || '';
+      }
+    } else if (
+      active?.conversationId &&
+      (!newestTranscript ||
+        active.source === 'ui_sync' ||
+        active.source === 'tool' ||
+        activeMs >= latestTranscriptMs - 1500)
+    ) {
       conversationId = active.conversationId;
       source = active.source || 'hook';
       if (!transcriptPath && active.transcriptPath && fs.existsSync(active.transcriptPath)) {
         transcriptPath = active.transcriptPath;
       }
-    } else if (newestTranscriptSession?.conversationId) {
-      conversationId = newestTranscriptSession.conversationId;
+    } else if (newestTranscript?.conversationId) {
+      conversationId = newestTranscript.conversationId;
       source = 'transcript';
       if (!transcriptPath) {
-        transcriptPath = newestTranscriptSession.transcriptPath || '';
+        transcriptPath = newestTranscript.transcriptPath || '';
       }
     }
   } else if (newestTranscriptSession?.conversationId) {

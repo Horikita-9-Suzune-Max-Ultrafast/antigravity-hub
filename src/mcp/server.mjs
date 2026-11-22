@@ -29,7 +29,7 @@ export const APP_RESOURCE_URI = 'ui://context-cache/dashboard.html';
 export const APP_RESOURCE_MIME = 'text/html;profile=mcp-app';
 export const SERVER_INFO = {
   name: 'context-cache-server',
-  version: '1.1.0',
+  version: '1.2.0',
 };
 
 const APP_ONLY_META = { ui: { visibility: ['app'] } };
@@ -227,6 +227,7 @@ export const TOOL_DEFINITIONS = [
         conversationId: { type: 'string' },
         projectDir: { type: 'string' },
         forceNew: { type: 'boolean' },
+        theme: { type: 'string', enum: ['light', 'dark'] },
       },
       additionalProperties: false,
     },
@@ -289,6 +290,17 @@ export function createMcpDispatcher(options = {}) {
   const defaultWorkspace = options.projectDir || process.env.CONTEXT_CACHE_WORKSPACE || process.cwd();
   const popout = new PopoutServerManager({
     getHtml: () => readUiHtml(options),
+    dataDir: options.dataDir || null,
+    getActiveConversationId: () => {
+      const target = resolveTargetSession(
+        {
+          followActive: true,
+          fallbackProjectDir: defaultWorkspace,
+        },
+        options
+      );
+      return target.conversationId || null;
+    },
     handleAppTool: async (name, args) => {
       const res = await callTool(name, args);
       return res;
@@ -530,6 +542,8 @@ export function createMcpDispatcher(options = {}) {
             const status = await popout.launchWindow({
               size: cfg.popout?.size || '460x720',
               position: cfg.popout?.position || null,
+              alwaysOnTop: cfg.popout?.alwaysOnTop !== false,
+              theme: args.theme === 'dark' ? 'dark' : 'light',
               forceNew: Boolean(args.forceNew),
             });
             return toolOk('launched', { config: loadConfig(options), popoutStatus: status });

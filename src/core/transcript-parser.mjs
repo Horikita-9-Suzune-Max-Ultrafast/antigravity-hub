@@ -5,6 +5,49 @@ import { getCandidateAppDataDirs, findTranscriptPath } from './paths.mjs';
 const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
 
 /**
+ * Parse a single Antigravity annotation .pbtxt file (<appDataDir>/annotations/<convId>.pbtxt)
+ * for official conversation title and last_user_view_time (updated whenever the user clicks a conversation in the UI).
+ */
+export function parseAnnotationPbtxt(rawText) {
+  if (!rawText || typeof rawText !== 'string') return { title: '', lastViewMs: 0, archived: false };
+  let title = '';
+  const titleMatch = /title:\s*"((?:[^"\\]|\\.)*)"/.exec(rawText);
+  if (titleMatch && titleMatch[1]) {
+    title = titleMatch[1].replace(/\\"/g, '"').replace(/\\\\/g, '\\').trim();
+  }
+  let lastViewMs = 0;
+  const viewMatch = /last_user_view_time:\s*\{\s*seconds:\s*(\d+)(?:\s+nanos:\s*(\d+))?\s*\}/.exec(rawText);
+  if (viewMatch && viewMatch[1]) {
+    const sec = Number(viewMatch[1]) || 0;
+    const nanos = Number(viewMatch[2]) || 0;
+    lastViewMs = sec * 1000 + Math.round(nanos / 1_000_000);
+  }
+  const archived = /archived:\s*true\b/.test(rawText);
+  return { title, lastViewMs, archived };
+}
+
+/**
+ * Read annotation metadata (<appDataDir>/annotations/<convId>.pbtxt) for a conversation if available.
+ */
+export function readConversationAnnotation(conversationId, options = {}) {
+  if (!conversationId) return { title: '', lastViewMs: 0, archived: false };
+  const safeId = path.basename(String(conversationId));
+  for (const appDir of getCandidateAppDataDirs(options)) {
+    const p = path.join(appDir, 'annotations', `${safeId}.pbtxt`);
+    try {
+      if (fs.existsSync(p)) {
+        const raw = fs.readFileSync(p, 'utf8');
+        const parsed = parseAnnotationPbtxt(raw);
+        if (parsed.title || parsed.lastViewMs > 0) return parsed;
+      }
+    } catch {
+      // fail open if unreadable
+    }
+  }
+  return { title: '', lastViewMs: 0, archived: false };
+}
+
+/**
  * Normalize a single transcript step across snake_case / camelCase schema variations.
  */
 export function normalizeTranscriptStep(raw) {
@@ -184,12 +227,15 @@ export function discoverSubagentIds(steps, parentConversationId = '') {
 /**
  * Extract a concise human-readable label from a conversation's transcript.
  */
-export function extractConversationMeta(filePath, conversationId) {
+export function extractConversationMeta(filePath, conversationId, options = {}) {
   let label = conversationId.slice(0, 8);
+  let promptLabel = '';
   let lastModel = '';
   let stepCount = 0;
   let lastUsedTokens = 0;
   let touchedFiles = [];
+
+  const annotation = readConversationAnnotation(conversationId, options);
 
   try {
     const steps = parseTranscriptFull(filePath);
@@ -201,8 +247,13 @@ export function extractConversationMeta(filePath, conversationId) {
         .replace(/\s+/g, ' ')
         .trim();
       if (cleaned) {
-        label = cleaned.slice(0, 48) + (cleaned.length > 48 ? '…' : '');
+        promptLabel = cleaned.slice(0, 48) + (cleaned.length > 48 ? '…' : '');
       }
+    }
+    if (annotation.title) {
+      label = annotation.title;
+    } else if (promptLabel) {
+      label = promptLabel;
     }
     const fileSet = new Set();
     for (const s of steps) {
@@ -222,10 +273,19 @@ export function extractConversationMeta(filePath, conversationId) {
     }
     touchedFiles = [...fileSet].slice(0, 8);
   } catch {
-    // fallback to id prefix
+    if (annotation.title) label = annotation.title;
   }
 
-  return { conversationId, label, lastModel, stepCount, lastUsedTokens, touchedFiles };
+  return {
+    conversationId,
+    label,
+    title: annotation.title || '',
+    lastViewMs: annotation.lastViewMs || 0,
+    lastModel,
+    stepCount,
+    lastUsedTokens,
+    touchedFiles,
+  };
 }
 
 /**
@@ -254,11 +314,14 @@ export function listConversations(options = {}) {
       try {
         const stat = fs.statSync(tPath);
         if (stat.size === 0) continue;
+        const ann = readConversationAnnotation(convId, { ...options, appDataDir: appDir });
         seen.add(convId);
         candidates.push({
           conversationId: convId,
           transcriptPath: tPath,
           mtimeMs: stat.mtimeMs,
+          lastViewMs: ann.lastViewMs || 0,
+          activityMs: Math.max(stat.mtimeMs, ann.lastViewMs || 0),
           size: stat.size,
         });
       } catch {
@@ -267,30 +330,49 @@ export function listConversations(options = {}) {
     }
   }
 
-  candidates.sort((a, b) => b.mtimeMs - a.mtimeMs);
+  candidates.sort((a, b) => b.activityMs - a.activityMs || b.mtimeMs - a.mtimeMs);
 
   // Identify subagent conversation IDs referenced by recent parent transcripts so main selector stays clean
   const subagentIds = new Set();
+  const subagentParentMap = new Map();
   for (const c of candidates.slice(0, Math.min(candidates.length, 20))) {
     try {
       const steps = parseTranscriptFull(c.transcriptPath);
-      for (const sid of discoverSubagentIds(steps, c.conversationId)) {
-        subagentIds.add(sid.toLowerCase());
-      }
+      const discovered = discoverSubagentIds(steps, c.conversationId);
+      discovered.forEach((sid, idx) => {
+        const lower = sid.toLowerCase();
+        subagentIds.add(lower);
+        if (!subagentParentMap.has(lower)) {
+          subagentParentMap.set(lower, {
+            parentConversationId: c.conversationId,
+            subTag: `子${idx + 1}`,
+          });
+        }
+      });
     } catch {
       // ignore
     }
   }
 
+  const nowMs = Date.now();
+  const recentSubagentWindowMs = 2 * 60 * 60 * 1000;
   const results = [];
   for (const c of candidates) {
-    if (!options.includeSubagents && subagentIds.has(c.conversationId.toLowerCase())) continue;
-    const meta = extractConversationMeta(c.transcriptPath, c.conversationId);
+    const lowerId = c.conversationId.toLowerCase();
+    const isSub = subagentIds.has(lowerId);
+    const isRecentSub = isSub && nowMs - c.mtimeMs <= recentSubagentWindowMs;
+    if (isSub && !options.includeSubagents && !(options.includeRecentSubagents && isRecentSub)) continue;
+    const meta = extractConversationMeta(c.transcriptPath, c.conversationId, options);
+    const subInfo = subagentParentMap.get(lowerId) || null;
     results.push({
       ...meta,
       transcriptPath: c.transcriptPath,
       mtimeMs: c.mtimeMs,
-      isSubagent: subagentIds.has(c.conversationId.toLowerCase()),
+      lastViewMs: Math.max(c.lastViewMs || 0, meta.lastViewMs || 0),
+      isSubagent: isSub,
+      parentConversationId: subInfo?.parentConversationId || null,
+      subTag: subInfo?.subTag || null,
+      isActive: nowMs - c.mtimeMs <= 90_000,
     });
     if (results.length >= limit) break;
   }

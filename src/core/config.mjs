@@ -11,6 +11,7 @@ export const DEFAULT_CONFIG = {
   popout: {
     enabled: false,
     autoLaunchFromSidebar: true,
+    alwaysOnTop: true,
     size: '460x720',
     position: null,
   },
@@ -28,12 +29,15 @@ export const DEFAULT_CONFIG = {
     mcpServerWarnTokens: 15000,
   },
   modelLimits: {
+    'gemini-4-hydrogen': 1000000,
     'gemini-4-neon': 1000000,
     'gemini-4-pro': 1000000,
     'gemini-4-flash': 1000000,
     'gemini-4-argon': 1000000,
+    'gemini-4': 1000000,
     'gemini-2.5': 1000000,
     'gemini-2.0': 1000000,
+    'gemini': 1000000,
     'claude-4': 200000,
     'claude-3': 200000,
     'claude': 200000,
@@ -45,6 +49,7 @@ export const DEFAULT_CONFIG = {
   },
   // USD per 1,000,000 tokens
   pricing: {
+    'gemini-4-hydrogen': { input: 2.5, cacheRead: 0.25, output: 15.0 },
     'gemini-4-neon': { input: 2.5, cacheRead: 0.25, output: 15.0 },
     'gemini-4-pro': { input: 2.0, cacheRead: 0.2, output: 12.0 },
     'gemini-4-flash': { input: 0.3, cacheRead: 0.03, output: 1.5 },
@@ -130,6 +135,8 @@ export function sanitizeConfig(cfg) {
   out.popout.enabled = Boolean(out.popout.enabled);
   out.popout.autoLaunchFromSidebar =
     out.popout.autoLaunchFromSidebar === undefined ? true : Boolean(out.popout.autoLaunchFromSidebar);
+  out.popout.alwaysOnTop =
+    out.popout.alwaysOnTop === undefined ? true : Boolean(out.popout.alwaysOnTop);
   if (!/^\d{3,4}x\d{3,4}$/.test(String(out.popout.size || ''))) {
     out.popout.size = '460x720';
   }

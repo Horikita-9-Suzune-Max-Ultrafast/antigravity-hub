@@ -1,27 +1,66 @@
 import http from 'node:http';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
+import { getDataDir } from './paths.mjs';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const WIN_HOST_SCRIPT = path.join(__dirname, 'win-floating-host.ps1');
 
 const CLIENT_TTL_MS = 18_000;
 const DEFAULT_STOP_GRACE_MS = 3_000;
 
 /**
  * On-demand localhost-only (127.0.0.1) frameless floating popout window server.
- * Zero idle processes or open ports until explicitly launched; auto-stops once all popout windows close.
+ * On Windows, prefers a native borderless WebView2 host (zero browser titlebar, TopMost pin,
+ * Win11 rounded corners, native 120Hz drag & 8-edge resize). Falls back cleanly to --app mode.
  */
 export class PopoutServerManager {
-  constructor({ getHtml, handleAppTool, onAutoStop = null, stopGraceMs = DEFAULT_STOP_GRACE_MS }) {
+  constructor({
+    getHtml,
+    handleAppTool,
+    getActiveConversationId = null,
+    onAutoStop = null,
+    stopGraceMs = DEFAULT_STOP_GRACE_MS,
+    dataDir = null,
+  }) {
     this.getHtml = getHtml;
     this.handleAppTool = handleAppTool;
+    this.getActiveConversationId = getActiveConversationId;
     this.onAutoStop = onAutoStop;
+    this.dataDir = dataDir;
     this.stopGraceMs = Math.max(50, Number(stopGraceMs) || DEFAULT_STOP_GRACE_MS);
     this.server = null;
     this.port = null;
     this.token = null;
+    this.hostPid = null;
+    this.hostMode = 'none';
+    this.hostStartedAt = 0;
+    this.lastHostError = null;
     this.activeClients = new Map();
     this.stopTimer = null;
     this.sweeperTimer = null;
+    this._launchPromise = null;
+  }
+
+  _cancelPendingStop() {
+    if (this.stopTimer) {
+      clearTimeout(this.stopTimer);
+      this.stopTimer = null;
+    }
+  }
+
+  _isHostProcessAlive() {
+    if (!this.hostPid) return false;
+    try {
+      process.kill(this.hostPid, 0);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   _pruneStaleClients(now = Date.now()) {
@@ -63,6 +102,12 @@ export class PopoutServerManager {
   }
 
   hasActiveClient() {
+    if (this.hostMode === 'webview2' && this.hostPid && !this._isHostProcessAlive()) {
+      this.hostPid = null;
+      this.hostMode = 'none';
+      this.activeClients.clear();
+      return false;
+    }
     return this._pruneStaleClients() > 0;
   }
 
@@ -73,6 +118,7 @@ export class PopoutServerManager {
       port: this.port,
       url: this.server && this.port && this.token ? `http://127.0.0.1:${this.port}/?token=${this.token}` : null,
       activeClients,
+      hostMode: this.hostMode,
     };
   }
 
@@ -91,6 +137,7 @@ export class PopoutServerManager {
   }
 
   async start() {
+    this._cancelPendingStop();
     if (this.server && this.port) {
       return this.getStatus();
     }
@@ -133,8 +180,22 @@ export class PopoutServerManager {
             clearTimeout(this.stopTimer);
             this.stopTimer = null;
           }
+          let activeConversationId = null;
+          if (typeof this.getActiveConversationId === 'function') {
+            try {
+              activeConversationId = this.getActiveConversationId() || null;
+            } catch {
+              activeConversationId = null;
+            }
+          }
           res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-          res.end(JSON.stringify({ ok: true, activeClients: this._pruneStaleClients() }));
+          res.end(
+            JSON.stringify({
+              ok: true,
+              activeClients: this._pruneStaleClients(),
+              activeConversationId,
+            })
+          );
           return;
         }
 
@@ -180,10 +241,20 @@ export class PopoutServerManager {
   async stop() {
     this._clearTimers();
     this.activeClients.clear();
+    if (this.hostPid) {
+      const pid = this.hostPid;
+      this.hostPid = null;
+      try {
+        process.kill(pid);
+      } catch {
+        // host already closed
+      }
+    }
+    this.hostMode = 'none';
     if (!this.server) {
       this.port = null;
       this.token = null;
-      return { running: false, port: null, url: null, activeClients: 0 };
+      return { running: false, port: null, url: null, activeClients: 0, hostMode: 'none' };
     }
     const srv = this.server;
     this.server = null;
@@ -196,23 +267,88 @@ export class PopoutServerManager {
         resolve();
       }
     });
-    return { running: false, port: null, url: null, activeClients: 0 };
+    return { running: false, port: null, url: null, activeClients: 0, hostMode: 'none' };
   }
 
-  _focusExistingWindow() {
+  _hasWindowsWebView2() {
+    if (process.platform !== 'win32' || !fs.existsSync(WIN_HOST_SCRIPT)) return false;
+    const roots = [
+      'C:\\Program Files (x86)\\Microsoft\\EdgeWebView\\Application',
+      'C:\\Program Files\\Microsoft\\EdgeWebView\\Application',
+    ];
+    for (const root of roots) {
+      if (!fs.existsSync(root)) continue;
+      try {
+        const dirs = fs.readdirSync(root).filter((n) => /^\d+\./.test(n));
+        for (const ver of dirs) {
+          if (fs.existsSync(path.join(root, ver, 'EBWebView', 'x64', 'EmbeddedBrowserWebView.dll'))) {
+            return true;
+          }
+        }
+      } catch {
+        // ignore unreadable dir
+      }
+    }
+    return false;
+  }
+
+  async _focusExistingWindow() {
     if (process.platform !== 'win32') return false;
     try {
-      const psScript = `
+      const pid = this.hostPid && this._isHostProcessAlive() ? Number(this.hostPid) : 0;
+      const evBlock = pid
+        ? `
+try {
+  $ev = [System.Threading.EventWaitHandle]::OpenExisting('Local\\ContextCacheFocus_${pid}')
+  $ok = $ev.Set()
+  $ev.Dispose()
+  if ($ok) { exit 0 }
+} catch {}
+`
+        : '';
+      const psScript = `${evBlock}
+Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+public static class WinFocusHelper {
+  [DllImport("user32.dll")] public static extern IntPtr FindWindow(IntPtr lpClassName, string lpWindowName);
+  [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr hWnd);
+  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+}
+"@
+$hwnd = [WinFocusHelper]::FindWindow([IntPtr]::Zero, 'Context Cache & Telemetry')
+if ($hwnd -ne [IntPtr]::Zero) {
+  if ([WinFocusHelper]::IsIconic($hwnd)) { [void][WinFocusHelper]::ShowWindow($hwnd, 9) }
+  [void][WinFocusHelper]::ShowWindow($hwnd, 5)
+  $fg = [WinFocusHelper]::SetForegroundWindow($hwnd)
+  if ($fg) { exit 0 }
+}
 $wshell = New-Object -ComObject WScript.Shell
-$null = $wshell.AppActivate('Context Cache & Telemetry')
+if ($wshell.AppActivate('Context Cache & Telemetry')) { exit 0 }
+exit 2
 `;
-      const child = spawn('powershell.exe', ['-NoProfile', '-WindowStyle', 'Hidden', '-Command', psScript], {
-        detached: true,
-        stdio: 'ignore',
-        windowsHide: true,
+      return await new Promise((resolve) => {
+        const child = spawn('powershell.exe', ['-NoProfile', '-WindowStyle', 'Hidden', '-Command', psScript], {
+          detached: false,
+          stdio: 'ignore',
+          windowsHide: true,
+        });
+        let done = false;
+        const finish = (ok) => {
+          if (done) return;
+          done = true;
+          clearTimeout(timer);
+          resolve(ok);
+        };
+        const timer = setTimeout(() => {
+          child.unref();
+          finish(false);
+        }, 1800);
+        timer.unref?.();
+        child.once('error', () => finish(false));
+        child.once('exit', (code) => finish(code === 0));
       });
-      child.unref();
-      return true;
     } catch {
       return false;
     }
@@ -246,59 +382,210 @@ $null = $wshell.AppActivate('Context Cache & Telemetry')
   }
 
   /**
-   * Launch system Edge/Chrome in frameless --app mode pointing strictly at 127.0.0.1.
-   * Accepts either (sizeString, position) or ({ size, position, forceNew }).
+   * Launch floating window pointing strictly at 127.0.0.1.
+   * On Windows with Evergreen WebView2, launches a true borderless native host (no browser titlebar,
+   * Always-on-Top pin, Win11 rounded corners, native drag/resize). Falls back to --app mode elsewhere.
    */
   async launchWindow(sizeOrOpts = '460x720', positionArg = null) {
+    if (this._launchPromise) {
+      await this._launchPromise.catch(() => {});
+    }
+    const run = this._launchWindowInternal(sizeOrOpts, positionArg);
+    this._launchPromise = run;
+    try {
+      return await run;
+    } finally {
+      if (this._launchPromise === run) this._launchPromise = null;
+    }
+  }
+
+  _launchBrowserFallback(status, { width, height, theme, position }) {
+    const fallbackUrl = `${status.url}&theme=${encodeURIComponent(theme)}`;
+    const args = [`--app=${fallbackUrl}`, `--window-size=${width},${height}`];
+    if (
+      position &&
+      Number.isFinite(Number(position.x)) &&
+      Number.isFinite(Number(position.y))
+    ) {
+      const x = Math.max(-2000, Math.min(4000, Math.round(Number(position.x))));
+      const y = Math.max(-1000, Math.min(3000, Math.round(Number(position.y))));
+      args.push(`--window-position=${x},${y}`);
+    }
+
+    const exe = this._findBrowserExecutable();
+    if (!exe) return false;
+    const child = spawn(exe, args, {
+      detached: true,
+      stdio: 'ignore',
+      windowsHide: false,
+    });
+    this.hostMode = 'browser-app';
+    this.hostStartedAt = Date.now();
+    child.unref();
+    return true;
+  }
+
+  async _launchWindowInternal(sizeOrOpts = '460x720', positionArg = null) {
     const opts =
       sizeOrOpts && typeof sizeOrOpts === 'object'
         ? sizeOrOpts
         : { size: sizeOrOpts, position: positionArg, forceNew: false };
 
+    this._cancelPendingStop();
     const status = await this.start();
     const [wRaw, hRaw] = String(opts.size || '460x720').split('x');
     const width = Math.max(360, Math.min(1600, Number(wRaw) || 460));
-    const height = Math.max(480, Math.min(1200, Number(hRaw) || 720));
+    const height = Math.max(460, Math.min(1200, Number(hRaw) || 720));
+    const alwaysOnTop = opts.alwaysOnTop !== false;
+    const theme = opts.theme === 'dark' ? 'dark' : 'light';
 
-    // Reuse existing live floating window unless forceNew is explicitly requested
-    if (!opts.forceNew && this.hasActiveClient()) {
-      const focused = this._focusExistingWindow();
-      return {
-        ...this.getStatus(),
-        launched: true,
-        reused: true,
-        focused,
-        size: `${width}x${height}`,
-      };
+    if (this.hostPid && !this._isHostProcessAlive()) {
+      this.hostPid = null;
+      this.hostMode = 'none';
+      this.activeClients.clear();
     }
 
-    const args = [`--app=${status.url}`, `--window-size=${width},${height}`];
-    if (
-      opts.position &&
-      Number.isFinite(Number(opts.position.x)) &&
-      Number.isFinite(Number(opts.position.y))
-    ) {
-      const x = Math.max(-2000, Math.min(4000, Math.round(Number(opts.position.x))));
-      const y = Math.max(-1000, Math.min(3000, Math.round(Number(opts.position.y))));
-      args.push(`--window-position=${x},${y}`);
+    const inStartupGrace = this.hostPid && Date.now() - this.hostStartedAt < 5_000;
+    const canReuseLiveHost =
+      this.hostMode === 'webview2'
+        ? this._isHostProcessAlive() && (this.hasActiveClient() || inStartupGrace)
+        : this.hasActiveClient();
+
+    // Reuse existing live floating window unless forceNew is explicitly requested
+    if (!opts.forceNew && canReuseLiveHost) {
+      const focused = await this._focusExistingWindow();
+      if (focused || inStartupGrace) {
+        return {
+          ...this.getStatus(),
+          launched: true,
+          reused: true,
+          focused,
+          size: `${width}x${height}`,
+        };
+      }
+      // Zombie host process whose window could not be located/focused: terminate and re-launch cleanly
+      if (this.hostPid) {
+        try { process.kill(this.hostPid); } catch {}
+        this.hostPid = null;
+        this.hostMode = 'none';
+        this.activeClients.clear();
+      }
     }
 
     let launched = false;
-    const exe = this._findBrowserExecutable();
-    if (exe) {
-      const child = spawn(exe, args, {
-        detached: true,
-        stdio: 'ignore',
-        windowsHide: false,
+    this.lastHostError = null;
+
+    // Preferred on Windows: native frameless WebView2 window (no browser chrome, TopMost fixed)
+    if (this._hasWindowsWebView2()) {
+      const nativeUrl = `${status.url}&native=1&topmost=${alwaysOnTop ? '1' : '0'}&theme=${encodeURIComponent(theme)}`;
+      const posX =
+        opts.position && Number.isFinite(Number(opts.position.x))
+          ? Math.max(-2000, Math.min(4000, Math.round(Number(opts.position.x))))
+          : -99999;
+      const posY =
+        opts.position && Number.isFinite(Number(opts.position.y))
+          ? Math.max(-1000, Math.min(3000, Math.round(Number(opts.position.y))))
+          : -99999;
+      const userDataDir = path.join(getDataDir({ dataDir: this.dataDir || undefined }), 'runtime', 'webview2');
+
+      const child = spawn(
+        'powershell.exe',
+        [
+          '-NoProfile',
+          '-STA',
+          '-ExecutionPolicy',
+          'Bypass',
+          '-File',
+          WIN_HOST_SCRIPT,
+          '-Url',
+          nativeUrl,
+          '-Width',
+          String(width),
+          '-Height',
+          String(height),
+          '-PosX',
+          String(posX),
+          '-PosY',
+          String(posY),
+          '-TopMost',
+          alwaysOnTop ? '1' : '0',
+          '-Theme',
+          theme,
+          '-UserDataDir',
+          userDataDir,
+        ],
+        {
+          detached: false,
+          stdio: ['ignore', 'pipe', 'pipe'],
+          windowsHide: true,
+        }
+      );
+      this.hostPid = child.pid || null;
+      this.hostMode = 'webview2';
+      this.hostStartedAt = Date.now();
+
+      let errBuf = '';
+      const handshakeOk = await new Promise((resolve) => {
+        let settled = false;
+        const finish = (ok) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          resolve(ok);
+        };
+        const timer = setTimeout(() => finish(this._isHostProcessAlive()), 2500);
+        timer.unref?.();
+
+        child.stdout?.setEncoding('utf8');
+        child.stdout?.on('data', (chunk) => {
+          if (String(chunk).includes('READY:')) finish(true);
+        });
+        child.stderr?.setEncoding('utf8');
+        child.stderr?.on('data', (chunk) => {
+          if (errBuf.length < 2048) errBuf += String(chunk);
+        });
+        child.once('error', (err) => {
+          errBuf += err?.message || 'spawn error';
+          finish(false);
+        });
+        child.once('exit', (code) => {
+          if (this.hostPid === child.pid) {
+            this.hostPid = null;
+            this.hostMode = 'none';
+            this.activeClients.clear();
+          }
+          if (!settled) {
+            finish(code === 0 && this.hasActiveClient());
+          }
+          this._scheduleAutoStopIfEmpty();
+        });
       });
+
+      child.stdout?.resume();
+      child.stderr?.resume();
+      child.stdout?.unref?.();
+      child.stderr?.unref?.();
       child.unref();
-      launched = true;
+
+      if (handshakeOk && (this.hostPid === child.pid || this.hasActiveClient())) {
+        launched = true;
+      } else {
+        this.lastHostError = errBuf.trim() || 'WebView2 host exited before ready';
+        if (this.hostPid === child.pid) {
+          this.hostPid = null;
+          this.hostMode = 'none';
+        }
+        launched = this._launchBrowserFallback(status, { width, height, theme, position: opts.position });
+      }
+    } else {
+      launched = this._launchBrowserFallback(status, { width, height, theme, position: opts.position });
     }
 
     return {
       ...this.getStatus(),
       launched,
       reused: false,
+      lastHostError: this.lastHostError,
       size: `${width}x${height}`,
     };
   }

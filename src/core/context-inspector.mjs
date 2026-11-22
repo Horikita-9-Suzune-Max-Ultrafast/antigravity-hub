@@ -353,16 +353,17 @@ export function inspectContext(params = {}, options = {}) {
   const config = loadConfig(options);
   const fallbackWorkspace = params.projectDir || options.projectDir || process.cwd();
 
-  const sessions = listConversations({ ...options, limit: 15 });
-  const followActive = params.followActive !== false && !params.conversationId;
+  const sessions = listConversations({ ...options, limit: 18, includeRecentSubagents: true });
+  const isAggregateAll = params.conversationId === '__active_all__';
+  const followActive = !isAggregateAll && params.followActive !== false && !params.conversationId;
   const target = resolveTargetSession(
     {
-      requestedConversationId: params.conversationId || null,
+      requestedConversationId: isAggregateAll ? null : params.conversationId || null,
       followActive,
       sessions,
       fallbackProjectDir: fallbackWorkspace,
       requestedProjectDir: params.explicitProjectDir || '',
-      requestedTranscriptPath: params.transcriptPath || '',
+      requestedTranscriptPath: isAggregateAll ? '' : params.transcriptPath || '',
     },
     options
   );
@@ -392,8 +393,12 @@ export function inspectContext(params = {}, options = {}) {
 
   const matchedSession = sessionList.find((s) => s.conversationId === convId);
   const model = latestPlanner?.model || matchedSession?.lastModel || 'gemini-4-neon-high';
-  const limitTokens = getModelLimit(model, config);
+  let limitTokens = getModelLimit(model, config);
   const usedTokens = latestPlanner ? latestPlanner.inputTokens + latestPlanner.cacheReadTokens : 0;
+  // Guard against future unknown model names exceeding fallback 200K limit
+  if (usedTokens > limitTokens) {
+    limitTokens = usedTokens <= 1_000_000 ? 1_000_000 : 2_000_000;
+  }
 
   // Estimate messages & tool outputs from transcript
   let msgRawTokens = 0;
@@ -538,19 +543,30 @@ export function inspectContext(params = {}, options = {}) {
   }
 
   // Pull synced telemetry KPIs & alerts
-  const telemetry = getTelemetryReport({ conversationId: convId, transcriptPath: tPath }, options);
+  const telemetry = getTelemetryReport(
+    {
+      conversationId: isAggregateAll ? '__active_all__' : convId,
+      transcriptPath: isAggregateAll ? undefined : tPath,
+    },
+    options
+  );
   const alerts = evaluateAlerts(telemetry.calls, config, usedPercent);
 
   return {
-    conversationId: convId,
+    conversationId: isAggregateAll ? '__active_all__' : convId,
     projectDir: workspaceDir,
-    followResolvedBy: target.source,
+    followResolvedBy: isAggregateAll ? 'aggregate_active' : target.source,
     sessions: sessionList.map((s) => ({
       id: s.conversationId,
       label: s.label,
       model: s.lastModel,
       usedTokens: s.lastUsedTokens,
       stepCount: s.stepCount,
+      isSubagent: Boolean(s.isSubagent),
+      parentId: s.parentConversationId || null,
+      subTag: s.subTag || null,
+      isActive: Boolean(s.isActive),
+      mtimeMs: s.mtimeMs || 0,
     })),
     git: {
       projectId: git.projectId,
