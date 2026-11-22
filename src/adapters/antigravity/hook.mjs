@@ -7,6 +7,7 @@ import {
   syncConversationTelemetry,
   formatUserMarkdownBanner,
 } from '../../core/telemetry.mjs';
+import { recordActiveSession } from '../../core/session-tracker.mjs';
 import { normalizeHookPayload } from './normalize.mjs';
 import { getCircuitState, recordHookFailure, recordHookSuccess } from './circuit-breaker.mjs';
 
@@ -29,6 +30,24 @@ export async function handleHookEvent(rawInput, fallbackEvent = '', options = {}
     const p = parsed.normalized;
     const event = p.event || fallbackEvent;
     const config = loadConfig(options);
+
+    // Track active conversation + workspace for real-time monitor auto-follow across all views
+    if (
+      p.conversationId &&
+      (event === 'SessionStart' || event === 'PreInvocation' || event === 'PostInvocation' || event === 'Stop')
+    ) {
+      recordActiveSession(
+        {
+          conversationId: p.conversationId,
+          projectDir: p.projectDir,
+          transcriptPath: p.transcriptPath,
+          source: 'hook',
+          event,
+          updatedAtMs: options.nowMs ?? Date.now(),
+        },
+        options
+      );
+    }
 
     if (event === 'SessionStart') {
       if (!p.projectDir) {

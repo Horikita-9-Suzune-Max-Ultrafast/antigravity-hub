@@ -63,6 +63,8 @@ export function getDataPaths(options = {}) {
     callsLogFile: path.join(dataDir, 'telemetry', 'calls.jsonl'),
     cursorsFile: path.join(dataDir, 'telemetry', 'cursors.json'),
     timingsFile: path.join(dataDir, 'telemetry', 'timings.json'),
+    activeSessionFile: path.join(dataDir, 'telemetry', 'active-session.json'),
+    sessionsRegistryFile: path.join(dataDir, 'telemetry', 'sessions-registry.json'),
     diagnosticsDir: path.join(dataDir, 'diagnostics'),
     driftLogFile: path.join(dataDir, 'diagnostics', 'schema-drift.jsonl'),
     circuitFile: path.join(dataDir, 'diagnostics', 'circuit.json'),

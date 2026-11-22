@@ -396,7 +396,8 @@ button, input, textarea {
   .seg-nav-full {
     width: 100%;
     display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(0, 1fr);
   }
   .seg-nav-full .seg-tab {
     padding: 0 6px;
@@ -980,6 +981,31 @@ button, input, textarea {
 .scroll-thin::-webkit-scrollbar-thumb {
   background: color-mix(in srgb, var(--foreground) 18%, transparent);
   border-radius: 999px;
+}
+
+/* Global Sidebar Floating Launcher Card */
+.launcher-shell {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: var(--background);
+}
+.launcher-card {
+  width: 100%;
+  max-width: 520px;
+}
+
+/* Follow / Pin Session Toggle Button */
+.follow-toggle-btn[data-mode="auto"] {
+  border-color: color-mix(in srgb, var(--success) 45%, var(--border));
+  color: var(--success);
+}
+.follow-toggle-btn[data-mode="pinned"] {
+  border-color: color-mix(in srgb, var(--warning) 55%, var(--border));
+  color: var(--warning);
+  background: color-mix(in srgb, var(--warning) 8%, var(--card));
 }
 
 @media (prefers-reduced-motion: reduce) {

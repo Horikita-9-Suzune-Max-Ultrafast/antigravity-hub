@@ -8,14 +8,15 @@
 [![Node.js >= 24](https://img.shields.io/badge/Node.js-%3E%3D24-339933.svg)](https://nodejs.org/)
 [![Zero Runtime Deps](https://img.shields.io/badge/Runtime%20Deps-0-brightgreen.svg)](#架构与设计原则)
 
-`context-cache` 是为 **Google Antigravity** 打造的原生 MCP App 观测与跨会话记忆插件，集 **上下文构成透视、主/子 Agent 实时 TPS 与缓存击穿归因、5h/7d 分组额度参考窗口、Git 感知跨会话记忆库与双视图交接胶囊、抗宿主更新自愈底座** 于一体。
+`context-cache` 是为 **Google Antigravity** 打造的原生 MCP App 观测与跨会话记忆插件，集 **上下文构成透视、主/子 Agent 实时 TPS 与缓存击穿归因、多对话自动跟随与跨视图联动、左侧边栏一键无框独立悬浮窗、Git 感知跨会话记忆库与双视图交接胶囊、抗宿主更新自愈底座** 于一体。
 
 **核心目标：实时监控 0 模型 Token 消耗、对业务代码仓库零写入污染、Antigravity 升级改版不崩不丢数据。**
 
 > [!NOTE]
-> **关于「额度参考」与已知边界的诚实说明**
-> - **额度参考功能目前尚不完善（仅作参考）**：由于 Antigravity 暂无公开文档化的插件额度查询 API，本插件严守合规边界、**不探测任何未文档化的内部私有接口**。当前「额度」页仅基于本地观测到的调用日志与手动基线校准做加权推演，**不代表官方账号后台的实时精确余额**，且在跨设备使用或未及时手动校准时存在明显误差；系统已预留标准 `QuotaProvider` 扩展口，待官方提供公开接口后即可无缝接入。
+> **已知边界说明**
 > - **首字延迟（TTFT）**：官方 `transcript.jsonl` 暂未暴露流式 TTFT，调用明细中的耗时列如实展示**单步模型耗时**（已预留 `ttft_ms` / `ttftMs` 字段兼容，未来官方补充后自动切换）。
+> - **多对话自动跟随**：只要在对话 2 / 3 新建或发送任意消息，Hook 会第一时间记录活跃会话并让右侧边栏与独立悬浮窗自动跟随切换（含对应项目 Git 分支与记忆库）；若仅鼠标点选旧对话浏览（未发消息），在任一面板顶部下拉框点选即可让所有监控视图同步联动。
+> - **额度模块**：由于 Antigravity 暂未提供公开额度查询 API，v1.1.0 起界面已隐藏「额度」页（核心代码与 `QuotaProvider` 扩展口仍完整保留在源码中，待官方接口开放后可无痛启用）。
 
 ---
 
@@ -32,18 +33,18 @@
 - **前缀缓存击穿自动归因**：自动区分 `model_changed`、`idle_ttl_expired`、`context_compacted_or_reset`、`prefix_mutated_unknown` 四类原因，支持行内展开单步解剖抽屉。
 - **零模型 Token 消耗预警与单行状态条**：本地实时检测 4 类异常（上下文超警戒线、缓存击穿、子 Agent 突发高耗、连续 3 步低速 `< 15 tok/s`）；支持在聊天流中通过 `metadata.user_markdown`（`systemMessage: ""`）展示仅用户可见的单行 TPS/Cache 状态条。
 
-### 3. 5h / 7d 分组额度参考窗口（实验性 / 参考性质）
-- 按 `Gemini 模型`、`Claude 与 GPT 模型`、`Gemini 4 Argon` 三组统计近 5 小时与 7 天本地实测调用与缓存复用趋势图，估算缓存节省费用。
-- 支持面板内手动对照 Antigravity 设置页校准基线百分比与重置倒计时，后续按加权消耗做本地推演扣减并到期滚动。
-- **当前局限**：依赖手动校准且仅统计本机观测到的会话，尚未接入官方实时额度数据，结果仅供趋势与用量参考。
+### 3. 多对话自动跟随与跨视图联动（v1.1.0 新增）
+- **自动跟随活跃对话**：Hook 在 `SessionStart` / `PreInvocation` / `PostInvocation` / `Stop` 实时记录最新活跃会话及其所属工作区，右侧边栏、左侧边栏与独立悬浮窗均自动切换，连同 Git 分支、Rules 清单与记忆库一并对齐目标项目。
+- **跨视图同步与按需锁定**：在任一监控面板切换历史对话，其他已打开的监控视图同步联动；点击下拉框旁的「跟随 / 锁定」图标即可在“自动跟随”与“钉住当前对话”间一键切换。
 
 ### 4. Git 感知跨会话记忆库与双视图交接胶囊（Context Vault）
 - 对目标业务仓库严格**只读探测** Git 指纹、分支与 `HEAD`（绝不在业务仓库写入任何缓存文件），按 `project_id + branch` 隔离存储 `working_state`、`decision`、`architecture`、`pitfall` 与 `Stop` 自动 `checkpoint`。
 - 所有记忆写入前自动脱敏（过滤 Bearer Token、API Key、JWT、PEM 私钥等），`SessionStart` 在 `< 500 tokens` 硬预算内注入极简项目索引并提示 `HEAD` 前进标脏。
 - **固定高度双视图交接胶囊**：默认展示人眼易读卡片（逐条勾选决策实时计算 Token 预算），一键切换 Agent 紧凑载荷原文（`[CTX-CAPSULE] ...`），在 Aux Pane 中支持通过 `updateModelContext` 一键附着到下一条消息。
 
-### 5. 原生挂载形态与专属插件设置
-- **左侧边栏全页入口**（`global`: `Context Monitor`）+ **右侧边栏可调宽入口**（`aux_pane`: `Context & Telemetry`）+ **默认关闭的可选 `127.0.0.1` 独立悬浮小窗**（按需绑定随机空闲端口 + 一次性令牌鉴权，关闭即释放端口）。
+### 5. 原生挂载形态、独立悬浮弹窗与专属设置
+- **左侧边栏一键独立悬浮窗**（`global`: `Context Monitor`）：默认自动弹出基于 `127.0.0.1` 一次性令牌的无框独立窗体，原生支持自由拖动、任意边缘缩放、记住窗口位置与尺寸、防重复多开，且**关闭浮窗后自动释放本地端口**；也可在设置中关闭自动弹出或点击「在当前页内嵌查看」。
+- **右侧边栏可调宽入口**（`aux_pane`: `Context & Telemetry`）：内置顶部快捷浮窗按钮，随时与聊天界面并行监控。
 - 定时检测周期可调（`3s` / `5s` / `10s` / `30s` / `60s` / `手动暂停`），全部面板刷新走私有工具，**0 模型 Token 消耗**。
 
 ---
@@ -75,16 +76,16 @@
 
 ### 方式一：下载 Release 免构建插件包（推荐，零 `npm install`）
 
-1. 前往 [Releases](https://github.com/Horikita-9-Suzune-Max-Ultrafast/context-cache/releases) 下载 `context-cache-v1.0.0-plugin.zip`（内部为全明文可读 `.mjs` 源码 + 预编译单文件 UI，零 `node_modules`）。
+1. 前往 [Releases](https://github.com/Horikita-9-Suzune-Max-Ultrafast/context-cache/releases) 下载 `context-cache-v1.1.0-plugin.zip`（内部为全明文可读 `.mjs` 源码 + 预编译单文件 UI，零 `node_modules`）。
 2. 解压至 Antigravity 插件目录，使目录结构为 `~/.gemini/config/plugins/context-cache/plugin.json`：
    - **Windows PowerShell**：
      ```powershell
-     Expand-Archive -Path .\context-cache-v1.0.0-plugin.zip -DestinationPath "$env:USERPROFILE\.gemini\config\plugins" -Force
+     Expand-Archive -Path .\context-cache-v1.1.0-plugin.zip -DestinationPath "$env:USERPROFILE\.gemini\config\plugins" -Force
      ```
    - **macOS / Linux**：
      ```bash
      mkdir -p ~/.gemini/config/plugins
-     unzip -o context-cache-v1.0.0-plugin.zip -d ~/.gemini/config/plugins
+     unzip -o context-cache-v1.1.0-plugin.zip -d ~/.gemini/config/plugins
      ```
 3. Antigravity 会自动发现并加载插件（无需重启）。
 

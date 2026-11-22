@@ -1,0 +1,213 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import { getDataPaths, findTranscriptPath } from './paths.mjs';
+import { atomicWriteJson, ensureDataDirs, readJsonSafe } from './storage.mjs';
+
+const MAX_REGISTRY_ENTRIES = 100;
+
+function normalizeDir(dir) {
+  if (!dir || typeof dir !== 'string') return '';
+  const trimmed = dir.trim();
+  if (!trimmed) return '';
+  try {
+    return path.resolve(trimmed);
+  } catch {
+    return trimmed;
+  }
+}
+
+/**
+ * Record the latest active conversation (from Hook, explicit Tool call, or cross-view UI sync)
+ * and persist its workspace projectDir/transcriptPath in the session registry.
+ */
+export function recordActiveSession(
+  {
+    conversationId,
+    projectDir = '',
+    transcriptPath = '',
+    source = 'hook',
+    event = '',
+    updatedAtMs = Date.now(),
+  } = {},
+  options = {}
+) {
+  const convId = String(conversationId || '').trim();
+  if (!convId) return null;
+
+  const paths = ensureDataDirs(options);
+  const ts = Number.isFinite(Number(updatedAtMs)) ? Number(updatedAtMs) : Date.now();
+  const registry = readJsonSafe(paths.sessionsRegistryFile, {});
+  const prevEntry = registry[convId] && typeof registry[convId] === 'object' ? registry[convId] : {};
+
+  const normProjectDir = normalizeDir(projectDir) || prevEntry.projectDir || '';
+  const normTranscript = String(transcriptPath || '').trim() || prevEntry.transcriptPath || findTranscriptPath(convId, options) || '';
+
+  const entry = {
+    conversationId: convId,
+    projectDir: normProjectDir,
+    transcriptPath: normTranscript,
+    lastSource: source || prevEntry.lastSource || 'hook',
+    lastEvent: event || prevEntry.lastEvent || '',
+    lastActiveMs: Math.max(ts, Number(prevEntry.lastActiveMs) || 0),
+    updatedAt: new Date(ts).toISOString(),
+  };
+
+  registry[convId] = entry;
+
+  // Prune oldest entries beyond limit
+  const entries = Object.entries(registry);
+  if (entries.length > MAX_REGISTRY_ENTRIES) {
+    entries.sort((a, b) => (Number(b[1]?.lastActiveMs) || 0) - (Number(a[1]?.lastActiveMs) || 0));
+    const pruned = {};
+    for (const [k, v] of entries.slice(0, MAX_REGISTRY_ENTRIES)) {
+      pruned[k] = v;
+    }
+    atomicWriteJson(paths.sessionsRegistryFile, pruned);
+  } else {
+    atomicWriteJson(paths.sessionsRegistryFile, registry);
+  }
+
+  const active = {
+    conversationId: convId,
+    projectDir: normProjectDir,
+    transcriptPath: normTranscript,
+    source: source || 'hook',
+    event: event || '',
+    updatedAtMs: ts,
+    updatedAt: new Date(ts).toISOString(),
+  };
+
+  // Prevent an older event from overwriting a strictly newer active session timestamp
+  const existing = readJsonSafe(paths.activeSessionFile, null);
+  if (!existing || ts >= (Number(existing.updatedAtMs) || 0) || source === 'ui_sync' || source === 'tool') {
+    atomicWriteJson(paths.activeSessionFile, active);
+    return active;
+  }
+  return existing;
+}
+
+/**
+ * Read the most recently recorded active session pointer.
+ */
+export function readActiveSession(options = {}) {
+  const paths = getDataPaths(options);
+  const raw = readJsonSafe(paths.activeSessionFile, null);
+  if (!raw || typeof raw !== 'object' || !raw.conversationId) return null;
+  return {
+    conversationId: String(raw.conversationId),
+    projectDir: String(raw.projectDir || ''),
+    transcriptPath: String(raw.transcriptPath || ''),
+    source: String(raw.source || 'hook'),
+    event: String(raw.event || ''),
+    updatedAtMs: Number(raw.updatedAtMs) || 0,
+    updatedAt: String(raw.updatedAt || ''),
+  };
+}
+
+/**
+ * Read the full conversationId -> session metadata registry.
+ */
+export function readSessionsRegistry(options = {}) {
+  const paths = getDataPaths(options);
+  const raw = readJsonSafe(paths.sessionsRegistryFile, {});
+  return raw && typeof raw === 'object' ? raw : {};
+}
+
+/**
+ * Resolve the workspace projectDir associated with a given conversationId,
+ * falling back cleanly if unrecorded or if the directory no longer exists.
+ */
+export function getSessionProjectDir(conversationId, fallbackProjectDir = '', options = {}) {
+  const convId = String(conversationId || '').trim();
+  if (convId) {
+    const registry = readSessionsRegistry(options);
+    const rec = registry[convId];
+    if (rec?.projectDir && fs.existsSync(rec.projectDir)) {
+      return rec.projectDir;
+    }
+    const active = readActiveSession(options);
+    if (active && active.conversationId === convId && active.projectDir && fs.existsSync(active.projectDir)) {
+      return active.projectDir;
+    }
+  }
+  return fallbackProjectDir || process.cwd();
+}
+
+/**
+ * Resolve which conversation & projectDir the monitor should inspect.
+ *
+ * Priority:
+ * 1) Explicit pinned conversationId (when followActive === false or requestedConversationId is supplied)
+ * 2) Auto-follow mode: compare active-session.json (Hook / Tool / cross-view UI sync)
+ *    against newest transcript.jsonl mtimeMs and pick the freshest active conversation.
+ */
+export function resolveTargetSession(
+  {
+    requestedConversationId = null,
+    followActive = true,
+    sessions = [],
+    fallbackProjectDir = '',
+    requestedProjectDir = '',
+    requestedTranscriptPath = '',
+  } = {},
+  options = {}
+) {
+  const registry = readSessionsRegistry(options);
+  const active = readActiveSession(options);
+  const newestTranscriptSession = Array.isArray(sessions) && sessions.length > 0 ? sessions[0] : null;
+
+  let conversationId = null;
+  let source = 'none';
+  let transcriptPath = requestedTranscriptPath || '';
+
+  if (requestedConversationId) {
+    conversationId = String(requestedConversationId).trim();
+    source = 'explicit';
+  } else if (followActive) {
+    const activeMs = active?.updatedAtMs || 0;
+    const latestTranscriptMs = newestTranscriptSession?.mtimeMs || 0;
+
+    // Prefer active-session.json when it is at least as recent as the newest transcript
+    // (with 1500ms slack for filesystem mtime granularity) OR when there is no transcript yet.
+    if (active?.conversationId && (!newestTranscriptSession || activeMs >= latestTranscriptMs - 1500)) {
+      conversationId = active.conversationId;
+      source = active.source || 'hook';
+      if (!transcriptPath && active.transcriptPath && fs.existsSync(active.transcriptPath)) {
+        transcriptPath = active.transcriptPath;
+      }
+    } else if (newestTranscriptSession?.conversationId) {
+      conversationId = newestTranscriptSession.conversationId;
+      source = 'transcript';
+      if (!transcriptPath) {
+        transcriptPath = newestTranscriptSession.transcriptPath || '';
+      }
+    }
+  } else if (newestTranscriptSession?.conversationId) {
+    conversationId = newestTranscriptSession.conversationId;
+    source = 'transcript';
+    if (!transcriptPath) {
+      transcriptPath = newestTranscriptSession.transcriptPath || '';
+    }
+  }
+
+  if (conversationId && !transcriptPath) {
+    const regEntry = registry[conversationId];
+    if (regEntry?.transcriptPath && fs.existsSync(regEntry.transcriptPath)) {
+      transcriptPath = regEntry.transcriptPath;
+    } else {
+      transcriptPath = findTranscriptPath(conversationId, options) || '';
+    }
+  }
+
+  const resolvedProjectDir =
+    normalizeDir(requestedProjectDir) ||
+    getSessionProjectDir(conversationId, fallbackProjectDir, options);
+
+  return {
+    conversationId,
+    projectDir: resolvedProjectDir,
+    transcriptPath: transcriptPath || null,
+    source,
+    activeSession: active,
+  };
+}

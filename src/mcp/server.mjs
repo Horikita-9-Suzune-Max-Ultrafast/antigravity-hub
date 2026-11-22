@@ -18,6 +18,8 @@ import { getTelemetryReport } from '../core/telemetry.mjs';
 import { getQuotaSnapshot, calibrateQuotaGroup } from '../core/quota.mjs';
 import { runDoctor, exportBackup, resetCircuitBreaker, repairLocalState } from '../core/doctor.mjs';
 import { PopoutServerManager } from '../core/popout-server.mjs';
+import { recordActiveSession, resolveTargetSession, getSessionProjectDir } from '../core/session-tracker.mjs';
+import { listConversations } from '../core/transcript-parser.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -27,7 +29,7 @@ export const APP_RESOURCE_URI = 'ui://context-cache/dashboard.html';
 export const APP_RESOURCE_MIME = 'text/html;profile=mcp-app';
 export const SERVER_INFO = {
   name: 'context-cache-server',
-  version: '1.0.0',
+  version: '1.1.0',
 };
 
 const APP_ONLY_META = { ui: { visibility: ['app'] } };
@@ -37,13 +39,13 @@ export const TOOL_DEFINITIONS = [
   {
     name: 'ctx_open_monitor',
     title: 'Context & Telemetry Monitor',
-    description: 'Open the native Context Cache & Telemetry console (context breakdown, multi-agent TPS, quota windows, cross-session vault).',
+    description: 'Open the native Context Cache & Telemetry console (context breakdown, multi-agent TPS & cache monitoring, cross-session vault).',
     inputSchema: {
       type: 'object',
       properties: {
         conversationId: { type: 'string', description: 'Optional conversation ID to inspect' },
         projectDir: { type: 'string', description: 'Optional workspace directory' },
-        tab: { type: 'string', enum: ['context', 'calls', 'quota', 'vault', 'settings'], description: 'Initial view tab' },
+        tab: { type: 'string', enum: ['context', 'calls', 'vault', 'settings'], description: 'Initial view tab' },
       },
       additionalProperties: false,
     },
@@ -132,6 +134,7 @@ export const TOOL_DEFINITIONS = [
       type: 'object',
       properties: {
         conversationId: { type: 'string' },
+        followActive: { type: 'boolean' },
         projectDir: { type: 'string' },
       },
       additionalProperties: false,
@@ -146,6 +149,7 @@ export const TOOL_DEFINITIONS = [
       type: 'object',
       properties: {
         conversationId: { type: 'string' },
+        followActive: { type: 'boolean' },
         agentFilter: { type: 'string', enum: ['all', 'main', 'sub'] },
         modelFilter: { type: 'string' },
         onlyDrop: { type: 'boolean' },
@@ -193,6 +197,7 @@ export const TOOL_DEFINITIONS = [
       required: ['action'],
       properties: {
         action: { type: 'string', enum: ['list', 'save', 'archive', 'capsule'] },
+        conversationId: { type: 'string' },
         projectDir: { type: 'string' },
         query: { type: 'string' },
         kind: { type: 'string' },
@@ -212,13 +217,16 @@ export const TOOL_DEFINITIONS = [
   {
     name: 'app_config_manage',
     title: 'App: Manage Plugin Settings & Popout Window',
-    description: 'Private UI tool for reading/updating plugin settings and controlling the optional 127.0.0.1 popout window.',
+    description: 'Private UI tool for reading/updating plugin settings, syncing active session across views, and controlling the optional 127.0.0.1 popout window.',
     inputSchema: {
       type: 'object',
       required: ['action'],
       properties: {
-        action: { type: 'string', enum: ['get', 'update', 'open_popout', 'close_popout'] },
+        action: { type: 'string', enum: ['get', 'update', 'open_popout', 'close_popout', 'set_active_session'] },
         patch: { type: 'object' },
+        conversationId: { type: 'string' },
+        projectDir: { type: 'string' },
+        forceNew: { type: 'boolean' },
       },
       additionalProperties: false,
     },
@@ -285,22 +293,52 @@ export function createMcpDispatcher(options = {}) {
       const res = await callTool(name, args);
       return res;
     },
+    onAutoStop: () => {
+      try {
+        saveConfig({ popout: { enabled: false } }, options);
+      } catch {
+        // ignore config write error on shutdown
+      }
+    },
   });
 
-  async function callTool(name, rawArgs = {}) {
+  async function callTool(name, rawArgs = {}, rpcMeta = {}) {
     const args = rawArgs && typeof rawArgs === 'object' ? rawArgs : {};
+    const meta = rpcMeta && typeof rpcMeta === 'object' ? rpcMeta : {};
     const projectDir = args.projectDir || defaultWorkspace;
 
     try {
       switch (name) {
         case 'ctx_open_monitor': {
-          const ctx = inspectContext({ conversationId: args.conversationId, projectDir }, options);
+          const explicitConvId = String(args.conversationId || meta.conversationId || meta.sessionId || '').trim() || null;
+          if (explicitConvId) {
+            recordActiveSession(
+              {
+                conversationId: explicitConvId,
+                projectDir: args.projectDir || '',
+                source: 'tool',
+                event: 'ctx_open_monitor',
+              },
+              options
+            );
+          }
+          const ctx = inspectContext(
+            {
+              conversationId: explicitConvId || undefined,
+              followActive: !explicitConvId,
+              projectDir,
+              explicitProjectDir: args.projectDir || '',
+            },
+            options
+          );
           const config = loadConfig(options);
+          const requestedTab = args.tab === 'quota' ? 'context' : args.tab || 'context';
           const summaryText =
             `Context Monitor 已就绪：当前上下文 ${ctx.usedPercent}% (${Math.round(ctx.usedTokens / 1000)}K/${Math.round(ctx.limitTokens / 1000)}K)` +
             `，缓存命中 ${ctx.latestCacheHitRate.toFixed(1)}%，均速 ${ctx.avgTps.toFixed(1)} tok/s，预警 ${ctx.alerts.length} 项。`;
           return toolOk(summaryText, {
-            initialTab: args.tab || 'context',
+            initialTab: requestedTab,
+            explicitConversationId: Boolean(explicitConvId),
             context: ctx,
             config,
             popoutStatus: popout.getStatus(),
@@ -354,14 +392,38 @@ export function createMcpDispatcher(options = {}) {
         }
 
         case 'app_get_context_breakdown': {
-          const ctx = inspectContext({ conversationId: args.conversationId, projectDir }, options);
+          const followActive = args.followActive !== false && !args.conversationId;
+          const ctx = inspectContext(
+            {
+              conversationId: args.conversationId || undefined,
+              followActive,
+              projectDir,
+              explicitProjectDir: args.projectDir || '',
+            },
+            options
+          );
           return toolOk('ok', ctx);
         }
 
         case 'app_get_calls': {
+          let resolvedConvId = args.conversationId || undefined;
+          let resolvedTranscript = undefined;
+          if (!resolvedConvId && args.followActive !== false) {
+            const target = resolveTargetSession(
+              {
+                followActive: true,
+                sessions: listConversations({ ...options, limit: 1 }),
+                fallbackProjectDir: defaultWorkspace,
+              },
+              options
+            );
+            resolvedConvId = target.conversationId || undefined;
+            resolvedTranscript = target.transcriptPath || undefined;
+          }
           const report = getTelemetryReport(
             {
-              conversationId: args.conversationId,
+              conversationId: resolvedConvId,
+              transcriptPath: resolvedTranscript,
               agentFilter: args.agentFilter || 'all',
               modelFilter: args.modelFilter || 'all',
               onlyDrop: Boolean(args.onlyDrop),
@@ -384,14 +446,30 @@ export function createMcpDispatcher(options = {}) {
 
         case 'app_vault_manage': {
           const paths = getDataPaths(options);
-          const git = getGitContext(projectDir);
+          let vaultProjectDir = args.projectDir || '';
+          if (!vaultProjectDir) {
+            if (args.conversationId) {
+              vaultProjectDir = getSessionProjectDir(args.conversationId, defaultWorkspace, options);
+            } else {
+              const target = resolveTargetSession(
+                {
+                  followActive: true,
+                  sessions: listConversations({ ...options, limit: 1 }),
+                  fallbackProjectDir: defaultWorkspace,
+                },
+                options
+              );
+              vaultProjectDir = target.projectDir || defaultWorkspace;
+            }
+          }
+          const git = getGitContext(vaultProjectDir);
           const storagePath = formatDisplayPath(path.join(paths.projectsDir, git.projectId));
 
           if (args.action === 'list') {
             const items = args.query
-              ? searchMemories({ projectDir, query: args.query, kind: args.kind || 'all', limit: 60 }, options)
-              : listMemories({ projectDir, kind: args.kind || 'all', limit: 60 }, options);
-            const brief = buildCompactBrief({ projectDir }, options);
+              ? searchMemories({ projectDir: vaultProjectDir, query: args.query, kind: args.kind || 'all', limit: 60 }, options)
+              : listMemories({ projectDir: vaultProjectDir, kind: args.kind || 'all', limit: 60 }, options);
+            const brief = buildCompactBrief({ projectDir: vaultProjectDir }, options);
             return toolOk('ok', {
               items,
               git,
@@ -403,7 +481,7 @@ export function createMcpDispatcher(options = {}) {
           if (args.action === 'save') {
             const saved = saveMemory(
               {
-                projectDir,
+                projectDir: vaultProjectDir,
                 kind: args.kind || 'decision',
                 title: args.title,
                 summary: args.summary,
@@ -411,16 +489,16 @@ export function createMcpDispatcher(options = {}) {
               },
               options
             );
-            return toolOk('saved', { saved, items: listMemories({ projectDir, limit: 60 }, options), git, storagePath });
+            return toolOk('saved', { saved, items: listMemories({ projectDir: vaultProjectDir, limit: 60 }, options), git, storagePath });
           }
           if (args.action === 'archive') {
             const res = archiveMemory(args.id, options);
-            return toolOk('archived', { ...res, items: listMemories({ projectDir, limit: 60 }, options), git, storagePath });
+            return toolOk('archived', { ...res, items: listMemories({ projectDir: vaultProjectDir, limit: 60 }, options), git, storagePath });
           }
           if (args.action === 'capsule') {
             const capsule = buildHandoffCapsule(
               {
-                projectDir,
+                projectDir: vaultProjectDir,
                 selectedDecisionIds: args.selectedDecisionIds,
                 activeGoal: args.activeGoal,
                 touchedFiles: args.touchedFiles,
@@ -439,7 +517,7 @@ export function createMcpDispatcher(options = {}) {
           }
           if (args.action === 'update') {
             const next = saveConfig(args.patch || {}, options);
-            if (!next.popout?.enabled) {
+            if (args.patch?.popout && Object.prototype.hasOwnProperty.call(args.patch.popout, 'enabled') && !next.popout?.enabled) {
               await popout.stop();
             }
             return toolOk('updated', { config: next, popoutStatus: popout.getStatus() });
@@ -449,13 +527,33 @@ export function createMcpDispatcher(options = {}) {
             if (!cfg.popout?.enabled) {
               saveConfig({ popout: { enabled: true } }, options);
             }
-            const status = await popout.launchWindow(cfg.popout?.size || '460x720');
+            const status = await popout.launchWindow({
+              size: cfg.popout?.size || '460x720',
+              position: cfg.popout?.position || null,
+              forceNew: Boolean(args.forceNew),
+            });
             return toolOk('launched', { config: loadConfig(options), popoutStatus: status });
           }
           if (args.action === 'close_popout') {
             const status = await popout.stop();
             const next = saveConfig({ popout: { enabled: false } }, options);
             return toolOk('closed', { config: next, popoutStatus: status });
+          }
+          if (args.action === 'set_active_session') {
+            const convId = String(args.conversationId || '').trim();
+            if (!convId) {
+              return toolErr('conversationId is required for set_active_session');
+            }
+            const activeSession = recordActiveSession(
+              {
+                conversationId: convId,
+                projectDir: args.projectDir || '',
+                source: 'ui_sync',
+                event: 'ui_select',
+              },
+              options
+            );
+            return toolOk('synced', { activeSession });
           }
           return toolErr(`Unsupported config action: ${args.action}`);
         }
@@ -565,7 +663,8 @@ export function createMcpDispatcher(options = {}) {
     if (method === 'tools/call') {
       const toolName = params?.name;
       const toolArgs = params?.arguments || {};
-      const result = await callTool(toolName, toolArgs);
+      const toolMeta = params?._meta || {};
+      const result = await callTool(toolName, toolArgs, toolMeta);
       return reply(result);
     }
 

@@ -2,7 +2,7 @@
 
 Use the `context-cache-server` slim tools intentionally without bloating context:
 
-- `ctx_open_monitor`: Open the native Context & Telemetry console in the side pane when the user asks to inspect context usage, TPS, cache hit rate, quota windows, or cross-session memory.
+- `ctx_open_monitor`: Open the native Context & Telemetry console in the side pane when the user asks to inspect context usage, TPS, cache hit rate, or cross-session memory (pass current `conversationId` and `projectDir` when known).
 - `ctx_brief`: Fetch the `<500` token project brief on demand if needed mid-session.
 - `ctx_save`: Persist high-value `decision`, `working_state`, `architecture`, or `pitfall` entries after material decisions (secrets are auto-redacted; never write raw keys).
 - `ctx_search`: Query cross-session project memory via FTS5 before repeating solved investigations.

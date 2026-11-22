@@ -6,6 +6,7 @@ import { getGitContext } from './git-context.mjs';
 import { estimateTokens, buildCompactBrief } from './vault.mjs';
 import { parseTranscriptFull, listConversations } from './transcript-parser.mjs';
 import { getTelemetryReport, evaluateAlerts } from './telemetry.mjs';
+import { resolveTargetSession } from './session-tracker.mjs';
 
 function safeReadFile(p) {
   try {
@@ -350,18 +351,47 @@ function scanSkillsAndAgents(steps, workspaceDir, options = {}) {
  */
 export function inspectContext(params = {}, options = {}) {
   const config = loadConfig(options);
-  const workspaceDir = params.projectDir || options.projectDir || process.cwd();
+  const fallbackWorkspace = params.projectDir || options.projectDir || process.cwd();
+
+  const sessions = listConversations({ ...options, limit: 15 });
+  const followActive = params.followActive !== false && !params.conversationId;
+  const target = resolveTargetSession(
+    {
+      requestedConversationId: params.conversationId || null,
+      followActive,
+      sessions,
+      fallbackProjectDir: fallbackWorkspace,
+      requestedProjectDir: params.explicitProjectDir || '',
+      requestedTranscriptPath: params.transcriptPath || '',
+    },
+    options
+  );
+
+  const convId = target.conversationId;
+  const workspaceDir = target.projectDir || fallbackWorkspace;
+  const tPath = target.transcriptPath || (convId ? findTranscriptPath(convId, options) : null);
   const git = getGitContext(workspaceDir);
 
-  const sessions = listConversations({ ...options, limit: 12 });
-  let convId = params.conversationId || sessions[0]?.conversationId || null;
-  let tPath = params.transcriptPath || (convId ? findTranscriptPath(convId, options) : null);
+  // If the resolved active conversation was just started (SessionStart before first transcript line),
+  // surface it at the top of the session list so UI dropdowns display it cleanly.
+  const sessionList = [...sessions];
+  if (convId && !sessionList.some((s) => s.conversationId === convId)) {
+    sessionList.unshift({
+      conversationId: convId,
+      label: `新会话 (${convId.slice(0, 8)})`,
+      lastModel: '',
+      stepCount: 0,
+      lastUsedTokens: 0,
+      mtimeMs: target.activeSession?.updatedAtMs || Date.now(),
+    });
+  }
 
   const steps = tPath && fs.existsSync(tPath) ? parseTranscriptFull(tPath) : [];
   const plannerSteps = steps.filter((s) => s.type === 'PLANNER_RESPONSE' && s.inputTokens + s.cacheReadTokens > 0);
   const latestPlanner = plannerSteps[plannerSteps.length - 1] || null;
 
-  const model = latestPlanner?.model || sessions[0]?.lastModel || 'gemini-4-neon-high';
+  const matchedSession = sessionList.find((s) => s.conversationId === convId);
+  const model = latestPlanner?.model || matchedSession?.lastModel || 'gemini-4-neon-high';
   const limitTokens = getModelLimit(model, config);
   const usedTokens = latestPlanner ? latestPlanner.inputTokens + latestPlanner.cacheReadTokens : 0;
 
@@ -513,7 +543,9 @@ export function inspectContext(params = {}, options = {}) {
 
   return {
     conversationId: convId,
-    sessions: sessions.map((s) => ({
+    projectDir: workspaceDir,
+    followResolvedBy: target.source,
+    sessions: sessionList.map((s) => ({
       id: s.conversationId,
       label: s.label,
       model: s.lastModel,

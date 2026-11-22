@@ -4,6 +4,11 @@ import {
   applyHostStyleVariables,
 } from '@modelcontextprotocol/ext-apps';
 
+// Code-level feature flags (all quota UI/backend code is preserved intact when hidden)
+const FEATURE_FLAGS = {
+  showQuotaUi: false,
+};
+
 const POLL_OPTIONS = [
   { value: '3', label: '3 秒（高频）', short: '3s' },
   { value: '5', label: '5 秒（推荐）', short: '5s' },
@@ -20,7 +25,13 @@ const POPOUT_SIZES = [
 ];
 
 const state = {
-  conversationId: null,
+  surface: 'aux_pane', // 'aux_pane' | 'global' | 'popout'
+  followMode: 'auto',  // 'auto' | 'pinned'
+  pinnedConversationId: null,
+  activeConversationId: null,
+  activeProjectDir: null,
+  launcherMode: false,
+  popoutStatus: { running: false, port: null, activeClients: 0 },
   activeTab: 'context',
   callsMode: 'step',
   agentFilter: 'all',
@@ -43,7 +54,7 @@ const state = {
   config: {
     pollIntervalSec: 5,
     auxAutoOpen: true,
-    popout: { enabled: false, size: '460x720' },
+    popout: { enabled: false, autoLaunchFromSidebar: true, size: '460x720', position: null },
     uiBanner: { enabled: true },
     sessionStartBudgetTokens: 450,
     alerts: { contextWarningPct: 75, cacheDropThresholdPct: 50 },
@@ -56,12 +67,19 @@ const state = {
 const prevDisplay = { pct: 0, used: 0, cache: 0, tps: 0, free: 0, cost: 0 };
 const activeAnims = new WeakMap();
 let pollTimer = null;
+let launcherTimer = null;
+let heartbeatTimer = null;
+let boundsTimer = null;
 let toastTimer = null;
 let refreshInFlight = false;
+let lastSavedBoundsKey = '';
 
 // Detect standalone popout mode (?token=...) vs MCP App iframe mode
 const urlParams = new URLSearchParams(window.location.search);
 const popoutToken = urlParams.get('token');
+const popoutClientId = popoutToken
+  ? `pop-${Math.random().toString(36).slice(2, 10)}-${Date.now().toString(36)}`
+  : null;
 let mcpApp = null;
 
 function esc(str) {
@@ -165,16 +183,17 @@ async function callAppTool(name, args = {}) {
 }
 
 // ==================== Custom Popover Select ====================
-function renderCustomSelect(hostId, { id, value, options, alignRight = false, fullWidth = false }) {
+function renderCustomSelect(hostId, { id, value, options, alignRight = false, fullWidth = false, triggerLabel = null }) {
   const host = document.getElementById(hostId);
   if (!host) return;
   const opts = options.length ? options : [{ value: '', label: '暂无数据' }];
   const current = opts.find((o) => o.value === value) || opts[0];
   const isOpen = state.openSelectId === id;
+  const shownLabel = triggerLabel ?? current.label;
 
   host.innerHTML = `
     <button type="button" class="agy-select-trigger ${fullWidth ? 'w-full' : ''}" aria-expanded="${isOpen}" data-select-toggle="${esc(id)}">
-      <span class="truncate">${esc(current.label)}</span>
+      <span class="truncate">${esc(shownLabel)}</span>
       <svg class="agy-select-chevron" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7">
         <path d="M4.2 6.2L8 10l3.8-3.8" stroke-linecap="round" stroke-linejoin="round"/>
       </svg>
@@ -235,18 +254,41 @@ function renderPollSelect() {
   `;
 }
 
+function renderFollowToggle() {
+  const btn = document.getElementById('followToggleBtn');
+  if (!btn) return;
+  const isAuto = state.followMode === 'auto';
+  btn.dataset.mode = isAuto ? 'auto' : 'pinned';
+  btn.title = isAuto
+    ? '自动跟随当前活跃对话（点击锁定本窗口）'
+    : '已锁定当前对话（点击恢复自动跟随）';
+  btn.innerHTML = isAuto
+    ? `<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="2.2"/><path d="M8 2v2M8 12v2M2 8h2M12 8h2"/></svg>`
+    : `<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="7" width="9" height="6.5" rx="1.5"/><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2"/></svg>`;
+}
+
 function renderSelects() {
   renderPollSelect();
+  renderFollowToggle();
 
   const sessions = state.contextData?.sessions || [];
-  const sessionOpts = sessions.length
-    ? sessions.map((s) => ({ value: s.id, label: s.label }))
-    : [{ value: '', label: '当前工作区（等待会话记录）' }];
+  const activeId = state.followMode === 'pinned' ? state.pinnedConversationId : state.activeConversationId;
+  const matched = sessions.find((s) => s.id === activeId) || sessions[0] || null;
+  const sessionOpts = [
+    { value: '__auto__', label: '自动跟随当前活跃对话（实时）' },
+    ...(sessions.length
+      ? sessions.map((s) => ({ value: s.id, label: s.label }))
+      : [{ value: '', label: '当前工作区（等待会话记录）' }]),
+  ];
+  const triggerLabel = matched
+    ? `${state.followMode === 'auto' ? '自动 · ' : ''}${matched.label}`
+    : '自动跟随 · 等待会话记录';
   renderCustomSelect('sessionSelectHost', {
     id: 'sessionSelect',
-    value: state.conversationId || sessionOpts[0].value,
+    value: activeId || '__auto__',
     options: sessionOpts,
     fullWidth: true,
+    triggerLabel,
   });
 
   renderCustomSelect('agentSelectHost', {
@@ -281,17 +323,19 @@ function renderSelects() {
     alignRight: true,
   });
 
-  const qGroups = state.quotaData?.groups || [
-    { id: 'gemini', name: 'Gemini 模型' },
-    { id: 'claude_gpt', name: 'Claude 与 GPT 模型' },
-    { id: 'argon', name: 'Gemini 4 Argon' },
-  ];
-  renderCustomSelect('calGroupSelectHost', {
-    id: 'calGroupSelect',
-    value: state.calGroup,
-    options: qGroups.map((g) => ({ value: g.id, label: g.name })),
-    fullWidth: true,
-  });
+  if (FEATURE_FLAGS.showQuotaUi) {
+    const qGroups = state.quotaData?.groups || [
+      { id: 'gemini', name: 'Gemini 模型' },
+      { id: 'claude_gpt', name: 'Claude 与 GPT 模型' },
+      { id: 'argon', name: 'Gemini 4 Argon' },
+    ];
+    renderCustomSelect('calGroupSelectHost', {
+      id: 'calGroupSelect',
+      value: state.calGroup,
+      options: qGroups.map((g) => ({ value: g.id, label: g.name })),
+      fullWidth: true,
+    });
+  }
 
   renderCustomSelect('newMemKindSelectHost', {
     id: 'newMemKindSelect',
@@ -322,10 +366,32 @@ function renderSelects() {
 async function handleSelectPick(id, val) {
   state.openSelectId = null;
   if (id === 'sessionSelect') {
-    state.conversationId = val || null;
-    state.expandedCallId = null;
-    state.knownCallIds.clear();
+    if (val === '__auto__' || !val) {
+      state.followMode = 'auto';
+      state.pinnedConversationId = null;
+      resetSessionViewState();
+      renderSelects();
+      await refreshAll(true, false);
+      showToast('已开启自动跟随当前活跃对话');
+      return;
+    }
+
+    if (state.followMode === 'pinned') {
+      state.pinnedConversationId = val;
+      state.activeConversationId = val;
+      resetSessionViewState();
+      renderSelects();
+      await refreshAll(true, false);
+      return;
+    }
+
+    // In auto-follow mode, selecting a session syncs all open views (aux pane + floating popout)
+    state.activeConversationId = val;
+    resetSessionViewState();
+    renderSelects();
+    await callAppTool('app_config_manage', { action: 'set_active_session', conversationId: val }).catch(() => {});
     await refreshAll(true, false);
+    showToast('已同步切换所有监控视图至所选对话');
     return;
   }
   if (id === 'pollInterval' || id === 'settingsPoll') {
@@ -856,14 +922,168 @@ function renderVault() {
     .join('');
 }
 
+function resetSessionViewState() {
+  state.expandedCallId = null;
+  state.knownCallIds.clear();
+  state.freshCallId = null;
+  state.modelFilter = 'all';
+}
+
+function applyFeatureFlags() {
+  const quotaTabBtn = document.querySelector('#mainSegNav [data-tab="quota"]');
+  const quotaPanel = document.getElementById('panel-quota');
+  if (!FEATURE_FLAGS.showQuotaUi) {
+    if (quotaTabBtn) {
+      quotaTabBtn.classList.add('hidden');
+      quotaTabBtn.setAttribute('aria-hidden', 'true');
+    }
+    if (quotaPanel) quotaPanel.classList.add('hidden');
+    if (state.activeTab === 'quota') state.activeTab = 'context';
+  } else {
+    if (quotaTabBtn) {
+      quotaTabBtn.classList.remove('hidden');
+      quotaTabBtn.removeAttribute('aria-hidden');
+    }
+  }
+}
+
+function renderLauncherView() {
+  const running = Boolean(state.popoutStatus?.running);
+  const port = state.popoutStatus?.port;
+  const dot = document.getElementById('launcherStatusDot');
+  const title = document.getElementById('launcherTitle');
+  const sub = document.getElementById('launcherSubMeta');
+  const badge = document.getElementById('launcherPortBadge');
+  const sessEl = document.getElementById('launcherSessionLabel');
+
+  if (dot) dot.classList.toggle('hidden', !running);
+  if (title) title.textContent = running ? '独立悬浮监控窗已启动' : '独立悬浮监控窗已关闭';
+  if (sub) {
+    sub.textContent = running && port
+      ? `127.0.0.1:${port} · 本地一次性令牌 · 自动跟随活跃对话`
+      : '已自动释放本地端口，点击下方按钮可随时再次弹出';
+  }
+  if (badge) {
+    badge.textContent = running ? '运行中' : '已关闭';
+    badge.style.color = running ? 'var(--success)' : 'var(--muted-foreground)';
+    badge.style.borderColor = running ? 'var(--success)' : 'var(--border)';
+  }
+  if (sessEl) {
+    const sessions = state.contextData?.sessions || [];
+    const cur = sessions.find((s) => s.id === state.activeConversationId) || sessions[0];
+    sessEl.textContent = cur ? cur.label : '自动跟随最新活跃对话';
+  }
+}
+
+function enterGlobalLauncherMode(popoutStatus) {
+  state.launcherMode = true;
+  if (popoutStatus) state.popoutStatus = popoutStatus;
+  document.getElementById('appShell')?.classList.add('hidden');
+  document.getElementById('globalLauncherView')?.classList.remove('hidden');
+  renderLauncherView();
+  // Stop high-frequency polling in hidden background shell while popout window handles monitoring
+  if (pollTimer) {
+    clearInterval(pollTimer);
+    pollTimer = null;
+  }
+  if (launcherTimer) clearInterval(launcherTimer);
+  launcherTimer = setInterval(async () => {
+    if (!state.launcherMode) return;
+    try {
+      const res = await callAppTool('app_config_manage', { action: 'get' });
+      if (res?.popoutStatus) state.popoutStatus = res.popoutStatus;
+      if (res?.config) state.config = res.config;
+      renderLauncherView();
+    } catch {
+      // ignore transient status poll errors
+    }
+  }, 6000);
+}
+
+function exitGlobalLauncherMode() {
+  state.launcherMode = false;
+  if (launcherTimer) {
+    clearInterval(launcherTimer);
+    launcherTimer = null;
+  }
+  document.getElementById('globalLauncherView')?.classList.add('hidden');
+  document.getElementById('appShell')?.classList.remove('hidden');
+  void refreshAll(false, false);
+  restartPollTimer();
+  requestAnimationFrame(() => {
+    positionIndicator('mainSegNav', 'mainSegIndicator');
+    positionIndicator('callsModeNav', 'callsModeIndicator');
+  });
+}
+
+function startPopoutClientLifecycle() {
+  if (!popoutToken || !popoutClientId) return;
+
+  const sendHeartbeat = () => {
+    fetch(`/api/popout/heartbeat?token=${encodeURIComponent(popoutToken)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-cc-token': popoutToken },
+      body: JSON.stringify({ clientId: popoutClientId }),
+    }).catch(() => {});
+  };
+
+  sendHeartbeat();
+  heartbeatTimer = setInterval(sendHeartbeat, 5000);
+
+  let closingSent = false;
+  const sendClosing = () => {
+    if (closingSent) return;
+    closingSent = true;
+    const url = `/api/popout/closing?token=${encodeURIComponent(popoutToken)}&clientId=${encodeURIComponent(popoutClientId)}`;
+    const payload = JSON.stringify({ clientId: popoutClientId });
+    if (navigator.sendBeacon) {
+      navigator.sendBeacon(url, new Blob([payload], { type: 'application/json' }));
+    } else {
+      fetch(url, { method: 'POST', body: payload, keepalive: true }).catch(() => {});
+    }
+  };
+  window.addEventListener('pagehide', sendClosing);
+  window.addEventListener('beforeunload', sendClosing);
+
+  // Persist user-resized/moved floating window geometry (debounced)
+  let saveBoundsDebounce = null;
+  const scheduleBoundsSave = () => {
+    const w = Math.max(360, Math.min(1600, Math.round(window.outerWidth || window.innerWidth || 460)));
+    const h = Math.max(480, Math.min(1200, Math.round(window.outerHeight || window.innerHeight || 720)));
+    const x = Number.isFinite(window.screenX) ? Math.round(window.screenX) : null;
+    const y = Number.isFinite(window.screenY) ? Math.round(window.screenY) : null;
+    const key = `${w}x${h}@${x},${y}`;
+    if (key === lastSavedBoundsKey) return;
+    clearTimeout(saveBoundsDebounce);
+    saveBoundsDebounce = setTimeout(() => {
+      lastSavedBoundsKey = key;
+      const patch = { popout: { size: `${w}x${h}` } };
+      if (x !== null && y !== null) patch.popout.position = { x, y };
+      void callAppTool('app_config_manage', { action: 'update', patch }).catch(() => {});
+    }, 1000);
+  };
+
+  window.addEventListener('resize', scheduleBoundsSave);
+  boundsTimer = setInterval(() => {
+    if (document.visibilityState === 'visible') scheduleBoundsSave();
+  }, 4000);
+}
+
 function renderSettings() {
   const cfg = state.config;
   document.getElementById('auxAutoSwitch').dataset.on = String(Boolean(cfg.auxAutoOpen));
-  const popOn = Boolean(cfg.popout?.enabled);
+  const sidebarAutoEl = document.getElementById('sidebarAutoPopoutSwitch');
+  if (sidebarAutoEl) {
+    sidebarAutoEl.dataset.on = String(cfg.popout?.autoLaunchFromSidebar !== false);
+  }
+  const popOn = Boolean(state.popoutStatus?.running || cfg.popout?.enabled);
   document.getElementById('popoutSwitch').dataset.on = String(popOn);
-  document.getElementById('popoutControls').classList.toggle('hidden', !popOn);
   const badge = document.getElementById('popoutStateBadge');
-  badge.textContent = popOn ? '已启用' : '已关闭';
+  badge.textContent = state.popoutStatus?.running
+    ? `运行中 :${state.popoutStatus.port}`
+    : popOn
+      ? '已启用'
+      : '已关闭';
   badge.style.color = popOn ? 'var(--success)' : 'var(--muted-foreground)';
   badge.style.borderColor = popOn ? 'var(--success)' : 'var(--border)';
 
@@ -881,7 +1101,7 @@ function renderSettings() {
 
   const rep = state.doctorReport;
   if (rep) {
-    document.getElementById('settingsVersionLabel').textContent = `context-cache v${rep.version || '1.0.0'}`;
+    document.getElementById('settingsVersionLabel').textContent = `context-cache v${rep.version || '1.1.0'}`;
     const pill = document.getElementById('doctorStatusPill');
     pill.textContent = rep.healthy ? '健康' : '需关注';
     pill.style.color = rep.healthy ? 'var(--success)' : 'var(--warning)';
@@ -938,20 +1158,37 @@ function renderCapsuleModal() {
 
 // ==================== Data Loaders ====================
 async function loadContext(animated = false) {
+  const isPinned = state.followMode === 'pinned' && Boolean(state.pinnedConversationId);
   const ctx = await callAppTool('app_get_context_breakdown', {
-    conversationId: state.conversationId || undefined,
+    conversationId: isPinned ? state.pinnedConversationId : undefined,
+    followActive: !isPinned,
   });
-  state.contextData = ctx;
-  if (!state.conversationId && ctx.conversationId) {
-    state.conversationId = ctx.conversationId;
+
+  const prevConvId = state.activeConversationId;
+  const nextConvId = ctx.conversationId || null;
+  const sessionChanged = Boolean(prevConvId && nextConvId && prevConvId !== nextConvId);
+
+  if (sessionChanged) {
+    resetSessionViewState();
   }
+
+  state.contextData = ctx;
+  state.activeConversationId = nextConvId;
+  state.activeProjectDir = ctx.projectDir || null;
+  if (isPinned && nextConvId) {
+    state.pinnedConversationId = nextConvId;
+  }
+
   renderSelects();
   renderContext(animated);
+  if (state.launcherMode) renderLauncherView();
+  return { sessionChanged };
 }
 
 async function loadCalls(force = false) {
   const data = await callAppTool('app_get_calls', {
-    conversationId: state.conversationId || undefined,
+    conversationId: state.activeConversationId || undefined,
+    followActive: state.followMode === 'auto',
     agentFilter: state.agentFilter,
     modelFilter: state.modelFilter,
     onlyDrop: state.onlyDrop,
@@ -976,6 +1213,7 @@ async function loadCalls(force = false) {
 }
 
 async function loadQuota() {
+  if (!FEATURE_FLAGS.showQuotaUi) return;
   state.quotaData = await callAppTool('app_get_quota', {});
   renderQuota();
 }
@@ -984,6 +1222,8 @@ async function loadVault() {
   const query = (document.getElementById('vaultSearch')?.value || '').trim();
   state.vaultData = await callAppTool('app_vault_manage', {
     action: 'list',
+    conversationId: state.activeConversationId || undefined,
+    projectDir: state.activeProjectDir || undefined,
     query: query || undefined,
     kind: state.vaultKind,
   });
@@ -996,14 +1236,17 @@ async function loadConfigAndDoctor() {
     callAppTool('app_doctor_action', { action: 'diagnose' }),
   ]);
   if (cfgRes?.config) state.config = cfgRes.config;
+  if (cfgRes?.popoutStatus) state.popoutStatus = cfgRes.popoutStatus;
   if (docRes?.report) state.doctorReport = docRes.report;
   renderSelects();
   renderSettings();
+  if (state.launcherMode) renderLauncherView();
 }
 
 async function persistConfigPatch(patch) {
   const res = await callAppTool('app_config_manage', { action: 'update', patch });
   if (res?.config) state.config = res.config;
+  if (res?.popoutStatus) state.popoutStatus = res.popoutStatus;
   renderSettings();
   renderSelects();
 }
@@ -1022,7 +1265,9 @@ async function refreshAll(animated = true, manual = false) {
   }
   try {
     await loadContext(animated);
-    await Promise.allSettled([loadCalls(manual), loadQuota(), loadVault()]);
+    const tasks = [loadCalls(manual), loadVault()];
+    if (FEATURE_FLAGS.showQuotaUi) tasks.push(loadQuota());
+    await Promise.allSettled(tasks);
     if (state.inSettings) {
       await loadConfigAndDoctor().catch(() => {});
     }
@@ -1043,6 +1288,7 @@ function restartPollTimer() {
     clearInterval(pollTimer);
     pollTimer = null;
   }
+  if (state.launcherMode) return;
   const sec = Number(state.config.pollIntervalSec ?? 5);
   if (sec > 0) {
     pollTimer = setInterval(() => {
@@ -1053,16 +1299,17 @@ function restartPollTimer() {
 
 // ==================== Navigation & Modals ====================
 function switchTab(tab) {
-  state.activeTab = tab;
+  const safeTab = !FEATURE_FLAGS.showQuotaUi && tab === 'quota' ? 'context' : tab;
+  state.activeTab = safeTab;
   if (state.inSettings) exitSettingsView();
   ['context', 'calls', 'quota', 'vault'].forEach((t) => {
-    document.getElementById(`panel-${t}`).classList.toggle('hidden', t !== tab);
+    document.getElementById(`panel-${t}`).classList.toggle('hidden', t !== safeTab);
   });
   document.querySelectorAll('#mainSegNav .seg-tab').forEach((btn) => {
-    btn.dataset.active = String(btn.dataset.tab === tab);
+    btn.dataset.active = String(btn.dataset.tab === safeTab);
   });
   positionIndicator('mainSegNav', 'mainSegIndicator');
-  if (tab === 'calls') setTimeout(() => positionIndicator('callsModeNav', 'callsModeIndicator'), 15);
+  if (safeTab === 'calls') setTimeout(() => positionIndicator('callsModeNav', 'callsModeIndicator'), 15);
 }
 
 function toggleSettingsView() {
@@ -1097,7 +1344,11 @@ function closeModal(id) {
 }
 
 async function openCapsuleModal() {
-  const cap = await callAppTool('app_vault_manage', { action: 'capsule' });
+  const cap = await callAppTool('app_vault_manage', {
+    action: 'capsule',
+    conversationId: state.activeConversationId || undefined,
+    projectDir: state.activeProjectDir || undefined,
+  });
   state.capsuleData = cap;
   renderCapsuleModal();
   openModal('capsuleModal');
@@ -1248,6 +1499,62 @@ function bindEvents() {
     btn.addEventListener('click', () => setCapsuleMode(btn.dataset.cmode));
   });
 
+  document.getElementById('followToggleBtn')?.addEventListener('click', () => {
+    if (state.followMode === 'auto') {
+      state.followMode = 'pinned';
+      state.pinnedConversationId = state.activeConversationId;
+      renderSelects();
+      showToast('已锁定当前对话（不再随其他对话切换）');
+    } else {
+      state.followMode = 'auto';
+      state.pinnedConversationId = null;
+      resetSessionViewState();
+      renderSelects();
+      void refreshAll(true, false);
+      showToast('已恢复自动跟随当前活跃对话');
+    }
+  });
+
+  const handleOpenPopout = async (forceNew = false) => {
+    const res = await callAppTool('app_config_manage', { action: 'open_popout', forceNew });
+    if (res?.config) state.config = res.config;
+    if (res?.popoutStatus) state.popoutStatus = res.popoutStatus;
+    renderSettings();
+    if (state.launcherMode) renderLauncherView();
+    const st = res?.popoutStatus;
+    if (st?.reused) {
+      showToast(`已聚焦现有独立悬浮窗（127.0.0.1:${st.port}）`);
+    } else if (st?.launched) {
+      showToast(`已弹出可拖动 / 可缩放独立悬浮窗（127.0.0.1:${st.port}）`);
+    } else {
+      showToast('未检测到 Edge/Chrome，已保留在当前页内运行');
+    }
+    return st;
+  };
+
+  document.getElementById('quickPopoutBtn')?.addEventListener('click', () => {
+    void handleOpenPopout(false);
+  });
+
+  document.getElementById('launcherOpenPopoutBtn')?.addEventListener('click', () => {
+    void handleOpenPopout(false);
+  });
+
+  document.getElementById('launcherUseEmbeddedBtn')?.addEventListener('click', () => {
+    exitGlobalLauncherMode();
+  });
+
+  document.getElementById('launcherClosePopoutBtn')?.addEventListener('click', () => {
+    void (async () => {
+      const res = await callAppTool('app_config_manage', { action: 'close_popout' });
+      if (res?.config) state.config = res.config;
+      if (res?.popoutStatus) state.popoutStatus = res.popoutStatus;
+      renderLauncherView();
+      renderSettings();
+      showToast('已关闭独立悬浮窗并释放本地端口');
+    })();
+  });
+
   document.getElementById('refreshBtn').addEventListener('click', () => void refreshAll(true, true));
   document.getElementById('settingsBtn').addEventListener('click', toggleSettingsView);
   document.getElementById('exitSettingsBtn').addEventListener('click', exitSettingsView);
@@ -1291,6 +1598,8 @@ function bindEvents() {
     void (async () => {
       state.capsuleData = await callAppTool('app_vault_manage', {
         action: 'capsule',
+        conversationId: state.activeConversationId || undefined,
+        projectDir: state.activeProjectDir || undefined,
         selectedDecisionIds: selectedIds,
       });
       renderCapsuleModal();
@@ -1308,6 +1617,8 @@ function bindEvents() {
       if (state.capsuleData) {
         await callAppTool('app_vault_manage', {
           action: 'save',
+          conversationId: state.activeConversationId || undefined,
+          projectDir: state.activeProjectDir || undefined,
           kind: 'checkpoint',
           title: `交接胶囊：${state.capsuleData.activeGoal.slice(0, 64)}`,
           summary: state.capsuleData.agentPayload,
@@ -1325,6 +1636,8 @@ function bindEvents() {
       if (!state.capsuleData) return;
       await callAppTool('app_vault_manage', {
         action: 'save',
+        conversationId: state.activeConversationId || undefined,
+        projectDir: state.activeProjectDir || undefined,
         kind: 'checkpoint',
         title: `交接胶囊：${state.capsuleData.activeGoal.slice(0, 64)}`,
         summary: state.capsuleData.agentPayload,
@@ -1371,6 +1684,8 @@ function bindEvents() {
       if (!title) return;
       await callAppTool('app_vault_manage', {
         action: 'save',
+        conversationId: state.activeConversationId || undefined,
+        projectDir: state.activeProjectDir || undefined,
         kind: state.newMemKind,
         title,
         summary,
@@ -1392,12 +1707,20 @@ function bindEvents() {
     });
   });
 
+  document.getElementById('sidebarAutoPopoutSwitch')?.addEventListener('click', () => {
+    const next = state.config.popout?.autoLaunchFromSidebar === false;
+    void persistConfigPatch({ popout: { autoLaunchFromSidebar: next } }).then(() => {
+      showToast(next ? '已开启左侧边栏点击自动弹出独立悬浮窗' : '已关闭自动弹出（左侧边栏将以全页内嵌展示）');
+    });
+  });
+
   document.getElementById('popoutSwitch').addEventListener('click', () => {
-    const next = !state.config.popout?.enabled;
+    const next = !(state.popoutStatus?.running || state.config.popout?.enabled);
     void (async () => {
       if (!next) {
         const res = await callAppTool('app_config_manage', { action: 'close_popout' });
         if (res?.config) state.config = res.config;
+        if (res?.popoutStatus) state.popoutStatus = res.popoutStatus;
         renderSettings();
         showToast('已关闭独立悬浮小窗并释放本地端口');
       } else {
@@ -1409,9 +1732,18 @@ function bindEvents() {
 
   document.getElementById('launchPopoutBtn').addEventListener('click', () => {
     void (async () => {
-      const res = await callAppTool('app_config_manage', { action: 'open_popout' });
+      const res = await callAppTool('app_config_manage', { action: 'open_popout', forceNew: false });
+      if (res?.config) state.config = res.config;
+      if (res?.popoutStatus) state.popoutStatus = res.popoutStatus;
+      renderSettings();
       const port = res?.popoutStatus?.port;
-      showToast(port ? `已弹出无框独立小窗（127.0.0.1:${port} 本地令牌）` : '已启动本地独立小窗服务');
+      showToast(
+        res?.popoutStatus?.reused
+          ? `已聚焦现有独立小窗（127.0.0.1:${port}）`
+          : port
+            ? `已弹出无框独立小窗（127.0.0.1:${port} 本地令牌）`
+            : '已启动本地独立小窗服务'
+      );
     })();
   });
 
@@ -1475,6 +1807,7 @@ function bindEvents() {
 
 // ==================== Bootstrap ====================
 async function init() {
+  applyFeatureFlags();
   bindEvents();
   renderSelects();
   requestAnimationFrame(() => {
@@ -1490,11 +1823,14 @@ async function init() {
   ro.observe(document.getElementById('appShell'));
 
   if (!popoutToken) {
-    mcpApp = new App({ name: 'Context Cache & Telemetry', version: '1.0.0' }, {});
+    mcpApp = new App({ name: 'Context Cache & Telemetry', version: '1.1.0' }, {});
 
     // Register handlers BEFORE connect() per Antigravity mcp-app-development guidelines
     mcpApp.ontoolinput = ({ arguments: args }) => {
-      if (args?.conversationId) state.conversationId = args.conversationId;
+      if (args?.conversationId) {
+        state.activeConversationId = args.conversationId;
+        resetSessionViewState();
+      }
       if (args?.tab && ['context', 'calls', 'quota', 'vault'].includes(args.tab)) {
         switchTab(args.tab);
       } else if (args?.tab === 'settings') {
@@ -1506,13 +1842,20 @@ async function init() {
       const sc = result?.structuredContent;
       if (!sc) return;
       if (sc.config) state.config = sc.config;
+      if (sc.popoutStatus) state.popoutStatus = sc.popoutStatus;
       if (sc.context) {
+        const changed = Boolean(
+          state.activeConversationId &&
+            sc.context.conversationId &&
+            state.activeConversationId !== sc.context.conversationId
+        );
+        if (changed) resetSessionViewState();
         state.contextData = sc.context;
-        if (!state.conversationId && sc.context.conversationId) {
-          state.conversationId = sc.context.conversationId;
-        }
+        state.activeConversationId = sc.context.conversationId || state.activeConversationId;
+        state.activeProjectDir = sc.context.projectDir || state.activeProjectDir;
         renderSelects();
         renderContext(false);
+        if (state.launcherMode) renderLauncherView();
       }
       if (sc.initialTab && ['context', 'calls', 'quota', 'vault'].includes(sc.initialTab)) {
         switchTab(sc.initialTab);
@@ -1524,6 +1867,14 @@ async function init() {
     mcpApp.onhostcontextchanged = (ctx) => {
       if (ctx?.theme) applyDocumentTheme(ctx.theme);
       if (ctx?.styles?.variables) applyHostStyleVariables(ctx.styles.variables);
+      // Forward-compatible: if Antigravity exposes focused conversationId in hostContext, follow immediately
+      const hostConvId = ctx?.conversationId || ctx?.sessionId;
+      if (hostConvId && state.followMode === 'auto' && hostConvId !== state.activeConversationId) {
+        state.activeConversationId = String(hostConvId);
+        resetSessionViewState();
+        void callAppTool('app_config_manage', { action: 'set_active_session', conversationId: state.activeConversationId }).catch(() => {});
+        void refreshAll(true, false);
+      }
     };
 
     try {
@@ -1534,17 +1885,46 @@ async function init() {
 
       const caps = mcpApp.getHostCapabilities();
       state.canUpdateModelContext = Boolean(caps?.updateModelContext);
+      // Distinguish left sidebar global entrypoint (no conversation capabilities) vs right aux_pane
+      state.surface = caps?.updateModelContext || caps?.message ? 'aux_pane' : 'global';
+
+      const initHostConvId = hostCtx?.conversationId || hostCtx?.sessionId;
+      if (initHostConvId && state.followMode === 'auto') {
+        state.activeConversationId = String(initHostConvId);
+      }
     } catch (err) {
       const attr = document.getElementById('ctxAttribution');
       if (attr) attr.textContent = `宿主连接失败：${err.message}`;
       showToast(`宿主连接异常：${err.message}`);
     }
   } else {
-    // Standalone popout window: global-like surface without conversation updateModelContext
+    // Standalone popout window: movable/resizable frameless OS window with heartbeat & bounds memory
+    state.surface = 'popout';
     state.canUpdateModelContext = false;
+    document.getElementById('quickPopoutBtn')?.classList.add('hidden');
+    startPopoutClientLifecycle();
   }
 
   await loadConfigAndDoctor().catch(() => {});
+
+  // Left sidebar (global) auto-launches floating OS window when enabled
+  if (state.surface === 'global' && state.config.popout?.autoLaunchFromSidebar !== false) {
+    try {
+      const res = await callAppTool('app_config_manage', { action: 'open_popout', forceNew: false });
+      if (res?.config) state.config = res.config;
+      if (res?.popoutStatus) state.popoutStatus = res.popoutStatus;
+      if (res?.popoutStatus?.launched) {
+        // Fetch once so launcher card displays current followed conversation name
+        await loadContext(false).catch(() => {});
+        enterGlobalLauncherMode(res.popoutStatus);
+        return;
+      }
+      showToast('未检测到 Edge/Chrome，已切换为当前页内展示');
+    } catch {
+      // Fall back cleanly to embedded view if popout launch fails
+    }
+  }
+
   await refreshAll(false, false);
   restartPollTimer();
   requestAnimationFrame(() => {

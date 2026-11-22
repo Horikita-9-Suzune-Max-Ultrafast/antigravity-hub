@@ -10,7 +10,9 @@ export const DEFAULT_CONFIG = {
   auxAutoOpen: true,
   popout: {
     enabled: false,
+    autoLaunchFromSidebar: true,
     size: '460x720',
+    position: null,
   },
   uiBanner: {
     enabled: true,
@@ -126,8 +128,23 @@ export function sanitizeConfig(cfg) {
   }
   out.auxAutoOpen = Boolean(out.auxAutoOpen);
   out.popout.enabled = Boolean(out.popout.enabled);
+  out.popout.autoLaunchFromSidebar =
+    out.popout.autoLaunchFromSidebar === undefined ? true : Boolean(out.popout.autoLaunchFromSidebar);
   if (!/^\d{3,4}x\d{3,4}$/.test(String(out.popout.size || ''))) {
     out.popout.size = '460x720';
+  }
+  if (
+    out.popout.position &&
+    typeof out.popout.position === 'object' &&
+    Number.isFinite(Number(out.popout.position.x)) &&
+    Number.isFinite(Number(out.popout.position.y))
+  ) {
+    out.popout.position = {
+      x: Math.max(-4000, Math.min(8000, Math.round(Number(out.popout.position.x)))),
+      y: Math.max(-2000, Math.min(4000, Math.round(Number(out.popout.position.y)))),
+    };
+  } else {
+    out.popout.position = null;
   }
   out.uiBanner.enabled = Boolean(out.uiBanner.enabled);
   out.sessionStartBudgetTokens = Math.max(150, Math.min(490, Number(out.sessionStartBudgetTokens) || 450));

@@ -107,6 +107,9 @@ test('MCP App Stdio Server serves ui:// single-file HTML, exposes 5 model + 7 ap
     assert.ok(html.length > 5000 && Buffer.byteLength(html, 'utf8') < 10 * 1024 * 1024);
     assert.ok(!/<(?:script|link)\b[^>]+(?:src|href)\s*=\s*["']https?:\/\//i.test(html), 'UI HTML must have zero external script/link URLs');
     assert.ok(!html.includes('runLiveChangeDemo'), 'Formal UI must remove temporary preview demo controls');
+    assert.match(html, /class="seg-tab hidden"[^>]*data-tab="quota"/, 'Quota tab must be hidden from user-facing UI');
+    assert.ok(html.includes('globalLauncherView'), 'Left-sidebar floating launcher view must exist');
+    assert.ok(html.includes('followToggleBtn'), 'Auto-follow toggle button must exist');
     const scriptMatch = /<script>([\s\S]*?)<\/script>/i.exec(html);
     assert.ok(scriptMatch && scriptMatch[1].length > 1000, 'Inline script must exist');
     assert.doesNotThrow(() => new Function(scriptMatch[1]), 'Inline script must be syntactically valid JavaScript');
@@ -129,9 +132,10 @@ test('MCP App Stdio Server serves ui:// single-file HTML, exposes 5 model + 7 ap
     );
 
     // 4. Call all 5 model-visible tools
-    const rOpen = await client.request('tools/call', { name: 'ctx_open_monitor', arguments: {} });
+    const rOpen = await client.request('tools/call', { name: 'ctx_open_monitor', arguments: { tab: 'quota' } });
     assert.ok(!rOpen.result.isError);
     assert.ok(rOpen.result.structuredContent.context);
+    assert.equal(rOpen.result.structuredContent.initialTab, 'context', 'Hidden quota tab should normalize to context');
 
     const rSave = await client.request('tools/call', {
       name: 'ctx_save',
@@ -190,6 +194,15 @@ test('MCP App Stdio Server serves ui:// single-file HTML, exposes 5 model + 7 ap
       arguments: { action: 'update', patch: { pollIntervalSec: 10 } },
     });
     assert.equal(aCfgUpd.result.structuredContent.config.pollIntervalSec, 10);
+    assert.equal(aCfgUpd.result.structuredContent.config.popout.autoLaunchFromSidebar, true);
+
+    const aSyncSess = await client.request('tools/call', {
+      name: 'app_config_manage',
+      arguments: { action: 'set_active_session', conversationId: 'conv-sync-test-1' },
+    });
+    assert.ok(!aSyncSess.result.isError);
+    assert.equal(aSyncSess.result.structuredContent.activeSession.conversationId, 'conv-sync-test-1');
+    assert.equal(aSyncSess.result.structuredContent.activeSession.source, 'ui_sync');
 
     const aDoc = await client.request('tools/call', { name: 'app_doctor_action', arguments: { action: 'rebuild_index' } });
     assert.ok(!aDoc.result.isError);
@@ -200,10 +213,15 @@ test('MCP App Stdio Server serves ui:// single-file HTML, exposes 5 model + 7 ap
   }
 });
 
-test('PopoutServerManager binds strictly to 127.0.0.1 with token auth and releases port on stop()', async () => {
+test('PopoutServerManager binds strictly to 127.0.0.1 with token auth, tracks heartbeat, and auto-stops on closing', async () => {
+  let autoStopped = false;
   const mgr = new PopoutServerManager({
     getHtml: () => '<html><body>ok</body></html>',
     handleAppTool: async (name) => ({ structuredContent: { echoed: name } }),
+    stopGraceMs: 120,
+    onAutoStop: () => {
+      autoStopped = true;
+    },
   });
 
   assert.equal(mgr.getStatus().running, false);
@@ -231,6 +249,26 @@ test('PopoutServerManager binds strictly to 127.0.0.1 with token auth and releas
     assert.equal(apiResp.status, 200);
     const json = await apiResp.json();
     assert.equal(json.structuredContent.echoed, 'app_get_quota');
+
+    // Heartbeat registers live client
+    const hbResp = await fetch(`http://127.0.0.1:${st.port}/api/popout/heartbeat?token=${token}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ clientId: 'client-1' }),
+    });
+    assert.equal(hbResp.status, 200);
+    assert.equal(mgr.hasActiveClient(), true);
+
+    // Closing last client triggers automatic stop after grace window
+    const closeResp = await fetch(`http://127.0.0.1:${st.port}/api/popout/closing?token=${token}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ clientId: 'client-1' }),
+    });
+    assert.equal(closeResp.status, 200);
+    await new Promise((r) => setTimeout(r, 260));
+    assert.equal(mgr.getStatus().running, false);
+    assert.equal(autoStopped, true);
   } finally {
     const stopped = await mgr.stop();
     assert.equal(stopped.running, false);

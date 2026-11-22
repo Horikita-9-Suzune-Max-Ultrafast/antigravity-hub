@@ -1,13 +1,13 @@
 {
   "name": "context-cache",
   "displayName": "Context Cache & Telemetry",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "author": {
     "name": "Horikita-9-Suzune-Max-Ultrafast",
     "url": "https://github.com/Horikita-9-Suzune-Max-Ultrafast"
   },
   "repository": "https://github.com/Horikita-9-Suzune-Max-Ultrafast/context-cache",
-  "description": "Native Antigravity MCP App for real-time context breakdown, multi-agent TPS & cache monitoring, 5h/7d quota windows, and Git-aware cross-session memory with zero-token UI polling.",
+  "description": "Native Antigravity MCP App for real-time context breakdown, multi-agent TPS & cache monitoring, auto-following active conversations, movable/resizable floating monitor, and Git-aware cross-session memory with zero-token UI polling.",
   "logo": "assets/logo.svg",
   "suggestedPrompts": [
     "打开上下文与遥测监控面板，分析当前会话的上下文构成和缓存命中率",
