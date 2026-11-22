@@ -2,6 +2,7 @@
   "name": "context-cache",
   "version": "1.0.0",
   "description": "Host-agnostic context cache, multi-agent telemetry, quota window, and native Antigravity MCP App plugin",
+  "license": "MIT",
   "type": "module",
   "private": true,
   "bin": {
