@@ -1,0 +1,32 @@
+{
+  "context-cache": {
+    "SessionStart": [
+      {
+        "type": "command",
+        "command": "node --no-warnings ./src/adapters/antigravity/hook.mjs --event SessionStart",
+        "timeout": 5
+      }
+    ],
+    "PreInvocation": [
+      {
+        "type": "command",
+        "command": "node --no-warnings ./src/adapters/antigravity/hook.mjs --event PreInvocation",
+        "timeout": 5
+      }
+    ],
+    "PostInvocation": [
+      {
+        "type": "command",
+        "command": "node --no-warnings ./src/adapters/antigravity/hook.mjs --event PostInvocation",
+        "timeout": 5
+      }
+    ],
+    "Stop": [
+      {
+        "type": "command",
+        "command": "node --no-warnings ./src/adapters/antigravity/hook.mjs --event Stop",
+        "timeout": 5
+      }
+    ]
+  }
+}

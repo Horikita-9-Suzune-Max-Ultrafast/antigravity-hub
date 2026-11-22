@@ -1,0 +1,23 @@
+{
+  "name": "context-cache",
+  "version": "1.0.0",
+  "description": "Host-agnostic context cache, multi-agent telemetry, quota window, and native Antigravity MCP App plugin",
+  "type": "module",
+  "private": true,
+  "bin": {
+    "ctx-cache": "./bin/ctx.mjs"
+  },
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "scripts": {
+    "build:ui": "node --no-warnings src/ui/build-ui.mjs",
+    "deploy": "node --no-warnings scripts/deploy.mjs",
+    "doctor": "node --no-warnings scripts/doctor.mjs",
+    "test": "node --no-warnings --test tests/*.test.mjs"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/ext-apps": "^1.0.0",
+    "esbuild": "^0.25.0"
+  }
+}

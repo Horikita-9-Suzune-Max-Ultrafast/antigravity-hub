@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "context-cache-server": {
+      "command": "node",
+      "args": [
+        "--no-warnings",
+        "{{SERVER_PATH}}"
+      ]
+    }
+  }
+}
