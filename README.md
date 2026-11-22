@@ -28,13 +28,14 @@
 - **膨胀归因体检**：自动识别前 3 大上下文占用来源，在占用超过警戒线（默认 `75%`）或单一 MCP Server 过重（`>= 15K` tokens）时给出本地零消耗提示。
 
 ### 2. 主 / 子 Agent 实时调用明细与 TPS 监控（Live Calls & Telemetry）
-- 自动识别主对话 `transcript.jsonl` 中的 `invoke_subagent` 调用并追踪所有子 Agent（编号 `主`、`子1`、`子2`…），支持按步查看、按 Agent / 模型维度汇总与多维筛选。
-- **双源计时与吞吐**：优先使用 `PreInvocation` → `PostInvocation` 实测 `hook_ms`，缺失时平滑回退至 `hybrid_tool_split` / `transcript_fallback`。
-- **前缀缓存击穿自动归因**：自动区分 `model_changed`、`idle_ttl_expired`、`context_compacted_or_reset`、`prefix_mutated_unknown` 四类原因，支持行内展开单步解剖抽屉。
+- 自动识别主对话 `transcript.jsonl` 中的 `invoke_subagent` 调用并追踪所有子 Agent（编号 `主`、`子1`、`子2`…），支持按步查看、按 Agent / 模型维度汇总、多维筛选，以及顶部大字汇总看板（步数 / 加权均速 / 累计费用 / 当前模型）。
+- **1-to-1 双源计时与 Token 加权吞吐**：`PreInvocation` → `PostInvocation` 实测 `hook_ms` 采用 `startMs` 优先一对一消费机制（防同秒错配），缺失时平滑回退至 `hybrid_tool_split` / `transcript_fallback`；平均速度按总输出 Token / 总耗时加权计算。
+- **前缀缓存击穿自动归因与单步解剖**：自动区分 `model_changed`、`idle_ttl_expired`、`context_compacted_or_reset`、`prefix_mutated_unknown` 四类原因；点击任意行可展开单步解剖抽屉，查看**信息来源**（所属会话/子代理）、**完整模型名**、缓存命中比例条与击穿归因。
 - **零模型 Token 消耗预警与单行状态条**：本地实时检测 4 类异常（上下文超警戒线、缓存击穿、子 Agent 突发高耗、连续 3 步低速 `< 15 tok/s`）；支持在聊天流中通过 `metadata.user_markdown`（`systemMessage: ""`）展示仅用户可见的单行 TPS/Cache 状态条。
 
-### 3. 多对话自动跟随与跨视图联动（v1.1.0 新增）
+### 3. 多对话自动跟随、子代理保留与运行汇总（v1.2.0 升级）
 - **自动跟随活跃对话**：Hook 在 `SessionStart` / `PreInvocation` / `PostInvocation` / `Stop` 实时记录最新活跃会话及其所属工作区，右侧边栏、左侧边栏与独立悬浮窗均自动切换，连同 Git 分支、Rules 清单与记忆库一并对齐目标项目。
+- **当前运行汇总与子代理不丢失**：下拉列表保留近 2 小时活跃的子代理（带 `子1` 徽章与运行绿点），切回主会话后仍可随时再选；新增顶部 **「汇总 · 当前运行中的全部对话 (主+子)」** 视图，实时聚合所有并行运行的会话调用流。
 - **跨视图同步与按需锁定**：在任一监控面板切换历史对话，其他已打开的监控视图同步联动；点击下拉框旁的「跟随 / 锁定」图标即可在“自动跟随”与“钉住当前对话”间一键切换。
 
 ### 4. Git 感知跨会话记忆库与双视图交接胶囊（Context Vault）
@@ -42,9 +43,9 @@
 - 所有记忆写入前自动脱敏（过滤 Bearer Token、API Key、JWT、PEM 私钥等），`SessionStart` 在 `< 500 tokens` 硬预算内注入极简项目索引并提示 `HEAD` 前进标脏。
 - **固定高度双视图交接胶囊**：默认展示人眼易读卡片（逐条勾选决策实时计算 Token 预算），一键切换 Agent 紧凑载荷原文（`[CTX-CAPSULE] ...`），在 Aux Pane 中支持通过 `updateModelContext` 一键附着到下一条消息。
 
-### 5. 原生挂载形态、独立悬浮弹窗与专属设置
-- **左侧边栏一键独立悬浮窗**（`global`: `Context Monitor`）：默认自动弹出基于 `127.0.0.1` 一次性令牌的无框独立窗体，原生支持自由拖动、任意边缘缩放、记住窗口位置与尺寸、防重复多开，且**关闭浮窗后自动释放本地端口**；也可在设置中关闭自动弹出或点击「在当前页内嵌查看」。
-- **右侧边栏可调宽入口**（`aux_pane`: `Context & Telemetry`）：内置顶部快捷浮窗按钮，随时与聊天界面并行监控。
+### 5. 原生无框悬浮窗、响应式边界固定与专属设置（v1.2.0 升级）
+- **Windows 原生无框 WebView2 悬浮窗**（`global`: `Context Monitor`）：基于 `127.0.0.1` 一次性令牌自动拉起无浏览器标题栏的原生圆角悬浮窗（非 Windows 或异常时自动降级至 Edge/Chrome `--app`），支持 Always-on-Top 一键置顶固定、**快捷收缩为迷你悬浮条**、**独立最小化与一键唤醒还原**、8 方向缩放与高 DPI 精准记忆，关闭即释放本地端口。
+- **严格前端视口边界固定**：右侧边栏（`<= 600px`）自动将 7 列明细切换为 `100%` 宽度的紧凑双行卡片（零横向滚动与裁切），所有自定义下拉菜单内置动态视口边界钳制，任意缩放与宽度下均不溢出。
 - 定时检测周期可调（`3s` / `5s` / `10s` / `30s` / `60s` / `手动暂停`），全部面板刷新走私有工具，**0 模型 Token 消耗**。
 
 ---
@@ -76,16 +77,16 @@
 
 ### 方式一：下载 Release 免构建插件包（推荐，零 `npm install`）
 
-1. 前往 [Releases](https://github.com/Horikita-9-Suzune-Max-Ultrafast/context-cache/releases) 下载 `context-cache-v1.1.0-plugin.zip`（内部为全明文可读 `.mjs` 源码 + 预编译单文件 UI，零 `node_modules`）。
+1. 前往 [Releases](https://github.com/Horikita-9-Suzune-Max-Ultrafast/context-cache/releases) 下载 `context-cache-v1.2.0-plugin.zip`（内部为全明文可读 `.mjs` 源码 + 预编译单文件 UI，零 `node_modules`）。
 2. 解压至 Antigravity 插件目录，使目录结构为 `~/.gemini/config/plugins/context-cache/plugin.json`：
    - **Windows PowerShell**：
      ```powershell
-     Expand-Archive -Path .\context-cache-v1.1.0-plugin.zip -DestinationPath "$env:USERPROFILE\.gemini\config\plugins" -Force
+     Expand-Archive -Path .\context-cache-v1.2.0-plugin.zip -DestinationPath "$env:USERPROFILE\.gemini\config\plugins" -Force
      ```
    - **macOS / Linux**：
      ```bash
      mkdir -p ~/.gemini/config/plugins
-     unzip -o context-cache-v1.1.0-plugin.zip -d ~/.gemini/config/plugins
+     unzip -o context-cache-v1.2.0-plugin.zip -d ~/.gemini/config/plugins
      ```
 3. Antigravity 会自动发现并加载插件（无需重启）。
 
@@ -99,7 +100,7 @@ cd context-cache
 # 2. 安装开发期 UI 打包依赖（仅 devDependencies，不会进入部署产物）
 npm install
 
-# 3. 运行全套 7 个自动化测试文件（完全隔离临时目录，零真实数据污染）
+# 3. 运行全套 8 个自动化测试文件（11 项用例，完全隔离临时目录，零真实数据污染）
 npm test
 
 # 4. 构建单文件 MCP App UI 并幂等部署至 ~/.gemini/config/plugins/context-cache
@@ -162,8 +163,10 @@ context-cache/
 │   │   ├── context-inspector.mjs        # 上下文构成拆解、MCP 扫描与膨胀归因
 │   │   ├── transcript-parser.mjs        # 多版本增量游标解析与子 Agent 自动发现
 │   │   ├── telemetry.mjs                # 多 Agent 调用明细、TPS、缓存击穿与 4 类预警
+│   │   ├── session-tracker.mjs          # 活跃对话自动跟随、跨视图联动与工作区对齐
 │   │   ├── quota.mjs                    # 5h/7d 滑动窗口、基线校准与 QuotaProvider 扩展口
-│   │   ├── popout-server.mjs            # 可选 127.0.0.1 令牌鉴权悬浮小窗服务（默认关闭）
+│   │   ├── popout-server.mjs            # 127.0.0.1 令牌鉴权悬浮小窗服务、握手与自动降级
+│   │   ├── win-floating-host.ps1        # Windows 原生无框 WebView2 置顶/收缩/最小化悬浮窗宿主
 │   │   └── doctor.mjs                   # 体检、漂移报告、备份导出与自愈
 │   ├── adapters/antigravity/            # 极薄 Fail-Open Hook 适配层
 │   │   ├── normalize.mjs                # 多版本字段归一化与脱敏漂移录制
@@ -173,7 +176,7 @@ context-cache/
 │   └── ui/                              # 单文件自包含 MCP App 前端与 esbuild 打包脚本
 ├── plugin/                              # Antigravity 插件清单、Hooks、Rules、Skills 与图标
 ├── scripts/                             # deploy.mjs、pack-release.mjs 与 doctor.mjs
-├── tests/                               # 7 个端到端 / 单元 / 韧性测试文件
+├── tests/                               # 8 个端到端 / 单元 / 韧性测试文件（11 项用例）
 ├── LICENSE                              # MIT License
 ├── README.md                            # 简体中文文档
 ├── README.en.md                         # English documentation

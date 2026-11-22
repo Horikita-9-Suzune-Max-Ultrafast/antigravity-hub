@@ -28,13 +28,14 @@
 - **Bloat Attribution**: Identifies the top 3 context consumers and surfaces zero-token optimization hints when usage exceeds the warning threshold (default `75%`) or any MCP server exceeds `15K` tokens.
 
 ### 2. Multi-Agent Live Calls & TPS Telemetry
-- Automatically discovers sub-agents launched via `invoke_subagent` (`主`, `子1`, `子2`…) and merges their transcripts for step-level inspection, agent/model summaries, and multi-dimensional filtering.
-- **Dual-Source Timing**: Prefers exact `hook_ms` measured between `PreInvocation` and `PostInvocation`, falling back cleanly to `hybrid_tool_split` / `transcript_fallback`.
-- **Prefix-Cache Drop Attribution**: Classifies drops into `model_changed`, `idle_ttl_expired`, `context_compacted_or_reset`, and `prefix_mutated_unknown` with an inline expandable step anatomy drawer.
+- Automatically discovers sub-agents launched via `invoke_subagent` (`主`, `子1`, `子2`…) and merges their transcripts for step-level inspection, agent/model summaries, multi-dimensional filtering, and a prominent hero summary bar (steps, token-weighted TPS, cost, and active model).
+- **1-to-1 Dual-Source Timing & Weighted TPS**: Matches `PreInvocation` → `PostInvocation` `hook_ms` strictly 1-to-1 by `startMs` (preventing same-second collisions), falling back cleanly to `hybrid_tool_split` / `transcript_fallback`; computes token-weighted average throughput (`totalOutputTokens / totalDurationSec`).
+- **Prefix-Cache Drop Attribution & Step Anatomy**: Classifies drops into `model_changed`, `idle_ttl_expired`, `context_compacted_or_reset`, and `prefix_mutated_unknown` with an inline expandable drawer showing the **source session/sub-agent**, **full model name**, cache-hit ratio bar, and drop attribution.
 - **Zero-Token Alerts & Single-Line Status Banner**: Locally detects 4 alert classes (high context, cache drop, sub-agent burst, 3-step low TPS `< 15 tok/s`) and optionally renders a user-only single-line status banner in chat via `metadata.user_markdown` (`systemMessage: ""`).
 
-### 3. Multi-Conversation Auto-Follow & Cross-View Sync (New in v1.1.0)
+### 3. Multi-Conversation Auto-Follow, Sub-Agent Retention & Active Aggregation (Upgraded in v1.2.0)
 - **Live Auto-Follow**: Hooks record the latest active conversation and workspace on `SessionStart`, `PreInvocation`, `PostInvocation`, and `Stop`, keeping the right side pane, left sidebar, and floating window aligned with the active conversation's context, Git branch, rules, and vault.
+- **Active Aggregation & Persistent Sub-Agents**: Recent active sub-agents remain selectable in the session dropdown (with live dot and `子N` badges) even after switching back to the main thread; includes a dedicated **"All Running Conversations (Main + Sub)"** aggregate view.
 - **Cross-View Sync & Pin Toggle**: Picking a conversation in any open monitor syncs all other views; click the follow/pin button next to the selector anytime to pin a specific conversation locally.
 
 ### 4. Git-Aware Cross-Session Vault & Dual-View Handoff Capsule
@@ -42,9 +43,9 @@
 - Auto-redacts secrets (Bearer tokens, API keys, JWTs, PEM private keys) before writing to disk; injects a `< 500 tokens` brief at `SessionStart` with `HEAD` staleness indicators.
 - **Fixed-Height Dual-View Handoff Capsule**: Toggle between human-readable cards (with live per-decision checkboxes updating the token budget) and the compact `[CTX-CAPSULE]` agent payload, with optional `updateModelContext` attachment in Aux Pane.
 
-### 5. Native Surfaces, Floating Popout Window & Settings
-- **Left Sidebar Auto-Floating Monitor** (`global`: `Context Monitor`): Automatically launches a movable, resizable frameless OS window over a localhost `127.0.0.1` ephemeral port with one-time token auth, remembers window size/position, avoids duplicate windows, and **auto-releases the port when closed**. Includes a one-click fallback to view embedded in-page or toggle off in Settings.
-- **Right Side Pane** (`aux_pane`: `Context & Telemetry`) with a quick popout button in the header.
+### 5. Native Frameless Floating Host, Viewport Containment & Settings (Upgraded in v1.2.0)
+- **Native Windows Frameless WebView2 Floating Window** (`global`: `Context Monitor`): Launches a native rounded borderless OS window over a `127.0.0.1` ephemeral port with one-time token auth (automatically falling back to Edge/Chrome `--app` on other platforms or init errors). Supports Always-on-Top pinning, **quick-collapse mini bar**, **independent minimize & instant foreground restore**, high-DPI scaling, 8-edge resize, and **auto-port release on close**.
+- **Strict Viewport Containment**: Automatically switches the 7-column calls table to a 100%-width 2-row compact card list in narrow side panes (`<= 600px`) with zero horizontal overflow, plus dynamic viewport clamping for all popover dropdowns.
 - Configurable auto-refresh interval (`3s` / `5s` / `10s` / `30s` / `60s` / `manual`), running exclusively over app-only tools at **0 LLM token cost**.
 
 ---
@@ -76,16 +77,16 @@
 
 ### Option A: Prebuilt Release Bundle (Recommended, No `npm install`)
 
-1. Download `context-cache-v1.1.0-plugin.zip` from [Releases](https://github.com/Horikita-9-Suzune-Max-Ultrafast/context-cache/releases) (plain readable `.mjs` source + pre-bundled single-file UI, zero `node_modules`).
+1. Download `context-cache-v1.2.0-plugin.zip` from [Releases](https://github.com/Horikita-9-Suzune-Max-Ultrafast/context-cache/releases) (plain readable `.mjs` source + pre-bundled single-file UI, zero `node_modules`).
 2. Extract into `~/.gemini/config/plugins/` so `plugin.json` lives at `~/.gemini/config/plugins/context-cache/plugin.json`:
    - **Windows PowerShell**:
      ```powershell
-     Expand-Archive -Path .\context-cache-v1.1.0-plugin.zip -DestinationPath "$env:USERPROFILE\.gemini\config\plugins" -Force
+     Expand-Archive -Path .\context-cache-v1.2.0-plugin.zip -DestinationPath "$env:USERPROFILE\.gemini\config\plugins" -Force
      ```
    - **macOS / Linux**:
      ```bash
      mkdir -p ~/.gemini/config/plugins
-     unzip -o context-cache-v1.1.0-plugin.zip -d ~/.gemini/config/plugins
+     unzip -o context-cache-v1.2.0-plugin.zip -d ~/.gemini/config/plugins
      ```
 3. Antigravity discovers and loads the plugin automatically (no restart required).
 
@@ -99,7 +100,7 @@ cd context-cache
 # 2. Install dev-only UI build tools (never copied into deployed bundle)
 npm install
 
-# 3. Run full 7-file automated test suite (isolated temp dirs)
+# 3. Run full 8-file automated test suite (11 test cases, isolated temp dirs)
 npm test
 
 # 4. Build single-file MCP App UI and deploy to ~/.gemini/config/plugins/context-cache
