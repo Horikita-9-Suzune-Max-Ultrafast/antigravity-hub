@@ -580,6 +580,112 @@ async function handleSelectPick(id, val) {
 }
 
 // ==================== Rendering ====================
+function fitNativeTitleBar() {
+  const titleBar = document.getElementById('nativeTitleBar');
+  const dragZone = document.getElementById('titleBarDragZone');
+  if (!titleBar || !dragZone || titleBar.classList.contains('hidden')) return;
+
+  const nameEl = dragZone.querySelector('.native-titlebar-name');
+  const tpsEl = document.getElementById('titleBarTpsBadge');
+  const modelEl = document.getElementById('titleBarModelBadge');
+  const hasModel = Boolean(modelEl && modelEl.dataset.fullModel && !modelEl.classList.contains('hidden'));
+  const hasTps = Boolean(tpsEl && !tpsEl.classList.contains('hidden'));
+  const collapsed = state.windowCollapsed;
+
+  nameEl?.classList.remove('titlebar-fit-hidden');
+  tpsEl?.classList.remove('titlebar-fit-hidden');
+  modelEl?.classList.remove('titlebar-fit-hidden');
+  if (hasModel) modelEl.textContent = modelEl.dataset.fullModel;
+
+  const overflows = () => dragZone.scrollWidth > dragZone.clientWidth + 1;
+  if (!overflows()) return;
+
+  if (collapsed) {
+    // 1. Hide brand text first (keep icon) so live metrics take priority
+    nameEl?.classList.add('titlebar-fit-hidden');
+    if (!overflows()) return;
+
+    // 2. Switch model badge to concise short name (e.g. 4-neon-M)
+    if (hasModel && modelEl.dataset.shortModel) {
+      modelEl.textContent = modelEl.dataset.shortModel;
+      if (!overflows()) return;
+    }
+
+    // 3. Hide model badge cleanly rather than clipping to a fragment
+    if (hasModel) {
+      modelEl.classList.add('titlebar-fit-hidden');
+      if (!overflows()) return;
+    }
+
+    // 4. Finally hide TPS on extremely narrow widths
+    if (hasTps) {
+      tpsEl.classList.add('titlebar-fit-hidden');
+    }
+    return;
+  }
+
+  // Expanded mode: keep brand visible; degrade model/TPS cleanly without clipping
+  if (hasModel && modelEl.dataset.shortModel) {
+    modelEl.textContent = modelEl.dataset.shortModel;
+    if (!overflows()) return;
+  }
+  if (hasModel) {
+    modelEl.classList.add('titlebar-fit-hidden');
+    if (!overflows()) return;
+  }
+  if (hasTps) {
+    tpsEl.classList.add('titlebar-fit-hidden');
+  }
+}
+
+function updateNativeTitleBarTelemetry(ctx, pct, cache, tps) {
+  const isAggregate =
+    state.pinnedConversationId === '__active_all__' ||
+    state.activeConversationId === '__active_all__' ||
+    ctx?.conversationId === '__active_all__';
+  const followTag = isAggregate ? '运行汇总' : state.followMode === 'auto' ? '自动跟随' : '已锁定';
+
+  const miniEl = document.getElementById('titleBarMiniSummary');
+  if (miniEl) {
+    miniEl.textContent = `${pct.toFixed(1)}% · ${cache.toFixed(0)}% Cache`;
+    miniEl.title = `上下文占用 ${pct.toFixed(1)}% · 最新缓存命中 ${cache.toFixed(1)}%（${followTag}）`;
+  }
+
+  const modelEl = document.getElementById('titleBarModelBadge');
+  if (modelEl) {
+    const activeModel = String(ctx?.latestModel || ((Number(ctx?.totalCallsCount) || 0) > 0 ? ctx?.model : '') || '').trim();
+    if (activeModel) {
+      modelEl.dataset.fullModel = activeModel;
+      modelEl.dataset.shortModel = formatShortModel(activeModel);
+      modelEl.textContent = activeModel;
+      modelEl.title = `当前对话模型：${activeModel}（${followTag}）`;
+      modelEl.classList.remove('hidden');
+    } else {
+      modelEl.dataset.fullModel = '';
+      modelEl.dataset.shortModel = '';
+      modelEl.textContent = '';
+      modelEl.classList.add('hidden');
+    }
+  }
+
+  const tpsEl = document.getElementById('titleBarTpsBadge');
+  if (tpsEl) {
+    const hasCalls = (Number(ctx?.totalCallsCount) || 0) > 0;
+    if (hasCalls || tps > 0) {
+      tpsEl.textContent = `${tps.toFixed(1)} tok/s`;
+      tpsEl.dataset.tone = tps < 15 ? 'warn' : 'ok';
+      tpsEl.title = `当前对话有效输出速度：${tps.toFixed(1)} tok/s（${followTag}）`;
+    } else {
+      tpsEl.textContent = '-- tok/s';
+      tpsEl.dataset.tone = 'muted';
+      tpsEl.title = `等待当前对话输出数据（${followTag}）`;
+    }
+    tpsEl.classList.remove('hidden');
+  }
+
+  requestAnimationFrame(fitNativeTitleBar);
+}
+
 function renderContext(animated = false) {
   const ctx = state.contextData;
   if (!ctx) return;
@@ -663,10 +769,7 @@ function renderContext(animated = false) {
   prevDisplay.free = free;
   prevDisplay.cost = cost;
 
-  const miniEl = document.getElementById('titleBarMiniSummary');
-  if (miniEl) {
-    miniEl.textContent = `${pct.toFixed(1)}% · ${cache.toFixed(0)}% Cache`;
-  }
+  updateNativeTitleBarTelemetry(ctx, pct, cache, tps);
 
   document.getElementById('ctxAttribution').textContent = ctx.attribution || '';
 
@@ -1301,10 +1404,17 @@ function setupNativeFramelessChrome() {
         ? `<path d="M4.2 6.2L8 10l3.8-3.8"/>`
         : `<path d="M4.2 9.8L8 6l3.8 3.8"/>`;
     }
+    requestAnimationFrame(fitNativeTitleBar);
   };
 
   const titleBar = document.getElementById('nativeTitleBar');
   if (titleBar) {
+    if (typeof ResizeObserver === 'function') {
+      const ro = new ResizeObserver(() => fitNativeTitleBar());
+      ro.observe(titleBar);
+    } else {
+      window.addEventListener('resize', fitNativeTitleBar);
+    }
     titleBar.addEventListener('mousedown', (e) => {
       if (e.button !== 0 || e.detail >= 2) return;
       if (e.target.closest('button')) return;

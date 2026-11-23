@@ -576,6 +576,7 @@ export function inspectContext(params = {}, options = {}) {
       dirty: git.dirty,
     },
     model,
+    latestModel: telemetry.summary.latestModel || latestPlanner?.model || matchedSession?.lastModel || '',
     usedTokens: effectiveUsed,
     limitTokens,
     freeTokens,

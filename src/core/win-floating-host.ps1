@@ -326,9 +326,8 @@ namespace ContextCacheHost {
                 return;
             }
 
-            if (_interactMode >= 10 && _interactMode <= 17 && !_collapsed) {
+            if (_interactMode >= 10 && _interactMode <= 17) {
                 int minW = MinimumSize.Width;
-                int minH = (int)Math.Round(420 * _dpiScale);
                 int left = _startBounds.Left;
                 int top = _startBounds.Top;
                 int right = _startBounds.Right;
@@ -342,6 +341,18 @@ namespace ContextCacheHost {
                 if (_interactMode == 11 || _interactMode == 14 || _interactMode == 17) {
                     right = Math.Max(left + minW, right + dx);
                 }
+
+                if (_collapsed) {
+                    // Collapsed mini-bar: allow horizontal resize only, keep bar height & _expandedHeight intact
+                    if (_interactMode == 12 || _interactMode == 15) return;
+                    int nw = Math.Max(minW, right - left);
+                    int nh = _startBounds.Height;
+                    SetWindowPos(Handle, IntPtr.Zero, left, top, nw, nh, 0x0004 | 0x0010); // SWP_NOZORDER | SWP_NOACTIVATE
+                    SyncBounds();
+                    return;
+                }
+
+                int minH = (int)Math.Round(420 * _dpiScale);
                 // Top edge (12=N, 13=NW, 14=NE)
                 if (_interactMode == 12 || _interactMode == 13 || _interactMode == 14) {
                     top = Math.Min(bottom - minH, top + dy);
@@ -351,10 +362,10 @@ namespace ContextCacheHost {
                     bottom = Math.Max(top + minH, bottom + dy);
                 }
 
-                int nw = Math.Max(minW, right - left);
-                int nh = Math.Max(minH, bottom - top);
-                _expandedHeight = nh;
-                SetWindowPos(Handle, IntPtr.Zero, left, top, nw, nh, 0x0004 | 0x0010); // SWP_NOZORDER | SWP_NOACTIVATE
+                int fullW = Math.Max(minW, right - left);
+                int fullH = Math.Max(minH, bottom - top);
+                _expandedHeight = fullH;
+                SetWindowPos(Handle, IntPtr.Zero, left, top, fullW, fullH, 0x0004 | 0x0010); // SWP_NOZORDER | SWP_NOACTIVATE
                 SyncBounds();
             }
         }
