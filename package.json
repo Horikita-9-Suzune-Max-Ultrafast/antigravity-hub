@@ -1,6 +1,6 @@
 {
   "name": "context-cache",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "description": "Host-agnostic context cache, multi-agent telemetry, floating monitor, and native Antigravity MCP App plugin",
   "license": "MIT",
   "type": "module",

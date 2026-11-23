@@ -87,6 +87,7 @@ export function normalizeTranscriptStep(raw) {
     : Array.isArray(raw.toolCalls)
       ? raw.toolCalls
       : [];
+  const mediaList = Array.isArray(raw.media) ? raw.media : [];
 
   return {
     stepIndex,
@@ -104,6 +105,7 @@ export function normalizeTranscriptStep(raw) {
     thinking,
     content,
     toolCalls,
+    mediaCount: mediaList.length,
   };
 }
 

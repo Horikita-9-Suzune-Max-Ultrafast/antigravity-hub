@@ -9,6 +9,13 @@ import {
   triggerApplyPatch,
   triggerRestorePatch,
 } from '../src/core/i18n/index.mjs';
+import {
+  getGovernanceOverview,
+  listSnapshots,
+  rollbackSnapshot,
+  runGovernanceLint,
+  scanEcosystem,
+} from '../src/core/governance/index.mjs';
 
 function parseArgs(argv) {
   const pos = [];
@@ -39,6 +46,8 @@ async function main() {
   const { cmd, rest, flags } = parseArgs(process.argv.slice(2));
   const opts = {};
   if (flags['data-dir']) opts.dataDir = flags['data-dir'];
+  if (flags['config-dir']) opts.configDir = flags['config-dir'];
+  if (flags['app-data-dir']) opts.appDataDir = flags['app-data-dir'];
   if (flags['plugin-dir']) opts.pluginDir = flags['plugin-dir'];
   if (flags['project']) opts.projectDir = flags['project'];
   const asJson = Boolean(flags.json);
@@ -155,6 +164,48 @@ async function main() {
         break;
       }
       console.error('Usage: ctx i18n <status|refresh|apply|restore> [--json]');
+      process.exit(1);
+    }
+    case 'gov': {
+      const sub = rest[0] || 'status';
+      if (sub === 'status') {
+        const ov = getGovernanceOverview({ projectDir: opts.projectDir }, opts);
+        const s = ov.ecosystem.summary;
+        const lines = [
+          `Ecosystem Health Score: ${ov.lint.score}/100 (errors=${ov.lint.counts.errors}, warnings=${ov.lint.counts.warnings}, secrets=${ov.lint.counts.secretHits})`,
+          `Plugins: ${s.pluginsEnabled}/${s.pluginsTotal} | MCP: ${s.mcpEnabled}/${s.mcpTotal} | Skills: ${s.skillsActive}/${s.skillsTotal} | Rules: ${s.rulesActive}/${s.rulesTotal} | Hooks: ${s.hooksActive}/${s.hooksTotal}`,
+          `Estimated Harness Baseline: ~${s.estimatedBaselineTokens} tokens`,
+          `Snapshots: ${ov.snapshots.length} | Profiles: ${ov.profiles.length}`,
+        ];
+        print(ov, lines.join('\n'));
+        break;
+      }
+      if (sub === 'lint') {
+        const eco = scanEcosystem({ projectDir: opts.projectDir }, opts);
+        const lint = runGovernanceLint(eco, opts);
+        const lines = [
+          `Lint Score: ${lint.score}/100 (errors=${lint.counts.errors}, warnings=${lint.counts.warnings}, infos=${lint.counts.infos}, scanned=${lint.counts.scannedFiles})`,
+          ...lint.findings.map((f) => `  [${f.severity.toUpperCase()}] (${f.category}) ${f.message}`),
+        ];
+        print(lint, lines.join('\n'));
+        if (lint.counts.errors > 0) process.exitCode = 1;
+        break;
+      }
+      if (sub === 'snapshots') {
+        const snaps = listSnapshots(opts);
+        const lines = snaps.length
+          ? snaps.map((s) => `- ${s.id}${s.baseline ? ' [BASELINE]' : ''} | ${s.createdAt} | ${s.reason} (${s.files.length} files)`)
+          : ['No host config snapshots yet.'];
+        print(snaps, lines.join('\n'));
+        break;
+      }
+      if (sub === 'rollback') {
+        const snapId = rest[1] || flags.id || undefined;
+        const res = rollbackSnapshot(snapId, opts);
+        print(res, res.message);
+        break;
+      }
+      console.error('Usage: ctx gov <status|lint|snapshots|rollback [snapshotId]> [--json]');
       process.exit(1);
     }
     default: {

@@ -4,6 +4,7 @@ import {
   applyHostStyleVariables,
 } from '@modelcontextprotocol/ext-apps';
 import { createI18nModule } from './modules/i18n-module.mjs';
+import { createGovernanceModule } from './modules/governance-module.mjs';
 
 // Code-level feature flags (all quota UI/backend code is preserved intact when hidden)
 const FEATURE_FLAGS = {
@@ -103,6 +104,7 @@ const popoutClientId = popoutToken
   : null;
 let mcpApp = null;
 let i18nModule = null;
+let governanceModule = null;
 
 function postHostWindowMsg(cmd) {
   try {
@@ -783,6 +785,7 @@ function renderContext(animated = false) {
 
   prevDisplay.pct = pct;
   prevDisplay.used = used;
+  renderContextModelSim();
   prevDisplay.cache = cache;
   prevDisplay.tps = tps;
   prevDisplay.free = free;
@@ -1764,6 +1767,27 @@ function handleI18nStatusChange(statusData) {
   renderI18nUpdateBanner();
 }
 
+function renderContextModelSim() {
+  const sel = document.getElementById('ctxModelSimSelect');
+  const out = document.getElementById('ctxModelSimResult');
+  if (!sel || !out) return;
+  const targetLimit = Number(sel.value) || 0;
+  const used = Number(state.contextData?.usedTokens) || 0;
+  if (!targetLimit) {
+    out.textContent = '选择目标窗口实时预览占比';
+    out.style.color = 'var(--muted-foreground)';
+    return;
+  }
+  const simPct = (used / targetLimit) * 100;
+  const simFree = Math.max(0, targetLimit - used);
+  const warnPct = state.config.alerts?.contextWarningPct ?? 75;
+  out.textContent =
+    simPct >= 100
+      ? `超出上限（${simPct.toFixed(1)}%，超额 ${fmtK(used - targetLimit)}，需先压缩）`
+      : `模拟占比 ${simPct.toFixed(1)}% · 剩余 ${fmtK(simFree)}`;
+  out.style.color = simPct >= 95 ? 'var(--error)' : simPct >= warnPct ? 'var(--warning)' : 'var(--success)';
+}
+
 function syncConsoleNavState() {
   document.querySelectorAll('.console-rail-btn[data-module], .console-top-btn[data-module]').forEach((btn) => {
     btn.dataset.active = String(!state.inSettings && btn.dataset.module === state.activeModule);
@@ -1771,7 +1795,7 @@ function syncConsoleNavState() {
   const railSettings = document.getElementById('railSettingsBtn');
   if (railSettings) railSettings.dataset.active = String(Boolean(state.inSettings));
 
-  ['settingsBtn', 'i18nSettingsBtn'].forEach((id) => {
+  ['settingsBtn', 'govSettingsBtn', 'i18nSettingsBtn'].forEach((id) => {
     const btn = document.getElementById(id);
     if (!btn) return;
     btn.style.borderColor = state.inSettings ? 'var(--primary)' : 'var(--border)';
@@ -1780,11 +1804,12 @@ function syncConsoleNavState() {
 }
 
 function switchModule(mod, subTab = null) {
-  const safeMod = mod === 'i18n' ? 'i18n' : 'monitor';
+  const safeMod = mod === 'i18n' ? 'i18n' : mod === 'governance' ? 'governance' : 'monitor';
   state.activeModule = safeMod;
   state.inSettings = false;
 
   document.getElementById('module-monitor')?.classList.toggle('hidden', safeMod !== 'monitor');
+  document.getElementById('module-governance')?.classList.toggle('hidden', safeMod !== 'governance');
   document.getElementById('module-i18n')?.classList.toggle('hidden', safeMod !== 'i18n');
   document.getElementById('module-settings')?.classList.add('hidden');
   syncConsoleNavState();
@@ -1794,6 +1819,9 @@ function switchModule(mod, subTab = null) {
       positionIndicator('mainSegNav', 'mainSegIndicator');
       positionIndicator('callsModeNav', 'callsModeIndicator');
     });
+  } else if (safeMod === 'governance') {
+    void governanceModule?.activate(subTab);
+    requestAnimationFrame(() => governanceModule?.positionSubNav());
   } else {
     void i18nModule?.activate(subTab);
     requestAnimationFrame(() => i18nModule?.positionSubNav());
@@ -1823,6 +1851,7 @@ function toggleSettingsView() {
   }
   state.inSettings = true;
   document.getElementById('module-monitor')?.classList.add('hidden');
+  document.getElementById('module-governance')?.classList.add('hidden');
   document.getElementById('module-i18n')?.classList.add('hidden');
   document.getElementById('module-settings')?.classList.remove('hidden');
   document.getElementById('panel-settings')?.classList.remove('hidden');
@@ -1834,12 +1863,15 @@ function exitSettingsView() {
   state.inSettings = false;
   document.getElementById('module-settings')?.classList.add('hidden');
   document.getElementById('module-monitor')?.classList.toggle('hidden', state.activeModule !== 'monitor');
+  document.getElementById('module-governance')?.classList.toggle('hidden', state.activeModule !== 'governance');
   document.getElementById('module-i18n')?.classList.toggle('hidden', state.activeModule !== 'i18n');
   syncConsoleNavState();
   requestAnimationFrame(() => {
     if (state.activeModule === 'monitor') {
       positionIndicator('mainSegNav', 'mainSegIndicator');
       positionIndicator('callsModeNav', 'callsModeIndicator');
+    } else if (state.activeModule === 'governance') {
+      governanceModule?.positionSubNav();
     } else {
       i18nModule?.positionSubNav();
     }
@@ -2034,7 +2066,7 @@ function bindEvents() {
     }
     if (popoutLaunchBusy) return state.popoutStatus;
     popoutLaunchBusy = true;
-    const triggerBtns = ['quickPopoutBtn', 'launcherOpenPopoutBtn', 'launchPopoutBtn']
+    const triggerBtns = ['quickPopoutBtn', 'topBarPopoutBtn', 'launcherOpenPopoutBtn', 'launchPopoutBtn']
       .map((id) => document.getElementById(id))
       .filter(Boolean);
     triggerBtns.forEach((b) => { b.disabled = true; });
@@ -2068,6 +2100,12 @@ function bindEvents() {
 
   document.getElementById('quickPopoutBtn')?.addEventListener('click', () => {
     void handleOpenPopout(false);
+  });
+  document.getElementById('topBarPopoutBtn')?.addEventListener('click', () => {
+    void handleOpenPopout(false);
+  });
+  document.getElementById('ctxModelSimSelect')?.addEventListener('change', () => {
+    renderContextModelSim();
   });
 
   document.getElementById('launcherOpenPopoutBtn')?.addEventListener('click', () => {
@@ -2363,12 +2401,22 @@ async function init() {
     onOpenSettings: toggleSettingsView,
   });
   i18nModule.init();
+  governanceModule = createGovernanceModule({
+    callAppTool,
+    esc,
+    showToast,
+    positionIndicator,
+    onOpenSettings: toggleSettingsView,
+    getProjectDir: () => state.activeProjectDir || state.contextData?.projectDir || undefined,
+  });
+  governanceModule.init();
   bindEvents();
   syncConsoleNavState();
   renderSelects();
   requestAnimationFrame(() => {
     positionIndicator('mainSegNav', 'mainSegIndicator');
     positionIndicator('callsModeNav', 'callsModeIndicator');
+    governanceModule?.positionSubNav();
     i18nModule?.positionSubNav();
   });
 
@@ -2376,13 +2424,14 @@ async function init() {
     positionIndicator('mainSegNav', 'mainSegIndicator');
     positionIndicator('callsModeNav', 'callsModeIndicator');
     positionIndicator('capsuleModeNav', 'capsuleModeIndicator');
+    governanceModule?.positionSubNav();
     i18nModule?.positionSubNav();
     if (state.openSelectId) clampOpenSelectMenus();
   });
   ro.observe(document.getElementById('consoleWorkspace') || document.getElementById('appShell'));
 
   if (!popoutToken) {
-    mcpApp = new App({ name: 'Antigravity Hub', version: '1.3.0' }, {});
+    mcpApp = new App({ name: 'Antigravity Hub', version: '1.4.0' }, {});
 
     // Register handlers BEFORE connect() per Antigravity mcp-app-development guidelines
     mcpApp.ontoolinput = ({ arguments: args }) => {
@@ -2392,6 +2441,8 @@ async function init() {
       }
       if (args?.module === 'i18n') {
         switchModule('i18n', args?.i18nTab || null);
+      } else if (args?.module === 'governance') {
+        switchModule('governance', args?.govTab || null);
       } else if (args?.tab && ['context', 'calls', 'quota', 'vault'].includes(args.tab)) {
         switchTab(args.tab);
       } else if (args?.tab === 'settings') {
@@ -2420,6 +2471,8 @@ async function init() {
       }
       if (sc.initialModule === 'i18n') {
         switchModule('i18n', sc.initialI18nTab || null);
+      } else if (sc.initialModule === 'governance') {
+        switchModule('governance', sc.initialGovTab || null);
       } else if (sc.initialTab && ['context', 'calls', 'quota', 'vault'].includes(sc.initialTab)) {
         switchTab(sc.initialTab);
       } else if (sc.initialTab === 'settings') {
@@ -2469,6 +2522,7 @@ async function init() {
       postHostWindowMsg(`theme:${initialThemeParam}`);
     }
     document.getElementById('quickPopoutBtn')?.classList.add('hidden');
+    document.getElementById('topBarPopoutBtn')?.classList.add('hidden');
     setupNativeFramelessChrome();
     startPopoutClientLifecycle();
   }
@@ -2499,10 +2553,12 @@ async function init() {
 
   await refreshAll(false, false);
   void i18nModule?.loadStatus(false);
+  void governanceModule?.loadOverview(false);
   restartPollTimer();
   requestAnimationFrame(() => {
     positionIndicator('mainSegNav', 'mainSegIndicator');
     positionIndicator('callsModeNav', 'callsModeIndicator');
+    governanceModule?.positionSubNav();
     i18nModule?.positionSubNav();
   });
 }

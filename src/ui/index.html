@@ -124,6 +124,15 @@
           <span class="console-rail-lbl">监控</span>
         </button>
 
+        <button type="button" class="console-rail-btn" data-module="governance" data-active="false" title="生态治理与 Harness 体检">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 3l8 4v5c0 5-3.5 8.5-8 9-4.5-.5-8-4-8-9V7l8-4z"/>
+            <path d="M9 12l2 2 4-4"/>
+          </svg>
+          <span class="console-rail-lbl">治理</span>
+          <span id="railGovAlertDot" class="console-rail-dot hidden" title="生态体检发现需要处理的告警"></span>
+        </button>
+
         <button type="button" class="console-rail-btn" data-module="i18n" data-active="false" title="界面汉化">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round">
             <path d="M5 8l6 6"/>
@@ -158,16 +167,32 @@
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="shrink-0">
               <path d="M3 12h4l3-7 4 14 3-7h4"/>
             </svg>
-            <span class="truncate">上下文监控</span>
+            <span class="truncate">监控</span>
+          </button>
+          <button type="button" class="console-top-btn" data-module="governance" data-active="false">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="shrink-0">
+              <path d="M12 3l8 4v5c0 5-3.5 8.5-8 9-4.5-.5-8-4-8-9V7l8-4z"/>
+              <path d="M9 12l2 2 4-4"/>
+            </svg>
+            <span class="truncate">生态治理</span>
+            <span id="topBarGovDot" class="dot-sm hidden" style="width:6px;height:6px;background:var(--danger);"></span>
           </button>
           <button type="button" class="console-top-btn" data-module="i18n" data-active="false">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="shrink-0">
               <path d="M5 8l6 6M4 14l6-6 2-3M2 5h12M7 2h1M22 22l-5-10-5 10M14 18h6"/>
             </svg>
-            <span class="truncate">界面汉化</span>
+            <span class="truncate">汉化</span>
             <span id="topBarI18nDot" class="dot-sm hidden" style="width:6px;height:6px;background:var(--warning);"></span>
           </button>
         </div>
+        <button id="topBarPopoutBtn" type="button" class="agy-btn agy-btn-secondary agy-btn-sm topbar-popout-btn shrink-0" title="呼出或唤醒独立无框悬浮窗">
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M9.5 2.5h4v4"/>
+            <path d="M13.5 2.5L7.5 8.5"/>
+            <path d="M12 9v3a1.5 1.5 0 0 1-1.5 1.5H4A1.5 1.5 0 0 1 2.5 12V5.5A1.5 1.5 0 0 1 4 4h3"/>
+          </svg>
+          <span>悬浮窗</span>
+        </button>
       </nav>
 
       <!-- 全局更新覆盖提醒横幅 -->
@@ -199,12 +224,13 @@
         <div class="header-actions-slot flex items-center gap-2 shrink-0">
           <div class="agy-select-wrap shrink-0" id="pollIntervalHost"></div>
 
-          <button id="quickPopoutBtn" type="button" title="弹出可拖动 / 可缩放独立悬浮窗" class="agy-btn agy-btn-secondary agy-icon-btn shrink-0">
-            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+          <button id="quickPopoutBtn" type="button" title="呼出或唤醒可拖动 / 可缩放独立悬浮窗" class="agy-btn agy-btn-secondary agy-btn-sm quick-popout-btn shrink-0">
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
               <path d="M9.5 2.5h4v4"/>
               <path d="M13.5 2.5L7.5 8.5"/>
               <path d="M12 9v3a1.5 1.5 0 0 1-1.5 1.5H4A1.5 1.5 0 0 1 2.5 12V5.5A1.5 1.5 0 0 1 4 4h3"/>
             </svg>
+            <span class="quick-popout-lbl">悬浮窗</span>
           </button>
 
           <button id="refreshBtn" type="button" title="立即刷新" class="agy-btn agy-btn-secondary agy-icon-btn shrink-0">
@@ -275,12 +301,21 @@
                 <span id="ctxHoverHint" class="agy-pill mono-num ctx-hover-hint" data-show="false"></span>
               </div>
             </div>
-            <button id="openCapsuleFromCtxBtn" type="button" class="agy-btn agy-btn-primary">
-              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7">
-                <rect x="2" y="4.2" width="12" height="7.6" rx="3.8"/><path d="M8 4.2v7.6"/>
-              </svg>
-              <span>生成交接胶囊</span>
-            </button>
+            <div class="flex items-center gap-1.5">
+              <button id="openCapsuleFromCtxBtn" type="button" class="agy-btn agy-btn-primary">
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7">
+                  <rect x="2" y="4.2" width="12" height="7.6" rx="3.8"/><path d="M8 4.2v7.6"/>
+                </svg>
+                <span>生成交接胶囊</span>
+              </button>
+              <span class="help-tip-wrap">
+                <button type="button" class="help-tip-btn" aria-label="什么是交接胶囊？">?</button>
+                <span class="help-tip-pop" role="tooltip">
+                  <strong>什么是交接胶囊？</strong><br/>
+                  将当前项目分支的核心决策与工作状态压缩为低 Token 紧凑交接包；开启新对话后可一键附着发送，让 Agent 瞬间接续上下文，避免重复铺垫。
+                </span>
+              </span>
+            </div>
           </div>
 
           <div class="ctx-bar-wrap">
@@ -307,6 +342,19 @@
               <div class="text-xs text-muted">会话估算费用</div>
               <div id="kpiCost" class="text-base font-semibold mono-num">$0.000</div>
             </div>
+          </div>
+
+          <div id="ctxModelSimBar" class="ctx-sim-bar pt-2.5 border-t flex flex-wrap items-center justify-between gap-2 text-xs">
+            <div class="flex items-center gap-2 min-w-0">
+              <span class="text-muted shrink-0">切模型水位模拟</span>
+              <select id="ctxModelSimSelect" class="agy-native-select mono-num" aria-label="模拟切换目标模型窗口">
+                <option value="">当前模型（不模拟）</option>
+                <option value="200000">200K 窗口（如 Claude 4.5/4.6）</option>
+                <option value="256000">256K 窗口（如 GPT-5.x）</option>
+                <option value="1000000">1.00M 窗口（如 Gemini 3/4）</option>
+              </select>
+            </div>
+            <span id="ctxModelSimResult" class="mono-num text-muted">选择目标窗口实时预览占比</span>
           </div>
         </div>
 
@@ -463,7 +511,16 @@
                 <div id="vaultPathLabel" class="text-xs text-muted mt-1 mono-num">%USERPROFILE%\.context-cache</div>
               </div>
               <div class="flex items-center gap-2">
-                <button id="openCapsuleFromVaultBtn" type="button" class="agy-btn agy-btn-secondary">交接胶囊</button>
+                <div class="flex items-center gap-1">
+                  <button id="openCapsuleFromVaultBtn" type="button" class="agy-btn agy-btn-secondary">交接胶囊</button>
+                  <span class="help-tip-wrap">
+                    <button type="button" class="help-tip-btn" aria-label="什么是交接胶囊？">?</button>
+                    <span class="help-tip-pop" role="tooltip">
+                      <strong>什么是交接胶囊？</strong><br/>
+                      将当前分支已保存的关键决策与状态打包为极简交接载荷，方便新开对话时一键注入，无缝延续上下文。
+                    </span>
+                  </span>
+                </div>
                 <button id="openAddMemBtn" type="button" class="agy-btn agy-btn-primary">+ 新增记忆</button>
               </div>
             </div>
@@ -480,7 +537,138 @@
     </main>
       </div>
 
-      <!-- ==================== 模块 2：Antigravity 界面汉化 ==================== -->
+      <!-- ==================== 模块 2：生态治理与 Harness 体检 ==================== -->
+      <div id="module-governance" class="console-module hidden">
+        <header class="agy-header space-y-2.5">
+          <div class="header-top">
+            <div class="flex items-center gap-2 min-w-0">
+              <span class="text-sm font-semibold text-fg truncate">生态治理与 Harness 体检</span>
+              <span id="govScorePill" class="agy-pill i18n-status-pill mono-num shrink-0" data-tone="neutral">检测中</span>
+            </div>
+            <div class="flex items-center gap-2 shrink-0">
+              <button id="govRefreshBtn" type="button" title="重新扫描生态与离线体检" class="agy-btn agy-btn-secondary agy-icon-btn shrink-0">
+                <svg id="govRefreshSvg" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6">
+                  <path d="M13.5 8a5.5 5.5 0 1 1-1.35-3.6" stroke-linecap="round"/>
+                  <path d="M13.5 2.4v2.9h-2.9" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+              </button>
+              <button id="govSettingsBtn" type="button" title="插件设置" class="agy-btn agy-btn-secondary agy-icon-btn shrink-0">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" class="gear-svg">
+                  <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/>
+                  <circle cx="12" cy="12" r="3"/>
+                </svg>
+              </button>
+            </div>
+          </div>
+
+          <div class="pt-0.5">
+            <div class="seg-nav seg-nav-full" id="govSegNav" role="tablist">
+              <div class="seg-indicator" id="govSegIndicator"></div>
+              <button type="button" class="seg-tab" role="tab" data-gov-tab="overview" data-active="true">总览体检</button>
+              <button type="button" class="seg-tab" role="tab" data-gov-tab="extensions" data-active="false">插件/MCP</button>
+              <button type="button" class="seg-tab" role="tab" data-gov-tab="harness" data-active="false">生效栈</button>
+              <button type="button" class="seg-tab" role="tab" data-gov-tab="profiles" data-active="false">场景/快照</button>
+            </div>
+          </div>
+        </header>
+
+        <main class="agy-main space-y-5">
+          <!-- 子页 1：总览与三合一离线体检 -->
+          <section id="gov-panel-overview" class="space-y-5 panel-enter">
+            <div class="agy-group p-5 space-y-4">
+              <div class="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <div class="text-xs font-medium text-muted">生态健康综合评分（纯离线 · 0 Token）</div>
+                  <div class="flex items-baseline gap-2.5 mt-1">
+                    <span id="govHealthScoreBig" class="text-3xl font-semibold mono-num tracking-tight">100</span>
+                    <span class="text-xs text-muted">/ 100</span>
+                  </div>
+                  <div id="govHealthSummaryText" class="text-xs text-muted mt-1">正在扫描插件、MCP、Skills、Rules 与隐私安全...</div>
+                </div>
+                <div class="text-right">
+                  <div class="text-xs text-muted">估算常驻底座</div>
+                  <div id="govBaselineTokens" class="text-lg font-semibold mono-num mt-0.5">~0</div>
+                </div>
+              </div>
+              <div id="govAssetKpis" class="kpi-grid pt-3 border-t"></div>
+            </div>
+
+            <div class="agy-group overflow-hidden">
+              <div class="px-5 py-3.5 border-b flex items-center justify-between gap-2">
+                <span class="text-sm font-semibold">三合一离线体检（MCP 健康 · Skill 质量 · 隐私防泄露）</span>
+              </div>
+              <div id="govLintFindingsList" class="divide-y"></div>
+            </div>
+          </section>
+
+          <!-- 子页 2：插件与 MCP 安全开关 -->
+          <section id="gov-panel-extensions" class="hidden space-y-4 panel-enter">
+            <div class="agy-group p-4 space-y-2.5">
+              <div class="flex flex-wrap items-center justify-between gap-2">
+                <input id="govExtSearch" type="text" placeholder="搜索插件或 MCP Server 名称..." class="agy-input flex-1" style="min-width: min(180px, 100%);" />
+                <span class="text-[11px] text-muted">五重安全护栏：写前自动快照 · 原子校验 · 禁止禁用 Hub 自身</span>
+              </div>
+            </div>
+
+            <div class="agy-group overflow-hidden">
+              <div class="px-5 py-3.5 border-b flex items-center justify-between gap-2">
+                <span class="text-sm font-semibold">已安装插件（写入 config.json 官方布尔位）</span>
+              </div>
+              <div id="govPluginsList" class="divide-y"></div>
+            </div>
+
+            <div class="agy-group overflow-hidden">
+              <div class="px-5 py-3.5 border-b flex items-center justify-between gap-2">
+                <span class="text-sm font-semibold">MCP Servers（全局支持外置隔离停用 · 插件内置随父插件控制）</span>
+              </div>
+              <div id="govMcpList" class="divide-y"></div>
+            </div>
+          </section>
+
+          <!-- 子页 3：Effective Harness 全景生效栈 -->
+          <section id="gov-panel-harness" class="hidden space-y-4 panel-enter">
+            <div class="agy-group overflow-hidden">
+              <div class="px-5 py-3.5 border-b flex flex-wrap items-center justify-between gap-2">
+                <span class="text-sm font-semibold">Effective Harness 生效栈（按优先级 P1 工作区 → P4 内置）</span>
+                <div class="flex items-center gap-1.5">
+                  <button type="button" class="agy-btn agy-btn-secondary agy-btn-sm text-xs" data-gov-harness-filter="all" data-active="true">全部</button>
+                  <button type="button" class="agy-btn agy-btn-secondary agy-btn-sm text-xs" data-gov-harness-filter="rules">Rules</button>
+                  <button type="button" class="agy-btn agy-btn-secondary agy-btn-sm text-xs" data-gov-harness-filter="skills">Skills</button>
+                  <button type="button" class="agy-btn agy-btn-secondary agy-btn-sm text-xs" data-gov-harness-filter="hooks">Hooks</button>
+                </div>
+              </div>
+              <div id="govHarnessStackList" class="divide-y"></div>
+            </div>
+          </section>
+
+          <!-- 子页 4：场景预设与快照时间机器 -->
+          <section id="gov-panel-profiles" class="hidden space-y-5 panel-enter">
+            <div class="agy-group p-5 space-y-3">
+              <div class="text-sm font-semibold">保存当前启停组合为场景预设</div>
+              <div class="flex flex-wrap items-center gap-2">
+                <input id="govProfileNameInput" type="text" placeholder="预设名（如：重度编码 / 轻量问答）" class="agy-input flex-1" style="min-width: min(160px, 100%);" />
+                <input id="govProfileDescInput" type="text" placeholder="可选备注..." class="agy-input flex-1" style="min-width: min(150px, 100%);" />
+                <button id="govSaveProfileBtn" type="button" class="agy-btn agy-btn-primary shrink-0">保存预设</button>
+              </div>
+            </div>
+
+            <div class="agy-group overflow-hidden">
+              <div class="px-5 py-3.5 border-b text-sm font-semibold">已保存场景预设（切换前展示精确 Diff）</div>
+              <div id="govProfilesList" class="divide-y"></div>
+            </div>
+
+            <div class="agy-group overflow-hidden">
+              <div class="px-5 py-3.5 border-b flex flex-wrap items-center justify-between gap-2">
+                <span class="text-sm font-semibold">宿主配置快照时间机器（一键无损还原）</span>
+                <span class="text-[11px] text-muted mono-num">CLI 逃生舱: node bin/ctx.mjs gov rollback</span>
+              </div>
+              <div id="govSnapshotsList" class="divide-y"></div>
+            </div>
+          </section>
+        </main>
+      </div>
+
+      <!-- ==================== 模块 3：Antigravity 界面汉化 ==================== -->
       <div id="module-i18n" class="console-module hidden">
         <header class="agy-header i18n-header space-y-2.5">
           <div class="header-top">
@@ -1081,6 +1269,33 @@
         <button type="submit" class="agy-btn agy-btn-primary">导入并刷新词典</button>
       </div>
     </form>
+  </div>
+
+  <!-- 模态框 7：生态治理 Diff 确认 -->
+  <div id="govConfirmModal" class="gov-modal-backdrop hidden">
+    <div class="modal-card p-5 space-y-4">
+      <div class="flex items-center justify-between gap-2">
+        <span id="govConfirmTitle" class="text-base font-semibold">确认变更</span>
+        <button id="govConfirmCloseBtn" type="button" class="agy-btn agy-btn-secondary agy-icon-btn">✕</button>
+      </div>
+      <div id="govConfirmBody" class="space-y-2"></div>
+      <div class="flex justify-end gap-2 pt-1">
+        <button id="govConfirmCancelBtn" type="button" class="agy-btn agy-btn-secondary">取消</button>
+        <button id="govConfirmOkBtn" type="button" class="agy-btn agy-btn-primary">确认并安全执行</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 模态框 8：生态治理只读脱敏文件预览 -->
+  <div id="govPreviewModal" class="gov-modal-backdrop hidden">
+    <div class="modal-card wide p-5 space-y-3">
+      <div class="flex items-center justify-between gap-2">
+        <span id="govPreviewTitle" class="text-base font-semibold truncate">只读脱敏预览</span>
+        <button id="govPreviewCloseBtn" type="button" class="agy-btn agy-btn-secondary agy-icon-btn">✕</button>
+      </div>
+      <div id="govPreviewPath" class="text-xs text-muted mono-num truncate"></div>
+      <pre id="govPreviewContent" class="gov-preview-pre scroll-thin"></pre>
+    </div>
   </div>
 
   <div id="toast" class="agy-toast" data-show="false"></div>

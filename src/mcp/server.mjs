@@ -21,6 +21,7 @@ import { PopoutServerManager } from '../core/popout-server.mjs';
 import { recordActiveSession, resolveTargetSession, getSessionProjectDir } from '../core/session-tracker.mjs';
 import { listConversations } from '../core/transcript-parser.mjs';
 import { handleI18nAction } from '../core/i18n/index.mjs';
+import { handleGovernanceAction } from '../core/governance/index.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -30,7 +31,7 @@ export const APP_RESOURCE_URI = 'ui://context-cache/dashboard.html';
 export const APP_RESOURCE_MIME = 'text/html;profile=mcp-app';
 export const SERVER_INFO = {
   name: 'context-cache-server',
-  version: '1.3.0',
+  version: '1.4.0',
 };
 
 const APP_ONLY_META = { ui: { visibility: ['app'] } };
@@ -46,7 +47,7 @@ export const TOOL_DEFINITIONS = [
       properties: {
         conversationId: { type: 'string', description: 'Optional conversation ID to inspect' },
         projectDir: { type: 'string', description: 'Optional workspace directory' },
-        module: { type: 'string', enum: ['monitor', 'i18n'], description: 'Initial console module' },
+        module: { type: 'string', enum: ['monitor', 'governance', 'i18n'], description: 'Initial console module' },
         tab: { type: 'string', enum: ['context', 'calls', 'vault', 'settings'], description: 'Initial view tab' },
       },
       additionalProperties: false,
@@ -289,6 +290,48 @@ export const TOOL_DEFINITIONS = [
         sync: { type: 'boolean' },
         skipProcessControl: { type: 'boolean' },
         relaunch: { type: 'boolean' },
+      },
+      additionalProperties: true,
+    },
+    _meta: APP_ONLY_META,
+  },
+  {
+    name: 'app_governance_manage',
+    title: 'App: Manage Antigravity Ecosystem & Harness Governance',
+    description: 'Private UI tool for scanning Effective Harness stack, offline MCP/Skill/Secret linting, guarded plugin/MCP toggles, profile switching, and host config snapshot rollback.',
+    inputSchema: {
+      type: 'object',
+      required: ['action'],
+      properties: {
+        action: {
+          type: 'string',
+          enum: [
+            'overview',
+            'lint',
+            'preview_file',
+            'toggle_plugin',
+            'toggle_mcp',
+            'list_profiles',
+            'save_profile',
+            'delete_profile',
+            'preview_profile',
+            'apply_profile',
+            'list_snapshots',
+            'preview_rollback',
+            'rollback_snapshot',
+          ],
+        },
+        projectDir: { type: 'string' },
+        filePath: { type: 'string' },
+        pluginId: { type: 'string' },
+        serverName: { type: 'string' },
+        enabled: { type: 'boolean' },
+        profileId: { type: 'string' },
+        name: { type: 'string' },
+        description: { type: 'string' },
+        plugins: { type: 'object' },
+        globalMcp: { type: 'object' },
+        snapshotId: { type: 'string' },
       },
       additionalProperties: true,
     },
@@ -647,6 +690,11 @@ export function createMcpDispatcher(options = {}) {
 
         case 'app_i18n_manage': {
           const res = await handleI18nAction(args, options);
+          return toolOk('ok', res);
+        }
+
+        case 'app_governance_manage': {
+          const res = handleGovernanceAction(args, options);
           return toolOk('ok', res);
         }
 

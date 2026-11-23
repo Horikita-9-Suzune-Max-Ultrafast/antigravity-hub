@@ -259,6 +259,8 @@ function buildCallsFromTranscript({
       config
     );
 
+    const prevStep = i > 0 ? steps[i - 1] : null;
+    const hasRecentMedia = Boolean((step.mediaCount || 0) > 0 || (prevStep && (prevStep.mediaCount || 0) > 0));
     const baseCall = {
       callUid: `${conversationId}:${step.stepIndex}`,
       conversationId,
@@ -282,6 +284,8 @@ function buildCallsFromTranscript({
       cacheHitRate,
       estimatedCostUsd,
       quotaGroup: resolveQuotaGroup(step.model, config),
+      toolCallCount: Array.isArray(step.toolCalls) ? step.toolCalls.length : 0,
+      hasMedia: hasRecentMedia,
     };
 
     const drop = evaluateCacheDrop(prev, baseCall, config.alerts.cacheDropThresholdPct);
@@ -577,6 +581,37 @@ export function evaluateAlerts(calls, config, contextPct = null) {
       level: 'warning',
       title: `检测到连续 ${maxStreak} 步低速输出（< ${lowThresh} tok/s）`,
       detail: '可能受模型队列拥堵或上下文过长影响，建议切换轻量模型或压缩对话。',
+    });
+  }
+
+  // 5. Long-context media / image cache hygiene risk (read-only)
+  const mediaDrop = calls.slice(0, 12).find((c) => c.hasMedia && c.contextTokens >= 150000 && c.cacheDrop);
+  if (mediaDrop) {
+    alerts.push({
+      code: 'long_ctx_media_cache_risk',
+      level: 'warning',
+      title: `长上下文（${Math.round(mediaDrop.contextTokens / 1000)}K）媒体注入伴随缓存击穿`,
+      detail: `步骤 [${mediaDrop.agentTag}] #${mediaDrop.stepIndex} 在高上下文中注入图片/媒体后缓存命中骤降至 ${mediaDrop.cacheHitRate.toFixed(1)}%，建议将图片查看委托给子代理返回纯文本结论。`,
+    });
+  }
+
+  // 6. Micro-step inefficiency streak (many consecutive low-output single-tool turns)
+  let microStreak = 0;
+  let maxMicroStreak = 0;
+  for (const c of chronological) {
+    if (c.agentType === 'main' && c.outputTokens > 0 && c.outputTokens < 220 && (c.toolCallCount === 1 || c.toolCallCount === 0)) {
+      microStreak++;
+      if (microStreak > maxMicroStreak) maxMicroStreak = microStreak;
+    } else {
+      microStreak = 0;
+    }
+  }
+  if (maxMicroStreak >= 5) {
+    alerts.push({
+      code: 'micro_step_streak',
+      level: 'info',
+      title: `检测到连续 ${maxMicroStreak} 轮碎步小调用（每轮 < 220 out tokens）`,
+      detail: '高频单步往返会重复支付每轮固定首字等待（TTFT），建议并行合并只读搜索或批量编辑。',
     });
   }
 

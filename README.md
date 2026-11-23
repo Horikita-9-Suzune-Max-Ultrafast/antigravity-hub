@@ -8,9 +8,10 @@
 [![Node.js >= 24](https://img.shields.io/badge/Node.js-%3E%3D24-339933.svg)](https://nodejs.org/)
 [![Zero Runtime Deps](https://img.shields.io/badge/Runtime%20Deps-0-brightgreen.svg)](#架构与设计原则)
 
-**Antigravity Hub** 是为 **Google Antigravity** 打造的模块化原生扩展平台，采用**宽屏左侧窄图标栏 / 窄屏顶部紧凑切换条**的响应式双形态外壳，内置两大核心模块：
-1. **上下文缓存与监控（Context Cache & Monitor）**：上下文构成透视、主/子 Agent 实时 TPS 与缓存击穿归因、多对话自动跟随与跨视图联动、原生无框独立悬浮窗、Git 感知跨会话记忆库与双视图交接胶囊。
-2. **界面汉化（Antigravity Localization）**：纯 Node.js 零依赖流式 ASAR 补丁引擎、739+ 精校内置词典（含原生菜单与动态模板正则）、三层词典外置热加载、物理免疫区防误翻、品牌名自定义、官方升级覆盖自动提醒与脱离进程一键应用/无损还原。
+**Antigravity Hub** 是为 **Google Antigravity** 打造的模块化原生控制中心，采用**宽屏左侧窄图标栏 / 窄屏顶部紧凑切换条**的响应式双形态外壳，内置三大核心模块：
+1. **上下文缓存与监控（Context Cache & Monitor）**：上下文构成透视与切模型水位模拟、主/子 Agent 实时 TPS 与缓存击穿/卫生体检、多对话自动跟随、右侧边栏一键呼出原生无框悬浮窗、Git 感知跨会话记忆库与交接胶囊（含新手悬停说明）。
+2. **生态治理与 Harness 体检（Ecosystem & Harness Governance，v1.4.0 新增）**：Effective Harness 全景生效栈（P1 工作区 → P4 内置）、三合一纯离线体检（MCP 健康/Schema 冗余、Skill 质量/冲突/断链、隐私防泄露审计盾）、五重零事故安全护栏开关、场景预设（Profiles）Diff 切换与宿主配置快照时间机器（含 CLI 应急逃生舱）。
+3. **界面汉化（Antigravity Localization）**：纯 Node.js 零依赖流式 ASAR 补丁引擎、739+ 精校内置词典（含原生菜单与动态模板正则）、三层词典外置热加载、物理免疫区防误翻、品牌名自定义、官方升级覆盖自动提醒与脱离进程一键应用/无损还原。
 
 **核心目标：实时监控与控制台管理 0 模型 Token 消耗、对业务代码仓库零写入污染、Antigravity 升级改版不崩不丢数据。**
 
@@ -66,7 +67,7 @@
 | 层级 | 工具清单 | 可见性 | 对模型上下文的影响 |
 | :--- | :--- | :--- | :--- |
 | **Model-Visible（5 个精简工具）** | `ctx_open_monitor`、`ctx_brief`、`ctx_save`、`ctx_search`、`ctx_doctor` | `["model", "app"]` | 常驻定义极简（约 `0.6K` tokens） |
-| **App-Only（8 个 UI 私有工具）** | `app_get_context_breakdown`、`app_get_calls`、`app_get_quota`、`app_calibrate_quota`、`app_vault_manage`、`app_config_manage`、`app_doctor_action`、`app_i18n_manage` | `["app"]` | **0 tokens**（模型不可见、不触发推理） |
+| **App-Only（9 个 UI 私有工具）** | `app_get_context_breakdown`、`app_get_calls`、`app_get_quota`、`app_calibrate_quota`、`app_vault_manage`、`app_config_manage`、`app_doctor_action`、`app_i18n_manage`、`app_governance_manage` | `["app"]` | **0 tokens**（模型不可见、不触发推理） |
 
 ### 五层抗 Antigravity 破坏性更新设计
 1. **零运行时依赖**：Core Engine、Hooks、MCP Server、CLI 纯基于 Node.js 24 原生能力（含 `node:sqlite`）；仅开发期使用 `@modelcontextprotocol/ext-apps` + `esbuild` 将前端打包为单一零外链静态 HTML，部署产物**零 `node_modules`**。
@@ -151,6 +152,12 @@ node --no-warnings scripts/doctor.mjs --repair
 
 # 导出脱敏备份至 ~/.context-cache/exports/
 node --no-warnings bin/ctx.mjs export
+
+# Antigravity 生态治理体检与宿主配置应急回滚逃生舱（v1.4.0）
+node --no-warnings bin/ctx.mjs gov status
+node --no-warnings bin/ctx.mjs gov lint
+node --no-warnings bin/ctx.mjs gov snapshots
+node --no-warnings bin/ctx.mjs gov rollback
 
 # Antigravity 汉化状态探测、词典热更新与应急还原
 node --no-warnings bin/ctx.mjs i18n status
