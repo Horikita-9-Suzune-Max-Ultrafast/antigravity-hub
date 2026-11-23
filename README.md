@@ -1,4 +1,4 @@
-# Antigravity Console (`context-cache`)
+# Antigravity Hub (`context-cache`)
 
 **简体中文** | [English](./README.en.md)
 
@@ -8,7 +8,7 @@
 [![Node.js >= 24](https://img.shields.io/badge/Node.js-%3E%3D24-339933.svg)](https://nodejs.org/)
 [![Zero Runtime Deps](https://img.shields.io/badge/Runtime%20Deps-0-brightgreen.svg)](#架构与设计原则)
 
-`context-cache` 自 **v1.3.0** 起升级为模块化 **Antigravity Console（Antigravity 控制台）**（底层插件 ID `context-cache`、外置数据目录 `%USERPROFILE%\.context-cache` 与 MCP 工具完全向后兼容，老用户平滑升级零迁移成本），采用**宽屏左侧窄图标栏 / 窄屏顶部紧凑切换条**的响应式双形态外壳，当前内置两大核心模块：
+`context-cache` 自 **v1.3.0** 起升级为模块化 **Antigravity Hub（Antigravity 控制台）**（底层插件 ID `context-cache`、外置数据目录 `%USERPROFILE%\.context-cache` 与 MCP 工具完全向后兼容，老用户平滑升级零迁移成本），采用**宽屏左侧窄图标栏 / 窄屏顶部紧凑切换条**的响应式双形态外壳，当前内置两大核心模块：
 1. **上下文监控（Context Monitor）**：上下文构成透视、主/子 Agent 实时 TPS 与缓存击穿归因、多对话自动跟随与跨视图联动、原生无框独立悬浮窗、Git 感知跨会话记忆库与双视图交接胶囊。
 2. **界面汉化（Antigravity Localization）**：纯 Node.js 零依赖流式 ASAR 补丁引擎、739+ 精校内置词典（含原生菜单与动态模板正则）、三层词典外置热加载、物理免疫区防误翻、品牌名自定义、官方升级覆盖自动提醒与脱离进程一键应用/无损还原。
 
@@ -47,7 +47,7 @@
 
 ### 5. 原生无框悬浮窗、响应式控制台外壳与专属设置（v1.3.0 升级）
 - **响应式模块化控制台外壳**：宽屏（`> 680px`，左侧边栏全页或宽屏悬浮窗）展示 `56px` 固定左侧图标导航栏，窄屏（`<= 680px`，右侧边栏或紧凑悬浮窗）自动折叠为顶部紧凑模块切换条；所有自定义下拉菜单内置动态视口边界钳制，零横向滚动与裁切。
-- **Windows 原生无框 WebView2 悬浮窗**（`global`: `Antigravity Console`）：基于 `127.0.0.1` 一次性令牌自动拉起无浏览器标题栏的原生圆角悬浮窗（非 Windows 或异常时自动降级至 Edge/Chrome `--app`），支持 Always-on-Top 一键置顶固定、**快捷收缩为迷你悬浮条（含上下文占比 / TPS / 模型徽章且支持横向拉伸）**、**独立最小化与一键唤醒还原**、8 方向缩放与高 DPI 精准记忆，关闭即释放本地端口。
+- **Windows 原生无框 WebView2 悬浮窗**（`global`: `Antigravity Hub`）：基于 `127.0.0.1` 一次性令牌自动拉起无浏览器标题栏的原生圆角悬浮窗（非 Windows 或异常时自动降级至 Edge/Chrome `--app`），支持 Always-on-Top 一键置顶固定、**快捷收缩为迷你悬浮条（含上下文占比 / TPS / 模型徽章且支持横向拉伸）**、**独立最小化与一键唤醒还原**、8 方向缩放与高 DPI 精准记忆，关闭即释放本地端口。
 - 定时检测周期可调（`3s` / `5s` / `10s` / `30s` / `60s` / `手动暂停`），全部面板刷新走私有工具，**0 模型 Token 消耗**。
 
 ### 6. Antigravity 界面汉化模块（v1.3.0 新增）
@@ -121,8 +121,8 @@ npm run pack:release
 ```
 
 部署完成后：
-- 在左侧边栏打开 **`Antigravity Console`**（全页视图，含左侧窄图标模块栏）；
-- 或在对话右侧边栏 `+` 菜单打开 **`Antigravity Console`**（侧边栏视图，顶部紧凑模块切换条）；
+- 在左侧边栏打开 **`Antigravity Hub`**（全页视图，含左侧窄图标模块栏）；
+- 或在对话右侧边栏 `+` 菜单打开 **`Antigravity Hub`**（侧边栏视图，顶部紧凑模块切换条）；
 - 点击左下角 / 右上角齿轮图标进入 **「插件设置」** 调整轮询周期、单行状态条、告警阈值、独立悬浮小窗或执行 Doctor 维护。
 
 ---

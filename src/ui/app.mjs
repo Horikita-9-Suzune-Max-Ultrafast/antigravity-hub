@@ -2382,7 +2382,7 @@ async function init() {
   ro.observe(document.getElementById('consoleWorkspace') || document.getElementById('appShell'));
 
   if (!popoutToken) {
-    mcpApp = new App({ name: 'Antigravity Console', version: '1.3.0' }, {});
+    mcpApp = new App({ name: 'Antigravity Hub', version: '1.3.0' }, {});
 
     // Register handlers BEFORE connect() per Antigravity mcp-app-development guidelines
     mcpApp.ontoolinput = ({ arguments: args }) => {

@@ -158,7 +158,7 @@ async function main() {
       process.exit(1);
     }
     default: {
-      console.log(`Antigravity Console (context-cache) CLI
+      console.log(`Antigravity Hub (context-cache) CLI
 Commands:
   brief   [--project <dir>] [--budget <n>] [--json]
   save    --title <text> --summary <text> [--kind <kind>] [--tags a,b]

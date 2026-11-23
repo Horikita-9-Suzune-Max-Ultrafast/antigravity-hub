@@ -1,14 +1,14 @@
-# Antigravity Console (`context-cache`)
+# Antigravity Hub (`context-cache`)
 
 [简体中文](./README.md) | **English**
 
-**Modular Native Antigravity Console (MCP App): Context Monitor, Multi-Agent Telemetry, Cross-Session Vault & Zero-Dep Chinese Localization**
+**Modular Native Antigravity Hub (MCP App): Context Monitor, Multi-Agent Telemetry, Cross-Session Vault & Zero-Dep Chinese Localization**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 [![Node.js >= 24](https://img.shields.io/badge/Node.js-%3E%3D24-339933.svg)](https://nodejs.org/)
 [![Zero Runtime Deps](https://img.shields.io/badge/Runtime%20Deps-0-brightgreen.svg)](#architecture--design-principles)
 
-Starting in **v1.3.0**, `context-cache` evolves into the modular **Antigravity Console** (preserving the `context-cache` plugin ID, `%USERPROFILE%\.context-cache` data directory, and all existing MCP tools for seamless zero-migration upgrades), featuring a responsive dual-layout shell (left icon rail on wide screens, compact top module bar in narrow side panes) with two built-in modules:
+Starting in **v1.3.0**, `context-cache` evolves into the modular **Antigravity Hub** (preserving the `context-cache` plugin ID, `%USERPROFILE%\.context-cache` data directory, and all existing MCP tools for seamless zero-migration upgrades), featuring a responsive dual-layout shell (left icon rail on wide screens, compact top module bar in narrow side panes) with two built-in modules:
 1. **Context Monitor**: Context window breakdown, main/sub-agent TPS & prefix-cache drop attribution, auto-following active conversations across views, native frameless floating monitor, Git-aware cross-session memory & dual-view handoff capsules.
 2. **Antigravity Localization**: Pure Node.js zero-dependency streaming ASAR patcher, 739+ curated default Chinese entries (native menus + UI + dynamic regex patterns), 3-layer hot-reloaded external dictionary, physical immunity zones, brand customization, update-drift reminders, and detached apply/restore worker.
 
@@ -47,7 +47,7 @@ Starting in **v1.3.0**, `context-cache` evolves into the modular **Antigravity C
 
 ### 5. Native Frameless Floating Host, Responsive Console Shell & Settings (Upgraded in v1.3.0)
 - **Responsive Modular Console Shell**: Displays a `56px` left icon rail on wide viewports (`> 680px`) and automatically collapses into a compact top module bar in narrow side panes (`<= 680px`), maintaining zero horizontal overflow and dynamic popover viewport clamping.
-- **Native Windows Frameless WebView2 Floating Window** (`global`: `Antigravity Console`): Launches a native rounded borderless OS window over a `127.0.0.1` ephemeral port with one-time token auth (falling back to Edge/Chrome `--app` on other platforms). Supports Always-on-Top pinning, **quick-collapse mini bar (with Context %, TPS & Model badges + horizontal resize)**, **independent minimize & foreground restore**, high-DPI scaling, 8-edge resize, and **auto-port release on close**.
+- **Native Windows Frameless WebView2 Floating Window** (`global`: `Antigravity Hub`): Launches a native rounded borderless OS window over a `127.0.0.1` ephemeral port with one-time token auth (falling back to Edge/Chrome `--app` on other platforms). Supports Always-on-Top pinning, **quick-collapse mini bar (with Context %, TPS & Model badges + horizontal resize)**, **independent minimize & foreground restore**, high-DPI scaling, 8-edge resize, and **auto-port release on close**.
 - Configurable auto-refresh interval (`3s` / `5s` / `10s` / `30s` / `60s` / `manual`), running exclusively over app-only tools at **0 LLM token cost**.
 
 ### 6. Antigravity Chinese Localization Module (New in v1.3.0)

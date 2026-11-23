@@ -8,7 +8,7 @@ const STATUS_META = {
   patched_by_console: {
     pill: '已汉化 (Console)',
     tone: 'success',
-    title: 'Antigravity Console 汉化补丁运行正常',
+    title: 'Antigravity Hub 汉化补丁运行正常',
     desc: '词典、防误翻免疫区与品牌设置修改后可实时热更新生效，无需再次重启客户端。',
   },
   patched_by_other: {

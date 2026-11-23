@@ -104,7 +104,7 @@ export function buildRendererRuntimeSource(bundleSnapshot, bundleFilePath = '') 
   );
   const bundlePathJson = serializeJsValue(String(bundleFilePath || ''));
 
-  return `/* Antigravity Console i18n Renderer Runtime (auto-generated, fail-open) */
+  return `/* Antigravity Hub i18n Renderer Runtime (auto-generated, fail-open) */
 (function () {
   'use strict';
   try {
@@ -584,7 +584,7 @@ export function buildMainRuntimeSource(bundleSnapshot, bundleFilePath = '') {
   );
   const bundlePathJson = serializeJsValue(String(bundleFilePath || ''));
 
-  return `/* Antigravity Console i18n Main Runtime (auto-generated, fail-open) */
+  return `/* Antigravity Hub i18n Main Runtime (auto-generated, fail-open) */
 (function () {
   'use strict';
   try {

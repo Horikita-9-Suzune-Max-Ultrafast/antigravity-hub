@@ -39,8 +39,8 @@ export const TOOL_DEFINITIONS = [
   // ==================== 5 Slim Model-Visible Tools ====================
   {
     name: 'ctx_open_monitor',
-    title: 'Antigravity Console',
-    description: 'Open the modular Antigravity Console (Context Monitor: breakdown, multi-agent TPS & cache, cross-session vault; and Antigravity Chinese Localization).',
+    title: 'Antigravity Hub',
+    description: 'Open the modular Antigravity Hub (Context Monitor: breakdown, multi-agent TPS & cache, cross-session vault; and Antigravity Chinese Localization).',
     inputSchema: {
       type: 'object',
       properties: {
@@ -58,8 +58,8 @@ export const TOOL_DEFINITIONS = [
       },
       'com.google.antigravity/ui': {
         entrypoints: [
-          { type: 'aux_pane', title: 'Antigravity Console' },
-          { type: 'global', title: 'Antigravity Console' },
+          { type: 'aux_pane', title: 'Antigravity Hub' },
+          { type: 'global', title: 'Antigravity Hub' },
         ],
       },
     },
@@ -396,7 +396,7 @@ export function createMcpDispatcher(options = {}) {
             ? args.module
             : config.console?.defaultModule || 'monitor';
           const summaryText =
-            `Antigravity Console 已就绪：当前上下文 ${ctx.usedPercent}% (${Math.round(ctx.usedTokens / 1000)}K/${Math.round(ctx.limitTokens / 1000)}K)` +
+            `Antigravity Hub 已就绪：当前上下文 ${ctx.usedPercent}% (${Math.round(ctx.usedTokens / 1000)}K/${Math.round(ctx.limitTokens / 1000)}K)` +
             `，缓存命中 ${ctx.latestCacheHitRate.toFixed(1)}%，均速 ${ctx.avgTps.toFixed(1)} tok/s，预警 ${ctx.alerts.length} 项。`;
           return toolOk(summaryText, {
             initialModule: requestedModule,

@@ -1,13 +1,13 @@
 {
   "name": "context-cache",
-  "displayName": "Antigravity Console",
+  "displayName": "Antigravity Hub",
   "version": "1.3.0",
   "author": {
     "name": "Horikita-9-Suzune-Max-Ultrafast",
     "url": "https://github.com/Horikita-9-Suzune-Max-Ultrafast"
   },
   "repository": "https://github.com/Horikita-9-Suzune-Max-Ultrafast/antigravity-hub",
-  "description": "Modular Antigravity Console (MCP App): Context Monitor (breakdown, multi-agent TPS & cache telemetry, floating monitor, cross-session vault) and Antigravity Chinese Localization (zero-dep ASAR patcher, layered live dictionary, immunity rules).",
+  "description": "Modular Antigravity Hub (MCP App): Context Monitor (breakdown, multi-agent TPS & cache telemetry, floating monitor, cross-session vault) and Antigravity Chinese Localization (zero-dep ASAR patcher, layered live dictionary, immunity rules).",
   "logo": "assets/logo.svg",
   "suggestedPrompts": [
     "打开 Antigravity 控制台，分析当前会话的上下文构成和缓存命中率",
