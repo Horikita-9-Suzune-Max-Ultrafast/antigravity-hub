@@ -86,7 +86,7 @@
 
 ### 方式一：下载 Release 免构建插件包（推荐，零 `npm install`）
 
-1. 前往 [Releases](https://github.com/Horikita-9-Suzune-Max-Ultrafast/context-cache/releases) 下载 `context-cache-v1.3.0-plugin.zip`（内部为全明文可读 `.mjs` 源码 + 预编译单文件 UI，零 `node_modules`）。
+1. 前往 [Releases](https://github.com/Horikita-9-Suzune-Max-Ultrafast/antigravity-hub/releases) 下载 `context-cache-v1.3.0-plugin.zip`（内部为全明文可读 `.mjs` 源码 + 预编译单文件 UI，零 `node_modules`）。
 2. 解压至 Antigravity 插件目录，使目录结构为 `~/.gemini/config/plugins/context-cache/plugin.json`：
    - **Windows PowerShell**：
      ```powershell
@@ -103,8 +103,8 @@
 
 ```powershell
 # 1. 克隆仓库
-git clone https://github.com/Horikita-9-Suzune-Max-Ultrafast/context-cache.git
-cd context-cache
+git clone https://github.com/Horikita-9-Suzune-Max-Ultrafast/antigravity-hub.git
+cd antigravity-hub
 
 # 2. 安装开发期 UI 打包依赖（仅 devDependencies，不会进入部署产物）
 npm install

@@ -86,7 +86,7 @@ Starting in **v1.3.0**, `context-cache` evolves into the modular **Antigravity C
 
 ### Option A: Prebuilt Release Bundle (Recommended, No `npm install`)
 
-1. Download `context-cache-v1.3.0-plugin.zip` from [Releases](https://github.com/Horikita-9-Suzune-Max-Ultrafast/context-cache/releases) (plain readable `.mjs` source + pre-bundled single-file UI, zero `node_modules`).
+1. Download `context-cache-v1.3.0-plugin.zip` from [Releases](https://github.com/Horikita-9-Suzune-Max-Ultrafast/antigravity-hub/releases) (plain readable `.mjs` source + pre-bundled single-file UI, zero `node_modules`).
 2. Extract into `~/.gemini/config/plugins/` so `plugin.json` lives at `~/.gemini/config/plugins/context-cache/plugin.json`:
    - **Windows PowerShell**:
      ```powershell
@@ -103,8 +103,8 @@ Starting in **v1.3.0**, `context-cache` evolves into the modular **Antigravity C
 
 ```powershell
 # 1. Clone repository
-git clone https://github.com/Horikita-9-Suzune-Max-Ultrafast/context-cache.git
-cd context-cache
+git clone https://github.com/Horikita-9-Suzune-Max-Ultrafast/antigravity-hub.git
+cd antigravity-hub
 
 # 2. Install dev-only UI build tools (never copied into deployed bundle)
 npm install

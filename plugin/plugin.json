@@ -6,7 +6,7 @@
     "name": "Horikita-9-Suzune-Max-Ultrafast",
     "url": "https://github.com/Horikita-9-Suzune-Max-Ultrafast"
   },
-  "repository": "https://github.com/Horikita-9-Suzune-Max-Ultrafast/context-cache",
+  "repository": "https://github.com/Horikita-9-Suzune-Max-Ultrafast/antigravity-hub",
   "description": "Modular Antigravity Console (MCP App): Context Monitor (breakdown, multi-agent TPS & cache telemetry, floating monitor, cross-session vault) and Antigravity Chinese Localization (zero-dep ASAR patcher, layered live dictionary, immunity rules).",
   "logo": "assets/logo.svg",
   "suggestedPrompts": [
