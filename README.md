@@ -1,15 +1,15 @@
-# Antigravity Hub (`context-cache`)
+# Antigravity Hub
 
 **简体中文** | [English](./README.en.md)
 
-**模块化 Antigravity 原生控制台（MCP App）：上下文监控、多 Agent 遥测、跨会话记忆与零依赖界面汉化**
+**模块化 Antigravity 原生控制中心（MCP App）：集上下文缓存与监控、多 Agent 遥测、跨会话记忆与零依赖界面汉化于一体**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 [![Node.js >= 24](https://img.shields.io/badge/Node.js-%3E%3D24-339933.svg)](https://nodejs.org/)
 [![Zero Runtime Deps](https://img.shields.io/badge/Runtime%20Deps-0-brightgreen.svg)](#架构与设计原则)
 
-`context-cache` 自 **v1.3.0** 起升级为模块化 **Antigravity Hub（Antigravity 控制台）**（底层插件 ID `context-cache`、外置数据目录 `%USERPROFILE%\.context-cache` 与 MCP 工具完全向后兼容，老用户平滑升级零迁移成本），采用**宽屏左侧窄图标栏 / 窄屏顶部紧凑切换条**的响应式双形态外壳，当前内置两大核心模块：
-1. **上下文监控（Context Monitor）**：上下文构成透视、主/子 Agent 实时 TPS 与缓存击穿归因、多对话自动跟随与跨视图联动、原生无框独立悬浮窗、Git 感知跨会话记忆库与双视图交接胶囊。
+**Antigravity Hub** 是为 **Google Antigravity** 打造的模块化原生扩展平台，采用**宽屏左侧窄图标栏 / 窄屏顶部紧凑切换条**的响应式双形态外壳，内置两大核心模块：
+1. **上下文缓存与监控（Context Cache & Monitor）**：上下文构成透视、主/子 Agent 实时 TPS 与缓存击穿归因、多对话自动跟随与跨视图联动、原生无框独立悬浮窗、Git 感知跨会话记忆库与双视图交接胶囊。
 2. **界面汉化（Antigravity Localization）**：纯 Node.js 零依赖流式 ASAR 补丁引擎、739+ 精校内置词典（含原生菜单与动态模板正则）、三层词典外置热加载、物理免疫区防误翻、品牌名自定义、官方升级覆盖自动提醒与脱离进程一键应用/无损还原。
 
 **核心目标：实时监控与控制台管理 0 模型 Token 消耗、对业务代码仓库零写入污染、Antigravity 升级改版不崩不丢数据。**

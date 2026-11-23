@@ -1,15 +1,15 @@
-# Antigravity Hub (`context-cache`)
+# Antigravity Hub
 
 [简体中文](./README.md) | **English**
 
-**Modular Native Antigravity Hub (MCP App): Context Monitor, Multi-Agent Telemetry, Cross-Session Vault & Zero-Dep Chinese Localization**
+**Modular Native Antigravity Hub (MCP App): Context Cache & Monitor, Multi-Agent Telemetry, Cross-Session Vault & Zero-Dep Chinese Localization**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 [![Node.js >= 24](https://img.shields.io/badge/Node.js-%3E%3D24-339933.svg)](https://nodejs.org/)
 [![Zero Runtime Deps](https://img.shields.io/badge/Runtime%20Deps-0-brightgreen.svg)](#architecture--design-principles)
 
-Starting in **v1.3.0**, `context-cache` evolves into the modular **Antigravity Hub** (preserving the `context-cache` plugin ID, `%USERPROFILE%\.context-cache` data directory, and all existing MCP tools for seamless zero-migration upgrades), featuring a responsive dual-layout shell (left icon rail on wide screens, compact top module bar in narrow side panes) with two built-in modules:
-1. **Context Monitor**: Context window breakdown, main/sub-agent TPS & prefix-cache drop attribution, auto-following active conversations across views, native frameless floating monitor, Git-aware cross-session memory & dual-view handoff capsules.
+**Antigravity Hub** is a modular native MCP App platform for **Google Antigravity**, featuring a responsive dual-layout shell (left icon rail on wide screens, compact top module bar in narrow side panes) with two built-in core modules:
+1. **Context Cache & Monitor**: Context window breakdown, main/sub-agent TPS & prefix-cache drop attribution, auto-following active conversations across views, native frameless floating monitor, Git-aware cross-session memory & dual-view handoff capsules.
 2. **Antigravity Localization**: Pure Node.js zero-dependency streaming ASAR patcher, 739+ curated default Chinese entries (native menus + UI + dynamic regex patterns), 3-layer hot-reloaded external dictionary, physical immunity zones, brand customization, update-drift reminders, and detached apply/restore worker.
 
 **Core goals: 0 model tokens consumed by live monitoring & console UI, zero files written into target business repositories, and resilient operation across Antigravity host updates.**
