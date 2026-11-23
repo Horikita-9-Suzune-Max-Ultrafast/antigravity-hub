@@ -25,6 +25,7 @@ export const DEFAULT_CONFIG = {
     installDirOverride: '',
     updateReminderEnabled: true,
     menuLocalizationEnabled: true,
+    collectUntranslated: false,
     brandMode: 'original', // 'original' | 'zh' | 'custom' | 'hidden'
     customBrandText: 'Antigravity',
     communitySourceUrl: '',
@@ -184,6 +185,7 @@ export function sanitizeConfig(cfg) {
   out.i18n.installDirOverride = typeof out.i18n.installDirOverride === 'string' ? out.i18n.installDirOverride.trim() : '';
   out.i18n.updateReminderEnabled = out.i18n.updateReminderEnabled === undefined ? true : Boolean(out.i18n.updateReminderEnabled);
   out.i18n.menuLocalizationEnabled = out.i18n.menuLocalizationEnabled === undefined ? true : Boolean(out.i18n.menuLocalizationEnabled);
+  out.i18n.collectUntranslated = Boolean(out.i18n.collectUntranslated);
   if (!['original', 'zh', 'custom', 'hidden'].includes(out.i18n.brandMode)) {
     out.i18n.brandMode = 'original';
   }

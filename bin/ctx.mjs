@@ -16,6 +16,11 @@ import {
   runGovernanceLint,
   scanEcosystem,
 } from '../src/core/governance/index.mjs';
+import {
+  getAppearanceStatus,
+  emergencyDisableWallpaper,
+  pickNextWallpaper,
+} from '../src/core/appearance/index.mjs';
 
 function parseArgs(argv) {
   const pos = [];
@@ -206,6 +211,32 @@ async function main() {
         break;
       }
       console.error('Usage: ctx gov <status|lint|snapshots|rollback [snapshotId]> [--json]');
+      process.exit(1);
+    }
+    case 'wallpaper': {
+      const sub = rest[0] || 'status';
+      if (sub === 'status') {
+        const st = getAppearanceStatus(opts);
+        const s = st.state;
+        const lines = [
+          `Wallpaper Enabled: ${s.enabled ? 'ON' : 'OFF'} | Mode: ${s.mode} | Runtime Patched: ${st.runtimePatched ? 'YES' : 'NO'}`,
+          `Preset: ${s.presetId} | Active Image: ${s.activeWallpaperPath || '(none)'}`,
+          `Rotation: ${s.rotationMode} (${s.rotationMinutes}m) | Pool: ${st.poolCount} images (library ${st.library.length}, folder ${st.folder.count})`,
+        ];
+        print(st, lines.join('\n'));
+        break;
+      }
+      if (sub === 'off') {
+        const res = emergencyDisableWallpaper(opts);
+        print(res, res.message);
+        break;
+      }
+      if (sub === 'next') {
+        const res = pickNextWallpaper(opts);
+        print(res, res.message);
+        break;
+      }
+      console.error('Usage: ctx wallpaper <status|off|next> [--json]');
       process.exit(1);
     }
     default: {

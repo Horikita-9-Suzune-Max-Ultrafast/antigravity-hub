@@ -6,7 +6,7 @@ const STATUS_META = {
     desc: '点击「一键应用汉化」将自动备份纯净原版 app.asar 并注入热加载汉化层，随时可一键无损还原。',
   },
   patched_by_console: {
-    pill: '已汉化 (Console)',
+    pill: '已汉化 (Hub)',
     tone: 'success',
     title: 'Antigravity Hub 汉化补丁运行正常',
     desc: '词典、防误翻免疫区与品牌设置修改后可实时热更新生效，无需再次重启客户端。',
@@ -15,7 +15,7 @@ const STATUS_META = {
     pill: '检测到第三方补丁',
     tone: 'warning',
     title: '检测到第三方汉化补丁',
-    desc: '应用 Console 汉化时将优先基于已检测到的纯净原版备份重打，避免叠加补丁导致异常。',
+    desc: '应用 Hub 汉化时将优先基于已检测到的纯净原版备份重打，避免叠加补丁导致异常。',
   },
   outdated_after_update: {
     pill: '官方更新待重打',
@@ -255,20 +255,71 @@ export function createI18nModule({
       descEl.textContent = detail;
     }
 
-    const jobRunning = data?.lastJob?.status === 'running' || data?.lastJob?.status === 'queued';
+    const jobRefTs = Date.parse(data?.lastJob?.updatedAt || data?.lastJob?.startedAt || '');
+    const jobIsFresh = Number.isFinite(jobRefTs) && Date.now() - jobRefTs <= 120000;
+    const jobRunning =
+      (data?.lastJob?.status === 'running' || data?.lastJob?.status === 'queued') && jobIsFresh;
+
+    // Third-party patch remediation card
+    const tpCard = document.getElementById('i18nThirdPartyPlanCard');
+    const tpBadge = document.getElementById('i18nThirdPartyBadge');
+    const tpDesc = document.getElementById('i18nThirdPartyPlanDesc');
+    const tpReplaceBtn = document.getElementById('i18nReplaceThirdPartyBtn');
+    const tpRestoreBtn = document.getElementById('i18nRestoreFromThirdPartyBtn');
+    if (tpCard) {
+      const isThirdParty = code === 'patched_by_other';
+      tpCard.classList.toggle('hidden', !isThirdParty);
+      if (isThirdParty) {
+        const tpName = data?.thirdPartyMeta?.tool
+          ? `${data.thirdPartyMeta.tool}${data.thirdPartyMeta.toolVersion ? ` v${data.thirdPartyMeta.toolVersion}` : ''}`
+          : '未知第三方汉化补丁';
+        if (tpBadge) tpBadge.textContent = tpName;
+        const cleanBak = (data?.backups || []).find((b) => b.valid && b.isCleanOriginal);
+        if (data?.hasCleanBackup && cleanBak) {
+          if (tpDesc) {
+            tpDesc.textContent = `已检测到纯净原版备份（${cleanBak.name}）。点击「隔离替换」将自动把纯净原版收归 Hub 托管、把第三方旧备份归档隔离至 ~/.context-cache/i18n/quarantine/（不硬删），再基于纯净原版重打 Hub 汉化与壁纸运行时，绝不叠加冲突。`;
+          }
+          if (tpReplaceBtn) tpReplaceBtn.disabled = st.busyPatch || jobRunning;
+          if (tpRestoreBtn) tpRestoreBtn.disabled = st.busyPatch || jobRunning;
+        } else {
+          if (tpDesc) {
+            tpDesc.textContent = '未检测到可用的纯净原版 app.asar 备份。为防止叠加损坏，已锁定直接替换；建议先重新运行一次官方 Antigravity 安装程序恢复原版文件，再回到此处一键应用。';
+          }
+          if (tpReplaceBtn) tpReplaceBtn.disabled = true;
+          if (tpRestoreBtn) tpRestoreBtn.disabled = true;
+        }
+      }
+    }
+
     const applyBtn = document.getElementById('i18nApplyBtn');
     const restoreBtn = document.getElementById('i18nRestoreBtn');
     if (applyBtn) {
-      applyBtn.disabled = st.busyPatch || jobRunning || code === 'not_found';
+      applyBtn.disabled = st.busyPatch || jobRunning || code === 'not_found' || (code === 'patched_by_other' && !data?.hasCleanBackup);
+      applyBtn.title = jobRunning
+        ? '后台补丁任务正在执行，请稍候...'
+        : code === 'not_found'
+          ? '未检测到 Antigravity 安装目录，请在下方手动指定路径'
+          : code === 'patched_by_other' && !data?.hasCleanBackup
+            ? '检测到第三方补丁且缺少纯净原版备份，为防叠加损坏已锁定'
+            : '自动备份纯净原版 app.asar 并注入热加载运行时';
       applyBtn.textContent =
         code === 'patched_by_console'
           ? '重新应用汉化'
           : code === 'outdated_after_update'
             ? '重新应用汉化'
-            : '一键应用汉化';
+            : code === 'patched_by_other'
+              ? '隔离替换并应用 Hub 汉化'
+              : '一键应用汉化';
     }
     if (restoreBtn) {
       restoreBtn.disabled = st.busyPatch || jobRunning || code === 'not_found' || !data?.hasCleanBackup || code === 'unpatched';
+      restoreBtn.title = jobRunning
+        ? '后台补丁任务正在执行，请稍候...'
+        : !data?.hasCleanBackup
+          ? '未检测到可用的纯净原版备份'
+          : code === 'unpatched'
+            ? '当前已为原版英文客户端，无需还原'
+            : '基于纯净原版备份无损还原 app.asar';
     }
 
     // Install path info
@@ -390,6 +441,16 @@ export function createI18nModule({
       <span class="agy-pill mono-num">自定义 ${custom}</span>
       <span class="agy-pill mono-num">已禁用 ${disabled}</span>
     `;
+    const packHost = document.getElementById('i18nPackStats');
+    const packs = Array.isArray(s.packStats) ? s.packStats : [];
+    if (packHost) {
+      packHost.innerHTML = packs
+        .map(
+          (pk) =>
+            `<span class="agy-pill mono-num text-[11px]" title="${esc(pk.description || pk.name)}">${esc(pk.name)} · ${pk.total}</span>`
+        )
+        .join('');
+    }
   }
 
   function renderDictionaryPanel() {
@@ -449,6 +510,16 @@ export function createI18nModule({
     if (nextBtn) nextBtn.disabled = page >= maxPage;
   }
 
+  async function refreshUntranslatedCount() {
+    try {
+      const res = await callAppTool('app_i18n_manage', { action: 'list_untranslated' });
+      const lbl = document.getElementById('i18nUntransCountLabel');
+      if (lbl) lbl.textContent = `已采集 ${res?.count ?? 0} 条未翻译短语`;
+    } catch {
+      // ignore
+    }
+  }
+
   function renderRulesPanel() {
     const cfg = getI18nConfig();
     const imm = cfg.immunity;
@@ -464,6 +535,8 @@ export function createI18nModule({
     setSwitch('i18nImmFilePaths', imm.filePaths);
     setSwitch('i18nMenuLocSwitch', cfg.menuLocalizationEnabled);
     setSwitch('i18nUpdateRemindSwitch', cfg.updateReminderEnabled);
+    setSwitch('i18nCollectUntransSwitch', Boolean(cfg.collectUntranslated));
+    void refreshUntranslatedCount();
 
     const selTa = document.getElementById('i18nCustomSelectors');
     if (selTa && document.activeElement !== selTa) {
@@ -548,20 +621,30 @@ export function createI18nModule({
 
   function openPatchConfirm(action) {
     st.pendingPatchAction = action;
-    const isApply = action === 'apply';
+    const isApply = action === 'apply' || action === 'apply_quarantine';
+    const isQuarantine = action === 'apply_quarantine' || (isApply && st.statusData?.status === 'patched_by_other');
     const data = st.statusData || {};
 
     const titleEl = document.getElementById('i18nPatchConfirmTitle');
     const submitBtn = document.getElementById('i18nPatchConfirmSubmitBtn');
     const metaEl = document.getElementById('i18nPatchConfirmMeta');
 
-    if (titleEl) titleEl.textContent = isApply ? '确认应用 Antigravity 界面汉化' : '确认还原 Antigravity 原版';
-    if (submitBtn) submitBtn.textContent = isApply ? '确认应用并重启' : '确认还原并重启';
+    if (titleEl) {
+      titleEl.textContent = isApply
+        ? isQuarantine
+          ? '确认隔离替换第三方补丁并应用 Hub 汉化'
+          : '确认应用 Antigravity 界面汉化'
+        : '确认还原 Antigravity 原版';
+    }
+    if (submitBtn) {
+      submitBtn.textContent = isApply ? (isQuarantine ? '确认隔离替换并重启' : '确认应用并重启') : '确认还原并重启';
+    }
     if (metaEl) {
       metaEl.innerHTML = `
         <div>目标目录：${esc(data.installDir || '未探测')}</div>
         <div>客户端版本：${esc(data.appVersion || '未知')}</div>
         <div>纯净原版备份：${data.hasCleanBackup ? '已就绪' : isApply ? '将自动创建' : '缺失'}</div>
+        ${isQuarantine ? '<div>第三方补丁对策：以纯净原版重打（绝不叠加），旧备份归档隔离至 ~/.context-cache/i18n/quarantine/</div>' : ''}
       `;
     }
     openModal('i18nPatchConfirmModal');
@@ -573,18 +656,20 @@ export function createI18nModule({
     closeModal('i18nPatchConfirmModal');
     st.busyPatch = true;
     renderStatusPanel();
+    const isApply = action === 'apply' || action === 'apply_quarantine';
+    const quarantineThirdParty = action === 'apply_quarantine' || (isApply && st.statusData?.status === 'patched_by_other');
     try {
-      const toolAction = action === 'apply' ? 'apply_patch' : 'restore_patch';
-      const res = await callAppTool('app_i18n_manage', { action: toolAction });
+      const toolAction = isApply ? 'apply_patch' : 'restore_patch';
+      const res = await callAppTool('app_i18n_manage', { action: toolAction, quarantineThirdParty });
       showToast(
         res?.message ||
-          (action === 'apply'
+          (isApply
             ? '已启动后台汉化任务，Antigravity 将在约 3~5 秒内短暂重启生效'
             : '已启动后台还原任务，Antigravity 将在约 3~5 秒内短暂重启恢复原版')
       );
       await loadStatus(false);
     } catch (err) {
-      showToast(`${action === 'apply' ? '应用汉化' : '还原原版'}失败：${err.message}`);
+      showToast(`${isApply ? '应用汉化' : '还原原版'}失败：${err.message}`);
     } finally {
       st.busyPatch = false;
       renderStatusPanel();
@@ -662,6 +747,8 @@ export function createI18nModule({
 
     document.getElementById('i18nApplyBtn')?.addEventListener('click', () => openPatchConfirm('apply'));
     document.getElementById('i18nRestoreBtn')?.addEventListener('click', () => openPatchConfirm('restore'));
+    document.getElementById('i18nReplaceThirdPartyBtn')?.addEventListener('click', () => openPatchConfirm('apply_quarantine'));
+    document.getElementById('i18nRestoreFromThirdPartyBtn')?.addEventListener('click', () => openPatchConfirm('restore'));
     document.getElementById('i18nPatchConfirmSubmitBtn')?.addEventListener('click', () => void executeConfirmedPatch());
 
     document.getElementById('i18nRefreshBundleBtn')?.addEventListener('click', () => {
@@ -761,6 +848,14 @@ export function createI18nModule({
       st.syncDrawerOpen = !st.syncDrawerOpen;
       const drawer = document.getElementById('i18nSyncDrawer');
       if (drawer) drawer.dataset.open = String(st.syncDrawerOpen);
+    });
+
+    document.getElementById('i18nSyncPresetMitBtn')?.addEventListener('click', () => {
+      const urlInput = document.getElementById('i18nCommunityUrlInput');
+      if (urlInput) {
+        urlInput.value = 'https://raw.githubusercontent.com/While-Shark/antigravity-zh-cn/main/dict.json';
+      }
+      document.getElementById('i18nSyncRunBtn')?.click();
     });
 
     document.getElementById('i18nSyncRunBtn')?.addEventListener('click', () => {
@@ -928,6 +1023,48 @@ export function createI18nModule({
         { updateReminderEnabled: next },
         next ? '已开启官方更新覆盖后自动提醒' : '已关闭官方更新覆盖提醒'
       );
+    });
+
+    document.getElementById('i18nCollectUntransSwitch')?.addEventListener('click', () => {
+      const next = !Boolean(getI18nConfig().collectUntranslated);
+      void saveI18nConfigPatch(
+        { collectUntranslated: next },
+        next ? '已开启未翻译采集（逛一遍设置页后可复制清单）' : '已关闭未翻译采集'
+      );
+    });
+
+    document.getElementById('i18nCopyUntransBtn')?.addEventListener('click', () => {
+      void (async () => {
+        try {
+          const res = await callAppTool('app_i18n_manage', { action: 'list_untranslated' });
+          const items = Array.isArray(res?.items) ? res.items : [];
+          if (!items.length) {
+            showToast('当前尚未采集到未翻译短语');
+            return;
+          }
+          const payload = JSON.stringify(items, null, 2);
+          if (navigator.clipboard?.writeText) {
+            await navigator.clipboard.writeText(payload);
+            showToast(`已复制 ${items.length} 条未翻译短语 JSON`);
+          } else {
+            showToast(`已采集 ${items.length} 条，文件位于 ~/.context-cache/i18n/untranslated.json`);
+          }
+        } catch (err) {
+          showToast(`读取采集清单失败：${err.message}`);
+        }
+      })();
+    });
+
+    document.getElementById('i18nClearUntransBtn')?.addEventListener('click', () => {
+      void (async () => {
+        try {
+          await callAppTool('app_i18n_manage', { action: 'clear_untranslated' });
+          await refreshUntranslatedCount();
+          showToast('已清空未翻译采集清单');
+        } catch (err) {
+          showToast(`清空失败：${err.message}`);
+        }
+      })();
     });
   }
 

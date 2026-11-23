@@ -9,6 +9,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const BUILTIN_DICT_PATH = path.join(__dirname, 'builtin-dict.json');
+const BUILTIN_PACKS_DIR = path.join(__dirname, 'packs');
 const MAX_COMMUNITY_BYTES = 5 * 1024 * 1024; // 5 MiB
 const SYNC_TIMEOUT_MS = 10_000; // 10s
 const VALID_SCOPES = new Set(['ui', 'menu']);
@@ -114,9 +115,53 @@ function saveLayerDictionary(filePath, i18nDir, data, opts = {}) {
 }
 
 /**
- * Load the built-in curated Simplified Chinese dictionary.
+ * Load the built-in curated Simplified Chinese dictionary from modular domain packs (packs/01..08).
+ * Falls back gracefully to legacy builtin-dict.json if packs/ is absent.
  */
 export function loadBuiltinDictionary() {
+  if (fs.existsSync(BUILTIN_PACKS_DIR)) {
+    const files = fs
+      .readdirSync(BUILTIN_PACKS_DIR)
+      .filter((f) => f.endsWith('.json'))
+      .sort();
+    if (files.length > 0) {
+      const menu = {};
+      const ui = {};
+      const patterns = [];
+      const packStats = [];
+      for (const file of files) {
+        try {
+          const raw = JSON.parse(fs.readFileSync(path.join(BUILTIN_PACKS_DIR, file), 'utf8'));
+          const pMenu = normalizeStringMap(raw?.menu);
+          const pUi = normalizeStringMap(raw?.ui);
+          const pPatterns = normalizePatternList(raw?.patterns);
+          Object.assign(menu, pMenu);
+          Object.assign(ui, pUi);
+          patterns.push(...pPatterns);
+          packStats.push({
+            id: String(raw?.id || file.replace(/\.json$/i, '')),
+            name: String(raw?.name || file.replace(/\.json$/i, '')),
+            description: String(raw?.description || ''),
+            uiCount: Object.keys(pUi).length,
+            menuCount: Object.keys(pMenu).length,
+            patternCount: pPatterns.length,
+            total: Object.keys(pUi).length + Object.keys(pMenu).length,
+          });
+        } catch {
+          // skip malformed pack
+        }
+      }
+      return {
+        version: '1.5.0',
+        glossary: {},
+        menu,
+        ui,
+        patterns,
+        packStats,
+      };
+    }
+  }
+
   const raw = JSON.parse(fs.readFileSync(BUILTIN_DICT_PATH, 'utf8'));
   return {
     version: String(raw?.version || '1.3.0'),
@@ -124,7 +169,28 @@ export function loadBuiltinDictionary() {
     menu: normalizeStringMap(raw?.menu),
     ui: normalizeStringMap(raw?.ui),
     patterns: normalizePatternList(raw?.patterns),
+    packStats: [],
   };
+}
+
+export function readUntranslatedList(options = {}) {
+  const { i18nUntranslatedFile } = getDataPaths(options);
+  const data = readJsonSafe(i18nUntranslatedFile, { items: [], updatedAt: null });
+  const items = Array.isArray(data?.items) ? data.items : [];
+  return {
+    filePath: i18nUntranslatedFile,
+    count: items.length,
+    updatedAt: data?.updatedAt || null,
+    items,
+  };
+}
+
+export function clearUntranslatedList(options = {}) {
+  const { i18nDir, i18nUntranslatedFile } = getDataPaths(options);
+  ensureDir(i18nDir);
+  const next = { items: [], updatedAt: new Date().toISOString() };
+  atomicWriteJson(i18nUntranslatedFile, next);
+  return { ok: true, count: 0, updatedAt: next.updatedAt };
 }
 
 export function loadCustomDictionary(options = {}) {
@@ -206,6 +272,7 @@ function computeStats(builtin, community, custom, mergedUi, mergedMenu, mergedPa
     disabledCount,
     totalActive: Object.keys(mergedUi).length + Object.keys(mergedMenu).length,
     patternCount: mergedPatterns.length,
+    packStats: Array.isArray(builtin.packStats) ? builtin.packStats : [],
   };
 }
 
@@ -275,9 +342,10 @@ export function compileRuntimeBundle(options = {}) {
       brandMode: i18nCfg.brandMode || 'original',
       customBrandText: i18nCfg.customBrandText || 'Antigravity',
       menuLocalizationEnabled: i18nCfg.menuLocalizationEnabled !== false,
+      collectUntranslated: Boolean(i18nCfg.collectUntranslated),
       immunity: i18nCfg.immunity || {},
     },
-    ui: merged.ui,
+    ui: i18nCfg.menuLocalizationEnabled !== false ? { ...merged.menu, ...merged.ui } : merged.ui,
     menu: merged.menu,
     patterns: merged.patterns,
     stats: merged.stats,
@@ -459,10 +527,16 @@ function parseImportedDictionary(raw) {
   const hasGrouped =
     (raw.ui && typeof raw.ui === 'object' && !Array.isArray(raw.ui)) ||
     (raw.menu && typeof raw.menu === 'object' && !Array.isArray(raw.menu)) ||
+    (raw.exact && typeof raw.exact === 'object' && !Array.isArray(raw.exact)) ||
     Array.isArray(raw.patterns);
 
   if (hasGrouped) {
-    Object.assign(ui, normalizeStringMap(raw.ui));
+    const exactMap = normalizeStringMap(raw.exact);
+    // Avoid importing isolated tier words that corrupt model selector names (e.g. "Gemini 4 Neon High")
+    delete exactMap.High;
+    delete exactMap.Medium;
+    delete exactMap.Low;
+    Object.assign(ui, exactMap, normalizeStringMap(raw.ui));
     Object.assign(menu, normalizeStringMap(raw.menu));
     patterns = normalizePatternList(raw.patterns);
     if (raw.disabled && typeof raw.disabled === 'object') {
@@ -471,7 +545,7 @@ function parseImportedDictionary(raw) {
     }
     // Also collect any extra nested section objects (e.g. community packs with ui + sidebar)
     for (const [k, v] of Object.entries(raw)) {
-      if (k === 'ui' || k === 'menu' || k === 'patterns' || k === 'disabled' || k === 'glossary') continue;
+      if (k === 'ui' || k === 'menu' || k === 'exact' || k === 'patterns' || k === 'disabled' || k === 'glossary' || k.startsWith('_')) continue;
       if (v && typeof v === 'object' && !Array.isArray(v)) {
         collectNestedStrings(v, ui);
       }

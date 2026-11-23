@@ -1,0 +1,87 @@
+{
+  "id": "04-settings-models-quota",
+  "name": "M4 设置·模型与额度",
+  "description": "AI Credits、编排/执行模型设置、Gemini 与 Claude/GPT 5小时/周额度",
+  "menu": {},
+  "ui": {
+    "AI Credits": "AI 积分",
+    "Use AI Credits": "使用 AI 积分",
+    "Models & Usage": "模型与用量",
+    "Manage your model quota and credits.": "管理你的模型额度与 AI 积分。",
+    "Model Credits": "模型积分",
+    "Enable AI Credit Overages": "启用 AI 积分超额续用",
+    "You can upgrade to a Google AI Ultra plan to receive higher rate limits.": "升级至 Google AI Ultra 套餐可获得更高的速率与额度上限。",
+    "When toggled on, Antigravity will use your AI credits to fulfill model requests once you're out of model quota. Antigravity will always use your model quota first before using AI credits.": "开启后，当模型额度用尽时，Antigravity 将使用你的 AI 积分继续响应模型请求。系统始终优先消耗模型额度，再使用 AI 积分。",
+    "Orchestrator Settings": "编排器设置",
+    "Choose the models Orchestrator uses. A larger, smarter orchestrator model with a faster, cheaper executor gives high quality for fewer tokens.": "选择编排器使用的模型组合。用更强大聪明的编排模型搭配更快更省的执行模型，可在更少 Token 下获得更高质量。",
+    "Orchestrator Model": "编排模型",
+    "Plans the work, makes design decisions, and reviews the result. Pick a top-tier model. You can also pick one per conversation from the Orchestrator row in the model menu.": "负责规划任务、做出设计决策并审查最终结果，建议选择顶级旗舰模型。你也可以在对话的模型菜单「编排器」行中按会话单独指定。",
+    "Executor Model": "执行模型",
+    "Carries out the plan: searches, edits, builds, and tests. Pick a faster, cheaper model.": "负责落地执行计划：代码搜索、编辑、构建与测试，建议选择速度更快、成本更低的模型。",
+    "Gemini Models": "Gemini 模型",
+    "Claude and GPT models": "Claude 与 GPT 模型",
+    "Claude and GPT Models": "Claude 与 GPT 模型",
+    "Weekly Limit Remaining": "每周剩余额度",
+    "Five Hour Limit Remaining": "5 小时剩余额度",
+    "5-Hour Limit Remaining": "5 小时剩余额度",
+    "Model Quota": "模型额度",
+    "Quota & Usage": "额度与用量",
+    "You have used all of your weekly limit.": "你已用完本周额度。",
+    "You have used all of your 5-hour limit.": "你已用完 5 小时窗口额度。",
+    "Refresh quota": "刷新额度",
+    "Model Menu": "模型菜单",
+    "Reasoning Effort": "推理强度",
+    "Thinking Budget": "思考预算",
+    "Model": "模型",
+    "Models": "模型",
+    "Model Selection": "模型选择",
+    "Select Model": "选择模型",
+    "Default Model": "默认模型",
+    "Switch Model": "切换模型",
+    "Thinking Effort": "思考深度",
+    "Context Window": "上下文窗口",
+    "Thinking": "思考中...",
+    "Thinking...": "正在思考...",
+    "Quota": "配额",
+    "Remaining Quota": "剩余配额",
+    "Token Usage": "Token 用量",
+    "Input Tokens": "输入 Token",
+    "Output Tokens": "输出 Token",
+    "Cached Tokens": "缓存命中 Token",
+    "Total Tokens": "总 Token 数",
+    "Choose the default model for new conversations.": "选择新建对话时默认使用的模型。",
+    "Effort Level": "推理强度"
+  },
+  "patterns": [
+    {
+      "regex": "^You have used some of your weekly limit, it will fully refresh in (\\d+)\\s+days?,\\s*(\\d+)\\s+hours?\\.?$",
+      "flags": "i",
+      "replace": "已使用部分每周额度，将在 $1 天 $2 小时后完全重置。"
+    },
+    {
+      "regex": "^You have used some of your weekly limit, it will fully refresh in (\\d+)\\s+hours?,\\s*(\\d+)\\s+minutes?\\.?$",
+      "flags": "i",
+      "replace": "已使用部分每周额度，将在 $1 小时 $2 分钟后完全重置。"
+    },
+    {
+      "regex": "^You have used some of your 5-hour limit, it will fully refresh in (\\d+)\\s+hours?,\\s*(\\d+)\\s+minutes?\\.?$",
+      "flags": "i",
+      "replace": "已使用部分 5 小时额度，将在 $1 小时 $2 分钟后完全重置。"
+    },
+    {
+      "regex": "^You have used some of your 5-hour limit, it will fully refresh in (\\d+)\\s+minutes?\\.?$",
+      "flags": "i",
+      "replace": "已使用部分 5 小时额度，将在 $1 分钟后完全重置。"
+    },
+    {
+      "regex": "^You have used all of your (weekly|5-hour) limit, it will fully refresh in (.+)\\.?$",
+      "flags": "i",
+      "replace": "已用尽当前周期额度，将在 $2 后完全重置。"
+    },
+    {
+      "regex": "^Your Plan:\\s*(.+)$",
+      "flags": "i",
+      "replace": "当前套餐：$1"
+    }
+  ]
+}

@@ -11,6 +11,13 @@ const SCOPE_LABEL = {
   builtin: '内置',
 };
 
+const MCP_MODE_LABEL = {
+  eager: '常驻加载',
+  deferred: '按需懒加载',
+  configured: '已配置',
+  disabled: '已停用',
+};
+
 const CATEGORY_LABEL = {
   secret: '隐私安全',
   mcp: 'MCP 体检',
@@ -248,7 +255,7 @@ export function createGovernanceModule({
                 <div class="flex flex-wrap items-center gap-1.5">
                   <span class="text-sm font-medium text-fg mono-num truncate">${esc(m.name)}</span>
                   <span class="agy-pill text-[11px]">${m.scope === 'global' ? '全局' : `插件 · ${esc(m.pluginId)}`}</span>
-                  <span class="agy-pill mono-num text-[11px]">${esc(m.mode)}</span>
+                  <span class="agy-pill text-[11px]">${esc(MCP_MODE_LABEL[m.mode] || m.mode)}</span>
                   ${m.tokens > 0 ? `<span class="agy-pill mono-num text-[11px]">~${fmtK(m.tokens)}t</span>` : ''}
                 </div>
                 <div class="text-xs text-muted mono-num truncate">
@@ -326,7 +333,7 @@ export function createGovernanceModule({
           priority: h.scope === 'global' ? 2 : 3,
           scope: SCOPE_LABEL[h.scope] || h.scope,
           name: `${h.event}`,
-          sub: `${h.sourceLabel}${h.timeout ? ` · timeout ${h.timeout}s` : ''}`,
+          sub: `${h.sourceLabel}${h.timeout ? ` · 超时 ${h.timeout}s` : ''}`,
           tokens: 0,
           active: h.active,
           shadowedBy: null,

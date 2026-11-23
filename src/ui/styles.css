@@ -399,7 +399,8 @@ button, input, textarea {
 .console-top-bar {
   display: none;
   align-items: center;
-  justify-content: center;
+  justify-content: space-between;
+  gap: 8px;
   padding: 8px 12px 6px;
   background: var(--background);
   border-bottom: 1px solid var(--border);
@@ -408,9 +409,10 @@ button, input, textarea {
 
 .console-top-switcher {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 4px;
-  width: 100%;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 3px;
+  flex: 1 1 auto;
+  min-width: 0;
   padding: 3px;
   border-radius: 10px;
   background: color-mix(in srgb, var(--foreground) 4.5%, transparent);
@@ -419,15 +421,21 @@ button, input, textarea {
 
 .console-top-btn {
   height: 28px;
-  padding: 0 10px;
+  padding: 0 6px;
   border-radius: 7px;
   border: 1px solid transparent;
   background: transparent;
   color: var(--muted-foreground);
-  font-size: 12.5px;
+  font-size: 12px;
   font-weight: 500;
   display: inline-flex;
   align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-width: 0;
+  cursor: pointer;
+  transition: background 140ms ease, color 140ms ease, border-color 140ms ease;
+}
   justify-content: center;
   gap: 6px;
   min-width: 0;
@@ -1979,18 +1987,39 @@ body.window-collapsed .win-resize-e {
 .win-resize-se { bottom: 0; right: 0; width: 10px; height: 10px; cursor: nwse-resize; }
 
 /* ==================== v1.4.0 Governance Module & Monitor UX Polish ==================== */
-.console-top-bar {
-  display: flex;
+.topbar-popout-btn {
+  height: 36px;
+  padding: 0 10px;
+  border-radius: 10px;
+  display: inline-flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 8px;
+  gap: 5px;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
-.topbar-popout-btn,
 .quick-popout-btn {
   display: inline-flex;
   align-items: center;
   gap: 5px;
   white-space: nowrap;
+}
+@media (max-width: 420px) {
+  .console-top-bar {
+    gap: 6px;
+    padding: 7px 10px 6px;
+  }
+  .console-top-btn {
+    padding: 0 4px;
+    font-size: 11.5px;
+    gap: 2px;
+  }
+  .console-top-btn svg {
+    display: none;
+  }
+  .topbar-popout-btn {
+    padding: 0 8px;
+    font-size: 11.5px;
+  }
 }
 .help-tip-wrap {
   position: relative;
@@ -2096,7 +2125,16 @@ body.window-collapsed .win-resize-e {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 16px;
+  padding: 12px;
+}
+.gov-modal-backdrop .modal-card {
+  width: 100%;
+  max-width: min(560px, calc(100vw - 24px));
+  max-height: calc(100vh - 28px);
+  overflow-y: auto;
+}
+.gov-modal-backdrop .modal-card.wide {
+  max-width: min(720px, calc(100vw - 24px));
 }
 .gov-modal-backdrop.hidden {
   display: none;
@@ -2118,6 +2156,96 @@ body.window-collapsed .win-resize-e {
 }
 .text-danger {
   color: var(--error);
+}
+
+/* ==================== v1.5.0 Appearance & Wallpaper Module ==================== */
+.wp-presets-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 10px;
+}
+.wp-preset-card {
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--card);
+  overflow: hidden;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 150ms ease, transform 150ms ease;
+}
+.wp-preset-card:hover {
+  border-color: var(--primary);
+  transform: translateY(-1px);
+}
+.wp-preset-card[data-active="true"] {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary) 22%, transparent);
+}
+.wp-preset-swatch {
+  display: block;
+  width: 100%;
+  height: 54px;
+}
+.wp-preset-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+}
+.wp-lib-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
+  gap: 10px;
+}
+.wp-lib-item {
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--card);
+  overflow: hidden;
+}
+.wp-lib-item[data-active="true"] {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary) 20%, transparent);
+}
+.wp-lib-thumb {
+  position: relative;
+  height: 84px;
+  background-color: var(--background);
+  background-size: cover;
+  background-position: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.wp-active-tag {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+  background: var(--primary);
+  color: #fff;
+}
+.wp-slider-row {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.wp-range {
+  width: 100%;
+  accent-color: var(--primary);
+  cursor: pointer;
+}
+@container agy-shell (max-width: 380px) {
+  .wp-presets-grid,
+  .wp-lib-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

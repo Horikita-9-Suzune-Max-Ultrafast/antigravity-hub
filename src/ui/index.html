@@ -105,7 +105,7 @@
 
   <div id="appShell">
     <!-- 宽屏左侧窄图标导航栏（> 680px 显示） -->
-    <aside id="consoleRail" class="console-rail" aria-label="Console 模块导航">
+    <aside id="consoleRail" class="console-rail" aria-label="Antigravity Hub 模块导航">
       <div class="console-rail-top">
         <div class="console-rail-brand" title="Antigravity Hub">
           <svg width="22" height="22" viewBox="0 0 128 128" fill="none">
@@ -124,13 +124,22 @@
           <span class="console-rail-lbl">监控</span>
         </button>
 
-        <button type="button" class="console-rail-btn" data-module="governance" data-active="false" title="生态治理与 Harness 体检">
+        <button type="button" class="console-rail-btn" data-module="governance" data-active="false" title="生态治理与离线体检">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round">
             <path d="M12 3l8 4v5c0 5-3.5 8.5-8 9-4.5-.5-8-4-8-9V7l8-4z"/>
             <path d="M9 12l2 2 4-4"/>
           </svg>
           <span class="console-rail-lbl">治理</span>
           <span id="railGovAlertDot" class="console-rail-dot hidden" title="生态体检发现需要处理的告警"></span>
+        </button>
+
+        <button type="button" class="console-rail-btn" data-module="appearance" data-active="false" title="外观壁纸（零侵入热加载）">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="4" width="18" height="16" rx="3"/>
+            <circle cx="9" cy="10" r="1.5"/>
+            <path d="M21 15l-4.5-4.5L9 18"/>
+          </svg>
+          <span class="console-rail-lbl">壁纸</span>
         </button>
 
         <button type="button" class="console-rail-btn" data-module="i18n" data-active="false" title="界面汉化">
@@ -174,8 +183,16 @@
               <path d="M12 3l8 4v5c0 5-3.5 8.5-8 9-4.5-.5-8-4-8-9V7l8-4z"/>
               <path d="M9 12l2 2 4-4"/>
             </svg>
-            <span class="truncate">生态治理</span>
+            <span class="truncate">治理</span>
             <span id="topBarGovDot" class="dot-sm hidden" style="width:6px;height:6px;background:var(--danger);"></span>
+          </button>
+          <button type="button" class="console-top-btn" data-module="appearance" data-active="false">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="shrink-0">
+              <rect x="3" y="4" width="18" height="16" rx="3"/>
+              <circle cx="9" cy="10" r="1.5"/>
+              <path d="M21 15l-4.5-4.5L9 18"/>
+            </svg>
+            <span class="truncate">壁纸</span>
           </button>
           <button type="button" class="console-top-btn" data-module="i18n" data-active="false">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="shrink-0">
@@ -542,7 +559,7 @@
         <header class="agy-header space-y-2.5">
           <div class="header-top">
             <div class="flex items-center gap-2 min-w-0">
-              <span class="text-sm font-semibold text-fg truncate">生态治理与 Harness 体检</span>
+              <span class="text-sm font-semibold text-fg truncate">生态治理</span>
               <span id="govScorePill" class="agy-pill i18n-status-pill mono-num shrink-0" data-tone="neutral">检测中</span>
             </div>
             <div class="flex items-center gap-2 shrink-0">
@@ -619,7 +636,7 @@
 
             <div class="agy-group overflow-hidden">
               <div class="px-5 py-3.5 border-b flex items-center justify-between gap-2">
-                <span class="text-sm font-semibold">MCP Servers（全局支持外置隔离停用 · 插件内置随父插件控制）</span>
+                <span class="text-sm font-semibold">MCP 服务（全局支持外置隔离停用 · 插件内置随父插件控制）</span>
               </div>
               <div id="govMcpList" class="divide-y"></div>
             </div>
@@ -629,7 +646,7 @@
           <section id="gov-panel-harness" class="hidden space-y-4 panel-enter">
             <div class="agy-group overflow-hidden">
               <div class="px-5 py-3.5 border-b flex flex-wrap items-center justify-between gap-2">
-                <span class="text-sm font-semibold">Effective Harness 生效栈（按优先级 P1 工作区 → P4 内置）</span>
+                <span class="text-sm font-semibold">生效优先级栈（P1 工作区 → P4 内置）</span>
                 <div class="flex items-center gap-1.5">
                   <button type="button" class="agy-btn agy-btn-secondary agy-btn-sm text-xs" data-gov-harness-filter="all" data-active="true">全部</button>
                   <button type="button" class="agy-btn agy-btn-secondary agy-btn-sm text-xs" data-gov-harness-filter="rules">Rules</button>
@@ -668,7 +685,172 @@
         </main>
       </div>
 
-      <!-- ==================== 模块 3：Antigravity 界面汉化 ==================== -->
+      <!-- ==================== 模块 3：外观壁纸（零侵入热加载） ==================== -->
+      <div id="module-appearance" class="console-module hidden">
+        <header class="agy-header space-y-2.5">
+          <div class="header-top">
+            <div class="flex items-center gap-2 min-w-0">
+              <span class="text-sm font-semibold text-fg truncate">外观壁纸</span>
+              <span id="appStatusPill" class="agy-pill i18n-status-pill mono-num shrink-0" data-tone="neutral">已关闭</span>
+            </div>
+            <div class="flex items-center gap-2 shrink-0">
+              <button id="appMasterSwitch" type="button" class="agy-switch" role="switch" aria-checked="false" data-on="false" title="启用或关闭外观壁纸（无需重启，秒级热生效）">
+                <span class="agy-switch-thumb"></span>
+              </button>
+              <button id="appRefreshBtn" type="button" title="刷新壁纸状态" class="agy-btn agy-btn-secondary agy-icon-btn shrink-0">
+                <svg id="appRefreshSvg" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6">
+                  <path d="M13.5 8a5.5 5.5 0 1 1-1.35-3.6" stroke-linecap="round"/>
+                  <path d="M13.5 2.4v2.9h-2.9" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+              </button>
+              <button id="appSettingsBtn" type="button" title="插件设置" class="agy-btn agy-btn-secondary agy-icon-btn shrink-0">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" class="gear-svg">
+                  <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/>
+                  <circle cx="12" cy="12" r="3"/>
+                </svg>
+              </button>
+            </div>
+          </div>
+
+          <div class="pt-0.5">
+            <div class="seg-nav seg-nav-full" id="appSegNav" role="tablist">
+              <div class="seg-indicator" id="appSegIndicator"></div>
+              <button type="button" class="seg-tab" role="tab" data-app-tab="gallery" data-active="true">壁纸与预设</button>
+              <button type="button" class="seg-tab" role="tab" data-app-tab="tuning" data-active="false">质感与护眼</button>
+              <button type="button" class="seg-tab" role="tab" data-app-tab="rotation" data-active="false">轮播与急救</button>
+            </div>
+          </div>
+        </header>
+
+        <main class="agy-main space-y-5">
+          <div id="appRuntimeNotice" class="agy-group p-4 flex flex-wrap items-center justify-between gap-2 hidden" style="border-color: var(--warning);">
+            <div class="text-xs text-fg leading-relaxed">
+              尚未注入 Hub 客户端热加载运行时。前往「界面汉化」执行一次安全注入后，即可免重启热切换壁纸（与汉化完全解耦）。
+            </div>
+            <button id="appGoPatchBtn" type="button" class="agy-btn agy-btn-primary agy-btn-sm shrink-0">前往注入运行时</button>
+          </div>
+
+          <!-- 子页 1：壁纸与预设 -->
+          <section id="app-panel-gallery" class="space-y-5 panel-enter">
+            <div class="agy-group p-5 space-y-3">
+              <div class="flex flex-wrap items-center justify-between gap-2">
+                <span class="text-sm font-semibold">原创纯 CSS 氛围预设（零版权风险 · 开箱即用）</span>
+              </div>
+              <div id="appPresetsGrid" class="wp-presets-grid"></div>
+            </div>
+
+            <div class="agy-group overflow-hidden">
+              <div class="px-5 py-3.5 border-b flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <div class="text-sm font-semibold">本地壁纸库（外置存储 · 单图上限 15 MiB）</div>
+                  <div class="text-[11px] text-muted">支持 PNG / JPG / WebP / AVIF / SVG，导入至 ~/.context-cache/wallpapers/，绝不写入业务仓库</div>
+                </div>
+                <label class="agy-btn agy-btn-primary agy-btn-sm cursor-pointer shrink-0">
+                  <span>+ 导入本地图片</span>
+                  <input id="appImportFileInput" type="file" accept=".png,.jpg,.jpeg,.webp,.avif,.svg,image/*" class="hidden" />
+                </label>
+              </div>
+              <div id="appLibraryGrid" class="wp-lib-grid p-4"></div>
+            </div>
+          </section>
+
+          <!-- 子页 2：质感与护眼调参 -->
+          <section id="app-panel-tuning" class="hidden space-y-5 panel-enter">
+            <div class="agy-group p-5 space-y-4">
+              <div class="text-sm font-semibold">实时视觉参数（拖动即刻热更新，无需重启）</div>
+              <div class="space-y-3 text-xs">
+                <div class="wp-slider-row">
+                  <div class="flex justify-between"><span class="text-muted">壁纸不透明度</span><span id="appOpacityVal" class="mono-num font-medium">24%</span></div>
+                  <input id="appOpacityRange" type="range" min="5" max="85" value="24" class="wp-range" />
+                </div>
+                <div class="wp-slider-row">
+                  <div class="flex justify-between"><span class="text-muted">背景高斯模糊</span><span id="appBlurVal" class="mono-num font-medium">2px</span></div>
+                  <input id="appBlurRange" type="range" min="0" max="24" value="2" class="wp-range" />
+                </div>
+                <div class="wp-slider-row">
+                  <div class="flex justify-between"><span class="text-muted">自适应明暗遮罩</span><span id="appScrimVal" class="mono-num font-medium">42%</span></div>
+                  <input id="appScrimRange" type="range" min="0" max="85" value="42" class="wp-range" />
+                </div>
+                <div class="wp-slider-row">
+                  <div class="flex justify-between"><span class="text-muted">面板不透明度（毛玻璃透出控制）</span><span id="appGlassVal" class="mono-num font-medium">86%</span></div>
+                  <input id="appGlassRange" type="range" min="55" max="98" value="86" class="wp-range" />
+                </div>
+              </div>
+
+              <div class="pt-3 border-t space-y-3 text-xs">
+                <div class="flex items-center justify-between gap-3">
+                  <span class="text-muted">画面填充方式</span>
+                  <select id="appFitSelect" class="agy-native-select">
+                    <option value="cover">铺满裁剪</option>
+                    <option value="contain">完整适应</option>
+                    <option value="center">原始居中</option>
+                  </select>
+                </div>
+                <div class="flex items-center justify-between gap-3">
+                  <div>
+                    <div class="font-medium text-fg">代码与终端可读性护盾（推荐开启）</div>
+                    <div class="text-[11px] text-muted">保持 Monaco 编辑器、代码块、终端与弹窗高对比度，绝不糊字</div>
+                  </div>
+                  <button id="appReadabilitySwitch" type="button" class="agy-switch" role="switch" aria-checked="true" data-on="true"><span class="agy-switch-thumb"></span></button>
+                </div>
+                <div class="flex items-center justify-between gap-3">
+                  <div>
+                    <div class="font-medium text-fg">深浅主题独立绑定壁纸</div>
+                    <div class="text-[11px] text-muted">开启后可在壁纸库卡片点「深 / 浅」分别为深色和浅色主题指定壁纸</div>
+                  </div>
+                  <button id="appSeparateThemeSwitch" type="button" class="agy-switch" role="switch" aria-checked="false" data-on="false"><span class="agy-switch-thumb"></span></button>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <!-- 子页 3：轮播、只读文件夹与急救 -->
+          <section id="app-panel-rotation" class="hidden space-y-5 panel-enter">
+            <div class="agy-group p-5 space-y-4">
+              <div class="text-sm font-semibold">自动轮播与本地文件夹只读扫描</div>
+              <div class="space-y-3 text-xs">
+                <div class="flex flex-wrap items-center justify-between gap-2">
+                  <span class="text-muted">轮播模式</span>
+                  <select id="appRotationSelect" class="agy-native-select">
+                    <option value="off">关闭自动轮播</option>
+                    <option value="startup">每次启动随机切换</option>
+                    <option value="interval">按时间间隔自动切换</option>
+                  </select>
+                </div>
+                <div class="flex flex-wrap items-center justify-between gap-2">
+                  <span class="text-muted">定时切换间隔</span>
+                  <select id="appRotationMinSelect" class="agy-native-select">
+                    <option value="15">每 15 分钟</option>
+                    <option value="30">每 30 分钟</option>
+                    <option value="60">每 1 小时</option>
+                    <option value="240">每 4 小时</option>
+                  </select>
+                </div>
+                <div class="space-y-1.5 pt-1">
+                  <div class="text-muted">本地壁纸文件夹路径（严格 100% 只读，绝不改动原图）</div>
+                  <div class="flex flex-wrap items-center gap-2">
+                    <input id="appFolderInput" type="text" placeholder="例如：D:\Pictures\Wallpapers（留空仅使用壁纸库）" class="agy-input flex-1 mono-num" style="min-width: min(180px, 100%);" />
+                    <button id="appScanFolderBtn" type="button" class="agy-btn agy-btn-secondary shrink-0">只读扫描并保存</button>
+                  </div>
+                  <div id="appFolderMeta" class="text-[11px] text-muted"></div>
+                </div>
+                <div class="flex flex-wrap items-center gap-2 pt-2 border-t">
+                  <button id="appNextWallpaperBtn" type="button" class="agy-btn agy-btn-primary">立即换下一张</button>
+                  <button id="appEmergencyOffBtn" type="button" class="agy-btn agy-btn-secondary">一键急救关闭壁纸</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="agy-group p-4 text-xs text-muted space-y-1.5">
+              <div class="font-semibold text-fg">零事故安全逃生舱</div>
+              <div>如遇壁纸参数过亮/过暗导致界面不便操作，可在任意终端运行以下命令秒级关闭，无需重启客户端：</div>
+              <div class="agy-subtle px-3 py-2 mono-num text-fg">node --no-warnings bin/ctx.mjs wallpaper off</div>
+            </div>
+          </section>
+        </main>
+      </div>
+
+      <!-- ==================== 模块 4：Antigravity 界面汉化 ==================== -->
       <div id="module-i18n" class="console-module hidden">
         <header class="agy-header i18n-header space-y-2.5">
           <div class="header-top">
@@ -714,6 +896,18 @@
                   </div>
                   <div id="i18nStatusTitle" class="text-base font-semibold text-fg">正在检测 Antigravity 客户端状态...</div>
                   <div id="i18nStatusDesc" class="text-xs text-muted leading-relaxed">仅通过本地零依赖 ASAR 补丁与外置词典实现，随时可无损还原原版。</div>
+                </div>
+              </div>
+
+              <div id="i18nThirdPartyPlanCard" class="hidden agy-subtle p-3.5 space-y-2.5" style="border: 1px solid color-mix(in srgb, var(--warning) 45%, var(--border));">
+                <div class="flex flex-wrap items-center justify-between gap-2">
+                  <span class="text-xs font-semibold text-fg">第三方补丁处理对策</span>
+                  <span id="i18nThirdPartyBadge" class="agy-pill mono-num text-[11px]"></span>
+                </div>
+                <div id="i18nThirdPartyPlanDesc" class="text-xs text-muted leading-relaxed"></div>
+                <div class="flex flex-wrap items-center gap-2 pt-0.5">
+                  <button id="i18nReplaceThirdPartyBtn" type="button" class="agy-btn agy-btn-primary agy-btn-sm">隔离替换第三方补丁并应用 Hub 汉化</button>
+                  <button id="i18nRestoreFromThirdPartyBtn" type="button" class="agy-btn agy-btn-secondary agy-btn-sm">仅移除第三方补丁，还原原版</button>
                 </div>
               </div>
 
@@ -772,6 +966,7 @@
                   <span class="agy-pill mono-num">自定义 0</span>
                   <span class="agy-pill mono-num">已禁用 0</span>
                 </div>
+                <div id="i18nPackStats" class="flex flex-wrap items-center gap-1.5"></div>
 
                 <div class="flex flex-wrap items-center gap-2">
                   <button id="i18nAddEntryBtn" type="button" class="agy-btn agy-btn-primary">+ 新增/覆盖词条</button>
@@ -787,6 +982,10 @@
                       <div class="flex flex-wrap items-center gap-2">
                         <input id="i18nCommunityUrlInput" type="url" placeholder="https://example.com/antigravity-zh-cn.json" class="agy-input flex-1 mono-num" style="min-width: min(200px, 100%);" />
                         <button id="i18nSyncRunBtn" type="button" class="agy-btn agy-btn-primary shrink-0">拉取并同步</button>
+                      </div>
+                      <div class="flex flex-wrap items-center justify-between gap-2 pt-1 border-t">
+                        <span class="text-[11px] text-muted">推荐 MIT 社区源：<span class="mono-num">While-Shark/antigravity-zh-cn</span>（1320+ 词条）</span>
+                        <button id="i18nSyncPresetMitBtn" type="button" class="agy-btn agy-btn-secondary agy-btn-sm text-xs shrink-0">一键同步该 MIT 社区词典</button>
                       </div>
                     </div>
                   </div>
@@ -893,6 +1092,22 @@
                     <div class="text-xs text-muted mt-0.5">检测到 Antigravity 自动升级覆盖补丁时，在控制台顶部显示一键重打横幅</div>
                   </div>
                   <button id="i18nUpdateRemindSwitch" type="button" class="agy-switch" data-on="true"><span class="agy-switch-thumb"></span></button>
+                </div>
+
+                <div class="px-5 py-3.5 flex items-center justify-between gap-4">
+                  <div class="min-w-0">
+                    <div class="text-sm font-medium">未翻译英文采集（开发辅助 · 默认关闭）</div>
+                    <div class="text-xs text-muted mt-0.5">开启后浏览设置页等界面时，自动去重采集未命中的短 UI 英文至本机 <span class="mono-num">untranslated.json</span>（跳过对话正文与代码块）</div>
+                  </div>
+                  <button id="i18nCollectUntransSwitch" type="button" class="agy-switch" data-on="false"><span class="agy-switch-thumb"></span></button>
+                </div>
+
+                <div class="px-5 py-3 flex flex-wrap items-center justify-between gap-2 text-xs">
+                  <span id="i18nUntransCountLabel" class="text-muted mono-num">已采集 0 条未翻译短语</span>
+                  <div class="flex items-center gap-2">
+                    <button id="i18nCopyUntransBtn" type="button" class="agy-btn agy-btn-secondary agy-btn-sm text-xs">复制采集清单 JSON</button>
+                    <button id="i18nClearUntransBtn" type="button" class="agy-btn agy-btn-secondary agy-btn-sm text-xs">清空清单</button>
+                  </div>
                 </div>
               </div>
             </div>

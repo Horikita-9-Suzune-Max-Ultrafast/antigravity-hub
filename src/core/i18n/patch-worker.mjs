@@ -249,7 +249,8 @@ function performApply(jobSpec) {
 
   if (hasPreload) {
     const origPreload = readAsarFile(baseAsarPath, 'dist/preload.js').toString('utf8');
-    const nextPreload = injectMarkerBlock(origPreload, 'PRELOAD_RUNTIME', buildPreloadLoaderSnippet());
+    // Inline full fail-open runtime directly into dist/preload.js so Electron sandbox:true preloads execute it reliably
+    const nextPreload = injectMarkerBlock(origPreload, 'PRELOAD_RUNTIME', rendererSrc);
     setMap.set('dist/preload.js', Buffer.from(nextPreload, 'utf8'));
   }
 
@@ -276,6 +277,24 @@ function performApply(jobSpec) {
 
   const patchInfo = patchAsarStreaming(baseAsarPath, asarPath, { set: setMap });
 
+  const quarantinedBackups = [];
+  if (jobSpec.quarantineThirdParty && backupPath && fs.existsSync(backupPath)) {
+    try {
+      const qDir = path.join(path.dirname(stateFilePath || bundleFilePath || asarPath), 'quarantine');
+      ensureDir(qDir);
+      const backupsNow = scanBackups(resourcesDir);
+      for (const b of backupsNow) {
+        if (b.kind !== 'third_party' || !fs.existsSync(b.path)) continue;
+        const dest = path.join(qDir, `${Date.now()}-${b.name}`);
+        fs.copyFileSync(b.path, dest);
+        fs.unlinkSync(b.path);
+        quarantinedBackups.push({ name: b.name, archivedTo: dest });
+      }
+    } catch {
+      // Non-fatal: never fail an already succeeded patch
+    }
+  }
+
   if (stateFilePath) {
     ensureDir(path.dirname(stateFilePath));
     atomicWriteJson(stateFilePath, {
@@ -286,6 +305,7 @@ function performApply(jobSpec) {
       installDir: installDir || path.dirname(resourcesDir),
       backupPath,
       backupSource,
+      quarantinedBackups,
       patchVersion: PATCH_VERSION,
       bundleHash,
     });

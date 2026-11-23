@@ -117,17 +117,18 @@ test('MCP App Stdio Server serves ui:// single-file HTML, exposes 5 model + 8 ap
     assert.ok(scriptMatch && scriptMatch[1].length > 1000, 'Inline script must exist');
     assert.doesNotThrow(() => new Function(scriptMatch[1]), 'Inline script must be syntactically valid JavaScript');
 
-    // 3. tools/list — verify exact 5 model-visible + 9 app-only isolation
+    // 3. tools/list — verify exact 5 model-visible + 10 app-only isolation
     const toolsResp = await client.request('tools/list');
     const tools = toolsResp.result.tools;
-    assert.equal(tools.length, 14);
+    assert.equal(tools.length, 15);
 
     const modelVisible = tools.filter((t) => t._meta?.ui?.visibility?.includes('model'));
     const appOnly = tools.filter((t) => JSON.stringify(t._meta?.ui?.visibility) === JSON.stringify(['app']));
     assert.equal(modelVisible.length, 5);
-    assert.equal(appOnly.length, 9);
+    assert.equal(appOnly.length, 10);
     assert.ok(appOnly.some((t) => t.name === 'app_i18n_manage'));
     assert.ok(appOnly.some((t) => t.name === 'app_governance_manage'));
+    assert.ok(appOnly.some((t) => t.name === 'app_appearance_manage'));
 
     const openMon = tools.find((t) => t.name === 'ctx_open_monitor');
     assert.equal(openMon._meta.ui.resourceUri, 'ui://context-cache/dashboard.html');

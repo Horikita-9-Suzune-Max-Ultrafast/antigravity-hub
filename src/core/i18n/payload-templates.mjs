@@ -81,7 +81,7 @@ export function buildMainLoaderSnippet() {
  * - Translates text nodes and placeholder / title / aria-label / data-tooltip attributes.
  * - Enforces physical immunity (codeBlocks, inputs, terminal, filePaths, customSelectors) and brandMode.
  */
-export function buildRendererRuntimeSource(bundleSnapshot, bundleFilePath = '') {
+export function buildRendererRuntimeSource(bundleSnapshot, bundleFilePath = '', appearanceFilePath = '') {
   const snapshotJson = serializeJsValue(
     bundleSnapshot || {
       version: 1,
@@ -103,6 +103,7 @@ export function buildRendererRuntimeSource(bundleSnapshot, bundleFilePath = '') 
     }
   );
   const bundlePathJson = serializeJsValue(String(bundleFilePath || ''));
+  const appearancePathJson = serializeJsValue(String(appearanceFilePath || ''));
 
   return `/* Antigravity Hub i18n Renderer Runtime (auto-generated, fail-open) */
 (function () {
@@ -241,6 +242,7 @@ export function buildRendererRuntimeSource(bundleSnapshot, bundleFilePath = '') 
         textSelectors.push('input', 'textarea', '[contenteditable="true"]', '[contenteditable=""]');
       }
 
+      state.config = cfg;
       state.exactMap = exact;
       state.patterns = compiledPatterns;
       state.brandMode = brandMode;
@@ -377,6 +379,45 @@ export function buildRendererRuntimeSource(bundleSnapshot, bundleFilePath = '') 
       return false;
     }
 
+    var MODEL_NAME_RE = /\\b(Gemini|Claude|GPT|Opus|Sonnet|Haiku|Neon|Hydrogen|DeepSeek|Llama)\\b/i;
+    var TIER_WORD_RE = /^(High|Medium|Low|Fast|Pro|Flash|Max|Mini)$/i;
+    var UNTRANS_SKIP_RE = /(https?:\\/\\/|@|[A-Za-z]:\\\\|^\\/|^\\.|\\bsk-|\\bBearer\\b|\\bghp_|\\bAIza|[{}<>\\[\\]=;]|^\\d[\\d.,:%\\s/-]*$)/;
+    var pendingUntrans = [];
+    var seenUntrans = new Set();
+    var flushUntransTimer = null;
+
+    function flushUntranslated() {
+      flushUntransTimer = null;
+      if (!pendingUntrans.length) return;
+      var batch = pendingUntrans.splice(0, 60);
+      try {
+        var ipcR = typeof require === 'function' ? require('electron').ipcRenderer : null;
+        if (ipcR && typeof ipcR.invoke === 'function') {
+          ipcR.invoke('agy-hub:record-untranslated', batch).catch(function () {});
+        }
+      } catch (_) {}
+    }
+
+    function maybeCollectUntranslated(rawVal, parentEl) {
+      try {
+        if (!state.config || state.config.collectUntranslated !== true) return;
+        if (!rawVal || typeof rawVal !== 'string') return;
+        var t = rawVal.trim();
+        if (t.length < 2 || t.length > 140) return;
+        if (!/[A-Za-z]{2,}/.test(t) || /[\\u4e00-\\u9fa5]/.test(t)) return;
+        if (UNTRANS_SKIP_RE.test(t)) return;
+        if (seenUntrans.has(t) || seenUntrans.size >= 500) return;
+        if (parentEl && typeof parentEl.closest === 'function') {
+          if (parentEl.closest('[data-message-id], .prose, .markdown-body, article')) return;
+        }
+        seenUntrans.add(t);
+        pendingUntrans.push(t);
+        if (!flushUntransTimer) {
+          flushUntransTimer = setTimeout(flushUntranslated, 2000);
+        }
+      } catch (_) {}
+    }
+
     function processTextNode(textNode) {
       if (!textNode || textNode.nodeType !== 3) return;
       if (state.processedTextNodes.has(textNode)) return;
@@ -384,9 +425,21 @@ export function buildRendererRuntimeSource(bundleSnapshot, bundleFilePath = '') 
       if (!parent || isImmuneForText(parent)) return;
 
       var val = textNode.nodeValue;
+      var trimmedVal = typeof val === 'string' ? val.trim() : '';
+      // Protect model tier labels inside model selector chips (e.g. "Gemini 4 Neon High")
+      if (trimmedVal && TIER_WORD_RE.test(trimmedVal)) {
+        var ctxText = (parent.parentElement && parent.parentElement.textContent) || parent.textContent || '';
+        if (MODEL_NAME_RE.test(ctxText)) {
+          state.processedTextNodes.add(textNode);
+          return;
+        }
+      }
+
       var translated = translateString(val);
       if (translated !== null && translated !== val) {
         textNode.nodeValue = translated;
+      } else if (translated === null) {
+        maybeCollectUntranslated(val, parent);
       }
       state.processedTextNodes.add(textNode);
     }
@@ -546,6 +599,29 @@ export function buildRendererRuntimeSource(bundleSnapshot, bundleFilePath = '') 
         } catch (_) {
           // ignore watcher setup failure
         }
+      } else {
+        // Electron sandbox:true preload fallback: pull live dictionary updates via main-process IPC
+        var ipcRend = null;
+        try {
+          ipcRend = typeof require === 'function' ? require('electron').ipcRenderer : null;
+        } catch (_) {
+          ipcRend = null;
+        }
+        if (ipcRend && typeof ipcRend.invoke === 'function') {
+          var syncBundleFromMain = function () {
+            try {
+              ipcRend.invoke('agy-hub:get-i18n-bundle', state.lastMtimeMs).then(function (res) {
+                if (!res || !res.changed || !res.bundle) return;
+                state.lastMtimeMs = res.mtimeMs || Date.now();
+                compileBundle(res.bundle);
+                if (document.documentElement) walkSubtree(document.documentElement);
+              }).catch(function () {});
+            } catch (_) {}
+          };
+          syncBundleFromMain();
+          var ipcTimer = setInterval(syncBundleFromMain, 3000);
+          if (ipcTimer && typeof ipcTimer.unref === 'function') ipcTimer.unref();
+        }
       }
     }
 
@@ -560,6 +636,371 @@ export function buildRendererRuntimeSource(bundleSnapshot, bundleFilePath = '') 
     }
   } catch (_) {
     // Fail-open guarantee: never break Antigravity renderer or preload
+  }
+})();
+
+/* Antigravity Hub Appearance Engine (v1.5.0, isolated fail-open, zero extra ASAR surface) */
+(function () {
+  'use strict';
+  try {
+    if (typeof globalThis !== 'undefined' && globalThis.__AGY_HUB_APPEARANCE_LOADED__) {
+      return;
+    }
+    if (typeof globalThis !== 'undefined') {
+      globalThis.__AGY_HUB_APPEARANCE_LOADED__ = true;
+    }
+
+    var BUNDLE_PATH = ${bundlePathJson};
+    var EXPLICIT_APPEARANCE_PATH = ${appearancePathJson};
+    var STYLE_ID = 'agy-hub-wallpaper-style';
+    var LAYER_ID = 'agy-hub-wallpaper-layer';
+    var EXT_MIME = {
+      '.png': 'image/png',
+      '.jpg': 'image/jpeg',
+      '.jpeg': 'image/jpeg',
+      '.webp': 'image/webp',
+      '.avif': 'image/avif',
+      '.svg': 'image/svg+xml',
+    };
+
+    var nodeFs = null;
+    var nodePath = null;
+    var ipcRenderer = null;
+    try {
+      if (typeof require === 'function') {
+        try {
+          var el = require('electron');
+          if (el && el.ipcRenderer && typeof el.ipcRenderer.invoke === 'function') {
+            ipcRenderer = el.ipcRenderer;
+          }
+        } catch (_) {}
+        try {
+          nodeFs = require('fs');
+          nodePath = require('path');
+        } catch (_) {
+          nodeFs = null;
+          nodePath = null;
+        }
+      }
+    } catch (_) {
+      nodeFs = null;
+      nodePath = null;
+    }
+
+    function resolveAppearanceFile() {
+      if (EXPLICIT_APPEARANCE_PATH) return EXPLICIT_APPEARANCE_PATH;
+      if (BUNDLE_PATH && nodePath) {
+        return nodePath.resolve(nodePath.dirname(BUNDLE_PATH), '..', 'appearance', 'runtime-appearance.json');
+      }
+      return '';
+    }
+
+    var APPEARANCE_FILE = resolveAppearanceFile();
+    var st = {
+      lastMtimeMs: -1,
+      cfg: null,
+      blobUrl: null,
+      loadedImagePath: '',
+      startupPickedPath: '',
+      lastRotateAt: 0,
+      lastTheme: '',
+    };
+
+    function parseOpaqueLum(el) {
+      if (!el || typeof window === 'undefined' || typeof window.getComputedStyle !== 'function') return null;
+      var bg = window.getComputedStyle(el).backgroundColor || '';
+      var m = bg.match(/rgba?\\((\\d+),\\s*(\\d+),\\s*(\\d+)(?:,\\s*([\\d.]+))?\\)/i);
+      if (!m) return null;
+      if (m[4] !== undefined && Number(m[4]) <= 0.05) return null;
+      return Number(m[1]) * 0.299 + Number(m[2]) * 0.587 + Number(m[3]) * 0.114;
+    }
+
+    function detectDarkTheme() {
+      try {
+        var root = document.documentElement;
+        var dt = root && root.dataset && root.dataset.theme;
+        if (dt === 'dark') return true;
+        if (dt === 'light') return false;
+        if (root && root.classList && root.classList.contains('dark')) return true;
+        if (document.body && document.body.classList && document.body.classList.contains('vscode-dark')) return true;
+        var candidates = [
+          document.body,
+          document.getElementById('root'),
+          document.getElementById('app'),
+          document.body && document.body.firstElementChild,
+          document.querySelector && document.querySelector('main'),
+          root,
+        ];
+        for (var i = 0; i < candidates.length; i++) {
+          var lum = parseOpaqueLum(candidates[i]);
+          if (lum !== null) return lum < 140;
+        }
+        if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) return true;
+      } catch (_) {}
+      return false;
+    }
+
+    function cleanupWallpaper() {
+      try {
+        var styleEl = document.getElementById(STYLE_ID);
+        if (styleEl && styleEl.parentNode) styleEl.parentNode.removeChild(styleEl);
+        var layerEl = document.getElementById(LAYER_ID);
+        if (layerEl && layerEl.parentNode) layerEl.parentNode.removeChild(layerEl);
+        if (st.blobUrl && typeof URL !== 'undefined' && typeof URL.revokeObjectURL === 'function') {
+          URL.revokeObjectURL(st.blobUrl);
+        }
+        st.blobUrl = null;
+        st.loadedImagePath = '';
+      } catch (_) {}
+    }
+
+    function loadImageAsUrl(imgPath, maxBytes) {
+      if (!imgPath || !nodeFs || !nodePath) return null;
+      if (st.loadedImagePath === imgPath && st.blobUrl) return st.blobUrl;
+      try {
+        if (!nodeFs.existsSync(imgPath)) return null;
+        var stat = nodeFs.statSync(imgPath);
+        if (!stat.isFile() || stat.size <= 0 || stat.size > (maxBytes || 15728640)) return null;
+        var ext = String(nodePath.extname(imgPath) || '').toLowerCase();
+        var mime = EXT_MIME[ext];
+        if (!mime) return null;
+        var buf = nodeFs.readFileSync(imgPath);
+        var nextUrl = null;
+        if (typeof Blob !== 'undefined' && typeof URL !== 'undefined' && typeof URL.createObjectURL === 'function') {
+          var blob = new Blob([buf], { type: mime });
+          nextUrl = URL.createObjectURL(blob);
+        } else if (stat.size <= 4 * 1024 * 1024) {
+          nextUrl = 'data:' + mime + ';base64,' + buf.toString('base64');
+        }
+        if (nextUrl) {
+          if (st.blobUrl && st.blobUrl.indexOf('blob:') === 0 && typeof URL.revokeObjectURL === 'function') {
+            try { URL.revokeObjectURL(st.blobUrl); } catch (_) {}
+          }
+          st.blobUrl = nextUrl;
+          st.loadedImagePath = imgPath;
+          return nextUrl;
+        }
+      } catch (_) {}
+      return null;
+    }
+
+    function pickFromPool(cfg) {
+      var pool = Array.isArray(cfg.poolPaths) ? cfg.poolPaths : [];
+      if (!pool.length) return '';
+      var others = pool.filter(function (p) { return p !== st.loadedImagePath; });
+      var list = others.length ? others : pool;
+      return list[Math.floor(Math.random() * list.length)] || '';
+    }
+
+    function resolveTargetImagePath(cfg, isDark) {
+      if (cfg.separateThemeWallpapers) {
+        var themed = isDark ? cfg.darkWallpaperPath : cfg.lightWallpaperPath;
+        if (themed) return themed;
+      }
+      if (cfg.rotationMode === 'startup') {
+        if (!st.startupPickedPath) {
+          st.startupPickedPath = pickFromPool(cfg) || cfg.activeWallpaperPath || '';
+        }
+        return st.startupPickedPath;
+      }
+      if (cfg.rotationMode === 'interval') {
+        var ms = Math.max(5, Number(cfg.rotationMinutes) || 30) * 60000;
+        if (!st.lastRotateAt || Date.now() - st.lastRotateAt >= ms) {
+          st.startupPickedPath = pickFromPool(cfg) || cfg.activeWallpaperPath || '';
+          st.lastRotateAt = Date.now();
+        }
+        return st.startupPickedPath || cfg.activeWallpaperPath || '';
+      }
+      return cfg.activeWallpaperPath || '';
+    }
+
+    function base64ToBlobUrl(b64, mime) {
+      try {
+        if (typeof atob === 'function' && typeof Uint8Array !== 'undefined' && typeof Blob !== 'undefined' && typeof URL !== 'undefined' && typeof URL.createObjectURL === 'function') {
+          var bin = atob(b64);
+          var bytes = new Uint8Array(bin.length);
+          for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+          return URL.createObjectURL(new Blob([bytes], { type: mime }));
+        }
+      } catch (_) {}
+      return 'data:' + mime + ';base64,' + b64;
+    }
+
+    function applyAppearance(cfg, resolvedImgUrl) {
+      if (!cfg || cfg.enabled !== true || typeof document === 'undefined' || !document.body) {
+        cleanupWallpaper();
+        return;
+      }
+
+      var isDark = detectDarkTheme();
+      st.lastTheme = isDark ? 'dark' : 'light';
+      var opacity = Math.max(0.05, Math.min(0.85, Number(cfg.opacity) || 0.24));
+      var blurPx = Math.max(0, Math.min(24, Number(cfg.blurPx) || 0));
+      var scrimOpacity = Math.max(0, Math.min(0.85, Number(cfg.scrimOpacity) || 0.42));
+      var glassPct = Math.round(Math.max(0.55, Math.min(0.98, Number(cfg.glassOpacity) || 0.86)) * 100);
+      var fit = cfg.fit === 'contain' ? 'contain' : cfg.fit === 'center' ? 'auto' : 'cover';
+
+      var bgRule = '';
+      if (cfg.mode === 'image') {
+        var imgUrl = resolvedImgUrl || null;
+        if (!imgUrl && nodeFs) {
+          var targetImg = resolveTargetImagePath(cfg, isDark);
+          imgUrl = loadImageAsUrl(targetImg, cfg.maxBytes);
+        }
+        if (imgUrl) {
+          bgRule = 'background-image: url("' + imgUrl.replace(/"/g, '\\\\"') + '"); background-size: ' + fit + '; background-position: center; background-repeat: no-repeat;';
+        }
+      }
+      if (!bgRule) {
+        var presetCss = isDark ? (cfg.preset && cfg.preset.darkCss) : (cfg.preset && cfg.preset.lightCss);
+        if (!presetCss) {
+          cleanupWallpaper();
+          return;
+        }
+        bgRule = 'background: ' + presetCss + ';';
+      }
+
+      var blendMode = isDark ? 'screen' : 'multiply';
+      var effectiveOpacity = cfg.protectCodeReadability !== false ? Math.min(opacity, 0.55) : opacity;
+
+      var layer = document.getElementById(LAYER_ID);
+      if (!layer) {
+        layer = document.createElement('div');
+        layer.id = LAYER_ID;
+        layer.setAttribute('aria-hidden', 'true');
+        (document.documentElement || document.body).appendChild(layer);
+      }
+
+      // Apply directly via inline element style (bypasses strict style-src CSP & pseudo-element blend isolation)
+      var inlineCss = [
+        'position: fixed !important',
+        'top: -16px !important',
+        'left: -16px !important',
+        'right: -16px !important',
+        'bottom: -16px !important',
+        'z-index: 2147483000 !important',
+        'pointer-events: none !important',
+        'user-select: none !important',
+        'mix-blend-mode: ' + blendMode + ' !important',
+        'opacity: ' + effectiveOpacity + ' !important',
+        'filter: blur(' + blurPx + 'px) !important',
+        'transition: opacity 220ms ease, filter 220ms ease !important',
+        bgRule,
+      ].join('; ');
+      if (layer.style.cssText !== inlineCss) {
+        layer.style.cssText = inlineCss;
+      }
+
+      var oldStyle = document.getElementById(STYLE_ID);
+      if (oldStyle && oldStyle.parentNode) oldStyle.parentNode.removeChild(oldStyle);
+    }
+
+    function renderWithIpcImage(cfg) {
+      if (!cfg || cfg.enabled !== true) {
+        cleanupWallpaper();
+        return;
+      }
+      var isDark = detectDarkTheme();
+      if (cfg.mode !== 'image') {
+        applyAppearance(cfg, null);
+        return;
+      }
+      var targetImg = resolveTargetImagePath(cfg, isDark);
+      if (!targetImg) {
+        applyAppearance(cfg, null);
+        return;
+      }
+      if (st.loadedImagePath === targetImg && st.blobUrl) {
+        applyAppearance(cfg, st.blobUrl);
+        return;
+      }
+      if (!ipcRenderer) {
+        applyAppearance(cfg, null);
+        return;
+      }
+      ipcRenderer.invoke('agy-hub:read-wallpaper', targetImg).then(function (imgRes) {
+        if (imgRes && imgRes.ok && imgRes.base64) {
+          var nextUrl = base64ToBlobUrl(imgRes.base64, imgRes.mime || 'image/png');
+          if (st.blobUrl && st.blobUrl.indexOf('blob:') === 0 && typeof URL !== 'undefined' && typeof URL.revokeObjectURL === 'function') {
+            try { URL.revokeObjectURL(st.blobUrl); } catch (_) {}
+          }
+          st.blobUrl = nextUrl;
+          st.loadedImagePath = targetImg;
+          applyAppearance(cfg, nextUrl);
+        } else {
+          applyAppearance(cfg, null);
+        }
+      }).catch(function () {
+        applyAppearance(cfg, null);
+      });
+    }
+
+    function pollAppearance(force) {
+      try {
+        if (nodeFs && APPEARANCE_FILE) {
+          if (!nodeFs.existsSync(APPEARANCE_FILE)) {
+            if (st.cfg && st.cfg.enabled) {
+              st.cfg = null;
+              cleanupWallpaper();
+            }
+            return;
+          }
+          var stat = nodeFs.statSync(APPEARANCE_FILE);
+          var curTheme = detectDarkTheme() ? 'dark' : 'light';
+          var needIntervalTick = st.cfg && st.cfg.enabled && st.cfg.mode === 'image' && st.cfg.rotationMode === 'interval';
+          if (!force && stat.mtimeMs === st.lastMtimeMs && curTheme === st.lastTheme && !needIntervalTick) {
+            return;
+          }
+          if (force || stat.mtimeMs !== st.lastMtimeMs) {
+            st.lastMtimeMs = stat.mtimeMs;
+            var raw = nodeFs.readFileSync(APPEARANCE_FILE, 'utf8');
+            st.cfg = raw && raw.trim() ? JSON.parse(raw) : null;
+          }
+          applyAppearance(st.cfg, null);
+          return;
+        }
+        if (ipcRenderer) {
+          ipcRenderer.invoke('agy-hub:get-appearance', force ? -1 : st.lastMtimeMs).then(function (res) {
+            if (!res) return;
+            var curTheme = detectDarkTheme() ? 'dark' : 'light';
+            var needIntervalTick = st.cfg && st.cfg.enabled && st.cfg.mode === 'image' && st.cfg.rotationMode === 'interval';
+            if (res.missing) {
+              if (st.cfg && st.cfg.enabled) {
+                st.cfg = null;
+                cleanupWallpaper();
+              }
+              return;
+            }
+            if (!force && !res.changed && curTheme === st.lastTheme && !needIntervalTick) {
+              return;
+            }
+            if (res.changed && res.config) {
+              st.lastMtimeMs = res.mtimeMs || Date.now();
+              st.cfg = res.config;
+            }
+            renderWithIpcImage(st.cfg);
+          }).catch(function () {});
+        }
+      } catch (_) {
+        // Fail-open guarantee
+      }
+    }
+
+    function bootAppearance() {
+      pollAppearance(true);
+      var timer = setInterval(function () { pollAppearance(false); }, 1500);
+      if (timer && typeof timer.unref === 'function') timer.unref();
+    }
+
+    if (typeof document !== 'undefined') {
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', bootAppearance, { once: true });
+      } else {
+        bootAppearance();
+      }
+    }
+  } catch (_) {
+    // Isolated fail-open: never impact i18n or Antigravity host
   }
 })();
 `;
@@ -698,6 +1139,97 @@ export function buildMainRuntimeSource(bundleSnapshot, bundleFilePath = '') {
       electron = require('electron');
     } catch (_) {
       electron = null;
+    }
+
+    if (electron && electron.ipcMain && typeof electron.ipcMain.handle === 'function') {
+      try {
+        var nodePathMain = require('path');
+        var appearanceFileMain = BUNDLE_FILE_PATH
+          ? nodePathMain.resolve(nodePathMain.dirname(BUNDLE_FILE_PATH), '..', 'appearance', 'runtime-appearance.json')
+          : '';
+        var ALLOWED_IMG = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.avif': 'image/avif', '.svg': 'image/svg+xml' };
+
+        electron.ipcMain.handle('agy-hub:get-i18n-bundle', function (_evt, lastMtime) {
+          try {
+            if (!fs || !BUNDLE_FILE_PATH || !fs.existsSync(BUNDLE_FILE_PATH)) {
+              return { changed: false };
+            }
+            var st = fs.statSync(BUNDLE_FILE_PATH);
+            if (lastMtime && st.mtimeMs === lastMtime) {
+              return { changed: false, mtimeMs: st.mtimeMs };
+            }
+            var parsed = JSON.parse(fs.readFileSync(BUNDLE_FILE_PATH, 'utf8'));
+            return { changed: true, mtimeMs: st.mtimeMs, bundle: parsed };
+          } catch (_) {
+            return { changed: false };
+          }
+        });
+
+        electron.ipcMain.handle('agy-hub:get-appearance', function (_evt, lastMtime) {
+          try {
+            if (!fs || !appearanceFileMain || !fs.existsSync(appearanceFileMain)) {
+              return { missing: true, changed: false };
+            }
+            var st = fs.statSync(appearanceFileMain);
+            if (lastMtime && lastMtime > 0 && st.mtimeMs === lastMtime) {
+              return { changed: false, mtimeMs: st.mtimeMs };
+            }
+            var parsed = JSON.parse(fs.readFileSync(appearanceFileMain, 'utf8'));
+            return { changed: true, mtimeMs: st.mtimeMs, config: parsed };
+          } catch (_) {
+            return { changed: false };
+          }
+        });
+
+        electron.ipcMain.handle('agy-hub:read-wallpaper', function (_evt, imgPath) {
+          try {
+            if (!fs || typeof imgPath !== 'string' || !imgPath.trim()) return { ok: false };
+            if (!fs.existsSync(imgPath)) return { ok: false };
+            var st = fs.statSync(imgPath);
+            if (!st.isFile() || st.size <= 0 || st.size > 15 * 1024 * 1024) return { ok: false };
+            var ext = String(nodePathMain.extname(imgPath) || '').toLowerCase();
+            var mime = ALLOWED_IMG[ext];
+            if (!mime) return { ok: false };
+            var b64 = fs.readFileSync(imgPath).toString('base64');
+            return { ok: true, mime: mime, base64: b64 };
+          } catch (_) {
+            return { ok: false };
+          }
+        });
+
+        var untransFileMain = BUNDLE_FILE_PATH
+          ? nodePathMain.resolve(nodePathMain.dirname(BUNDLE_FILE_PATH), 'untranslated.json')
+          : '';
+        electron.ipcMain.handle('agy-hub:record-untranslated', function (_evt, batch) {
+          try {
+            if (!fs || !untransFileMain || !Array.isArray(batch) || !batch.length) return { ok: false };
+            var cur = { items: [], updatedAt: null };
+            if (fs.existsSync(untransFileMain)) {
+              try {
+                var parsed = JSON.parse(fs.readFileSync(untransFileMain, 'utf8'));
+                if (parsed && Array.isArray(parsed.items)) cur = parsed;
+              } catch (_) {}
+            }
+            var set = new Set(cur.items);
+            var added = 0;
+            for (var i = 0; i < batch.length; i++) {
+              if (set.size >= 500) break;
+              var s = typeof batch[i] === 'string' ? batch[i].trim() : '';
+              if (s.length >= 2 && s.length <= 140 && !set.has(s)) {
+                set.add(s);
+                added++;
+              }
+            }
+            if (added > 0) {
+              var nextObj = { items: Array.from(set), updatedAt: new Date().toISOString() };
+              fs.writeFileSync(untransFileMain, JSON.stringify(nextObj, null, 2) + '\\n', 'utf8');
+            }
+            return { ok: true, count: set.size, added: added };
+          } catch (_) {
+            return { ok: false };
+          }
+        });
+      } catch (_) {}
     }
 
     if (electron && electron.Menu && typeof electron.Menu.buildFromTemplate === 'function') {

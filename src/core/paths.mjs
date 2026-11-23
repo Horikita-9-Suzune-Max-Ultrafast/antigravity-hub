@@ -75,12 +75,17 @@ export function getDataPaths(options = {}) {
     i18nCustomDictFile: path.join(dataDir, 'i18n', 'custom-dict.json'),
     i18nBundleFile: path.join(dataDir, 'i18n', 'runtime-bundle.json'),
     i18nJobFile: path.join(dataDir, 'i18n', 'last-job.json'),
+    i18nUntranslatedFile: path.join(dataDir, 'i18n', 'untranslated.json'),
     governanceDir: path.join(dataDir, 'governance'),
     governanceProfilesFile: path.join(dataDir, 'governance', 'profiles.json'),
     governanceDisabledMcpFile: path.join(dataDir, 'governance', 'disabled-mcp.json'),
     governanceAuditLog: path.join(dataDir, 'governance', 'audit.jsonl'),
     hostBackupsDir: path.join(dataDir, 'backups', 'host-config'),
     hostBackupsIndexFile: path.join(dataDir, 'backups', 'host-config', 'index.json'),
+    appearanceDir: path.join(dataDir, 'appearance'),
+    wallpapersDir: path.join(dataDir, 'wallpapers'),
+    appearanceStateFile: path.join(dataDir, 'appearance', 'state.json'),
+    appearanceRuntimeFile: path.join(dataDir, 'appearance', 'runtime-appearance.json'),
   };
 }
 

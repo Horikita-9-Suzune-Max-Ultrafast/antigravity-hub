@@ -15,6 +15,8 @@ import {
   importDictionary,
   exportDictionary,
   syncCommunityDictionary,
+  readUntranslatedList,
+  clearUntranslatedList,
 } from './dictionary.mjs';
 import { executePatchJob } from './patch-worker.mjs';
 
@@ -186,6 +188,7 @@ export async function triggerApplyPatch(params = {}, options = {}) {
     jobFilePath: paths.i18nJobFile,
     skipProcessControl: Boolean(params.skipProcessControl),
     relaunch: params.relaunch !== false,
+    quarantineThirdParty: Boolean(params.quarantineThirdParty),
   };
 
   if (params.sync === true || params.skipProcessControl === true) {
@@ -225,6 +228,7 @@ export async function triggerRestorePatch(params = {}, options = {}) {
     jobFilePath: paths.i18nJobFile,
     skipProcessControl: Boolean(params.skipProcessControl),
     relaunch: params.relaunch !== false,
+    quarantineThirdParty: Boolean(params.quarantineThirdParty),
   };
 
   if (params.sync === true || params.skipProcessControl === true) {
@@ -323,6 +327,12 @@ export async function handleI18nAction(args = {}, options = {}) {
 
     case 'restore_patch':
       return triggerRestorePatch(args, options);
+
+    case 'list_untranslated':
+      return readUntranslatedList(options);
+
+    case 'clear_untranslated':
+      return clearUntranslatedList(options);
 
     default:
       throw new Error(`Unsupported app_i18n_manage action: "${action}"`);

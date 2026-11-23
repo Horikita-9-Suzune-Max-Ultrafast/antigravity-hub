@@ -381,7 +381,26 @@ export function getI18nStatus(options = {}) {
   const paths = getDataPaths(options);
   const fullConfig = loadConfig(options);
   const state = readJsonSafe(paths.i18nStateFile, null);
-  const lastJob = readJsonSafe(paths.i18nJobFile, null);
+  let lastJob = readJsonSafe(paths.i18nJobFile, null);
+  if (lastJob && (lastJob.status === 'running' || lastJob.status === 'queued')) {
+    const refTs = Date.parse(lastJob.updatedAt || lastJob.startedAt || '');
+    const STALE_JOB_MS = 120 * 1000;
+    if (!Number.isFinite(refTs) || Date.now() - refTs > STALE_JOB_MS) {
+      lastJob = {
+        ...lastJob,
+        status: 'timeout',
+        phase: 'stale_recovered',
+        finishedAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        message: '上次后台补丁任务已超时中断，已自动解除按钮锁定，可重新尝试。',
+      };
+      try {
+        fs.writeFileSync(paths.i18nJobFile, `${JSON.stringify(lastJob, null, 2)}\n`, 'utf8');
+      } catch {
+        // non-fatal
+      }
+    }
+  }
 
   let dictStats = null;
   try {

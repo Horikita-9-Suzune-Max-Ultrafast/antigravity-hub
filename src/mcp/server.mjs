@@ -22,6 +22,7 @@ import { recordActiveSession, resolveTargetSession, getSessionProjectDir } from 
 import { listConversations } from '../core/transcript-parser.mjs';
 import { handleI18nAction } from '../core/i18n/index.mjs';
 import { handleGovernanceAction } from '../core/governance/index.mjs';
+import { handleAppearanceAction } from '../core/appearance/index.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -31,7 +32,7 @@ export const APP_RESOURCE_URI = 'ui://context-cache/dashboard.html';
 export const APP_RESOURCE_MIME = 'text/html;profile=mcp-app';
 export const SERVER_INFO = {
   name: 'context-cache-server',
-  version: '1.4.0',
+  version: '1.5.0',
 };
 
 const APP_ONLY_META = { ui: { visibility: ['app'] } };
@@ -47,7 +48,7 @@ export const TOOL_DEFINITIONS = [
       properties: {
         conversationId: { type: 'string', description: 'Optional conversation ID to inspect' },
         projectDir: { type: 'string', description: 'Optional workspace directory' },
-        module: { type: 'string', enum: ['monitor', 'governance', 'i18n'], description: 'Initial console module' },
+        module: { type: 'string', enum: ['monitor', 'governance', 'appearance', 'i18n'], description: 'Initial console module' },
         tab: { type: 'string', enum: ['context', 'calls', 'vault', 'settings'], description: 'Initial view tab' },
       },
       additionalProperties: false,
@@ -272,6 +273,8 @@ export const TOOL_DEFINITIONS = [
             'sync_community',
             'apply_patch',
             'restore_patch',
+            'list_untranslated',
+            'clear_untranslated',
           ],
         },
         patch: { type: 'object' },
@@ -332,6 +335,38 @@ export const TOOL_DEFINITIONS = [
         plugins: { type: 'object' },
         globalMcp: { type: 'object' },
         snapshotId: { type: 'string' },
+      },
+      additionalProperties: true,
+    },
+    _meta: APP_ONLY_META,
+  },
+  {
+    name: 'app_appearance_manage',
+    title: 'App: Manage Antigravity Wallpaper & Appearance',
+    description: 'Private UI tool for managing zero-intrusion hot-reload wallpapers, CSS gradient presets, read-only local folders, rotation, and emergency disable.',
+    inputSchema: {
+      type: 'object',
+      required: ['action'],
+      properties: {
+        action: {
+          type: 'string',
+          enum: [
+            'status',
+            'update_config',
+            'import_wallpaper',
+            'delete_wallpaper',
+            'scan_folder',
+            'next_wallpaper',
+            'emergency_off',
+          ],
+        },
+        patch: { type: 'object' },
+        fileName: { type: 'string' },
+        base64: { type: 'string' },
+        absPath: { type: 'string' },
+        activate: { type: 'boolean' },
+        id: { type: 'string' },
+        folderPath: { type: 'string' },
       },
       additionalProperties: true,
     },
@@ -695,6 +730,11 @@ export function createMcpDispatcher(options = {}) {
 
         case 'app_governance_manage': {
           const res = handleGovernanceAction(args, options);
+          return toolOk('ok', res);
+        }
+
+        case 'app_appearance_manage': {
+          const res = handleAppearanceAction(args, options);
           return toolOk('ok', res);
         }
 
