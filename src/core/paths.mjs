@@ -69,6 +69,12 @@ export function getDataPaths(options = {}) {
     driftLogFile: path.join(dataDir, 'diagnostics', 'schema-drift.jsonl'),
     circuitFile: path.join(dataDir, 'diagnostics', 'circuit.json'),
     exportsDir: path.join(dataDir, 'exports'),
+    i18nDir: path.join(dataDir, 'i18n'),
+    i18nStateFile: path.join(dataDir, 'i18n', 'state.json'),
+    i18nCommunityDictFile: path.join(dataDir, 'i18n', 'community-dict.json'),
+    i18nCustomDictFile: path.join(dataDir, 'i18n', 'custom-dict.json'),
+    i18nBundleFile: path.join(dataDir, 'i18n', 'runtime-bundle.json'),
+    i18nJobFile: path.join(dataDir, 'i18n', 'last-job.json'),
   };
 }
 

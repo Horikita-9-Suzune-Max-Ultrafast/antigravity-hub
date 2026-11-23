@@ -1,16 +1,17 @@
 {
   "name": "context-cache",
-  "displayName": "Context Cache & Telemetry",
-  "version": "1.2.1",
+  "displayName": "Antigravity Console",
+  "version": "1.3.0",
   "author": {
     "name": "Horikita-9-Suzune-Max-Ultrafast",
     "url": "https://github.com/Horikita-9-Suzune-Max-Ultrafast"
   },
   "repository": "https://github.com/Horikita-9-Suzune-Max-Ultrafast/context-cache",
-  "description": "Native Antigravity MCP App for real-time context breakdown, multi-agent TPS & cache monitoring, auto-following active conversations, movable/resizable floating monitor, and Git-aware cross-session memory with zero-token UI polling.",
+  "description": "Modular Antigravity Console (MCP App): Context Monitor (breakdown, multi-agent TPS & cache telemetry, floating monitor, cross-session vault) and Antigravity Chinese Localization (zero-dep ASAR patcher, layered live dictionary, immunity rules).",
   "logo": "assets/logo.svg",
   "suggestedPrompts": [
-    "打开上下文与遥测监控面板，分析当前会话的上下文构成和缓存命中率",
+    "打开 Antigravity 控制台，分析当前会话的上下文构成和缓存命中率",
+    "打开 Antigravity 控制台的界面汉化模块，检查客户端汉化状态与词典配置",
     "生成当前分支的交接胶囊并沉淀已敲定的架构决策",
     "运行 context-cache 健康体检，检查 Hook 漂移与 SQLite FTS5 索引状态"
   ]

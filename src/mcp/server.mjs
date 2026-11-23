@@ -20,6 +20,7 @@ import { runDoctor, exportBackup, resetCircuitBreaker, repairLocalState } from '
 import { PopoutServerManager } from '../core/popout-server.mjs';
 import { recordActiveSession, resolveTargetSession, getSessionProjectDir } from '../core/session-tracker.mjs';
 import { listConversations } from '../core/transcript-parser.mjs';
+import { handleI18nAction } from '../core/i18n/index.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -29,7 +30,7 @@ export const APP_RESOURCE_URI = 'ui://context-cache/dashboard.html';
 export const APP_RESOURCE_MIME = 'text/html;profile=mcp-app';
 export const SERVER_INFO = {
   name: 'context-cache-server',
-  version: '1.2.0',
+  version: '1.3.0',
 };
 
 const APP_ONLY_META = { ui: { visibility: ['app'] } };
@@ -38,13 +39,14 @@ export const TOOL_DEFINITIONS = [
   // ==================== 5 Slim Model-Visible Tools ====================
   {
     name: 'ctx_open_monitor',
-    title: 'Context & Telemetry Monitor',
-    description: 'Open the native Context Cache & Telemetry console (context breakdown, multi-agent TPS & cache monitoring, cross-session vault).',
+    title: 'Antigravity Console',
+    description: 'Open the modular Antigravity Console (Context Monitor: breakdown, multi-agent TPS & cache, cross-session vault; and Antigravity Chinese Localization).',
     inputSchema: {
       type: 'object',
       properties: {
         conversationId: { type: 'string', description: 'Optional conversation ID to inspect' },
         projectDir: { type: 'string', description: 'Optional workspace directory' },
+        module: { type: 'string', enum: ['monitor', 'i18n'], description: 'Initial console module' },
         tab: { type: 'string', enum: ['context', 'calls', 'vault', 'settings'], description: 'Initial view tab' },
       },
       additionalProperties: false,
@@ -56,8 +58,8 @@ export const TOOL_DEFINITIONS = [
       },
       'com.google.antigravity/ui': {
         entrypoints: [
-          { type: 'aux_pane', title: 'Context & Telemetry' },
-          { type: 'global', title: 'Context Monitor' },
+          { type: 'aux_pane', title: 'Antigravity Console' },
+          { type: 'global', title: 'Antigravity Console' },
         ],
       },
     },
@@ -247,6 +249,51 @@ export const TOOL_DEFINITIONS = [
     },
     _meta: APP_ONLY_META,
   },
+  {
+    name: 'app_i18n_manage',
+    title: 'App: Manage Antigravity Chinese Localization',
+    description: 'Private UI tool for detecting Antigravity install/patch state, managing layered localization dictionaries, immunity/brand rules, and triggering detached ASAR apply/restore jobs.',
+    inputSchema: {
+      type: 'object',
+      required: ['action'],
+      properties: {
+        action: {
+          type: 'string',
+          enum: [
+            'status',
+            'update_config',
+            'refresh_bundle',
+            'list_dict',
+            'upsert_entry',
+            'delete_entry',
+            'import_dict',
+            'export_dict',
+            'sync_community',
+            'apply_patch',
+            'restore_patch',
+          ],
+        },
+        patch: { type: 'object' },
+        query: { type: 'string' },
+        source: { type: 'string' },
+        scope: { type: 'string' },
+        page: { type: 'number' },
+        pageSize: { type: 'number' },
+        en: { type: 'string' },
+        zh: { type: 'string' },
+        disabled: { type: 'boolean' },
+        rawJson: { type: 'string' },
+        target: { type: 'string' },
+        mergeMode: { type: 'string' },
+        url: { type: 'string' },
+        sync: { type: 'boolean' },
+        skipProcessControl: { type: 'boolean' },
+        relaunch: { type: 'boolean' },
+      },
+      additionalProperties: true,
+    },
+    _meta: APP_ONLY_META,
+  },
 ];
 
 function resolveUiHtmlPath(options = {}) {
@@ -345,10 +392,14 @@ export function createMcpDispatcher(options = {}) {
           );
           const config = loadConfig(options);
           const requestedTab = args.tab === 'quota' ? 'context' : args.tab || 'context';
+          const requestedModule = ['monitor', 'i18n'].includes(args.module)
+            ? args.module
+            : config.console?.defaultModule || 'monitor';
           const summaryText =
-            `Context Monitor 已就绪：当前上下文 ${ctx.usedPercent}% (${Math.round(ctx.usedTokens / 1000)}K/${Math.round(ctx.limitTokens / 1000)}K)` +
+            `Antigravity Console 已就绪：当前上下文 ${ctx.usedPercent}% (${Math.round(ctx.usedTokens / 1000)}K/${Math.round(ctx.limitTokens / 1000)}K)` +
             `，缓存命中 ${ctx.latestCacheHitRate.toFixed(1)}%，均速 ${ctx.avgTps.toFixed(1)} tok/s，预警 ${ctx.alerts.length} 项。`;
           return toolOk(summaryText, {
+            initialModule: requestedModule,
             initialTab: requestedTab,
             explicitConversationId: Boolean(explicitConvId),
             context: ctx,
@@ -592,6 +643,11 @@ export function createMcpDispatcher(options = {}) {
             return toolOk('repaired', repairLocalState(options));
           }
           return toolErr(`Unsupported doctor action: ${args.action}`);
+        }
+
+        case 'app_i18n_manage': {
+          const res = await handleI18nAction(args, options);
+          return toolOk('ok', res);
         }
 
         default:

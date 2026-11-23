@@ -18,6 +18,24 @@ export const DEFAULT_CONFIG = {
   uiBanner: {
     enabled: true,
   },
+  console: {
+    defaultModule: 'monitor', // 'monitor' | 'i18n'
+  },
+  i18n: {
+    installDirOverride: '',
+    updateReminderEnabled: true,
+    menuLocalizationEnabled: true,
+    brandMode: 'original', // 'original' | 'zh' | 'custom' | 'hidden'
+    customBrandText: 'Antigravity',
+    communitySourceUrl: '',
+    immunity: {
+      codeBlocks: true,
+      inputs: true,
+      terminal: true,
+      filePaths: true,
+      customSelectors: [],
+    },
+  },
   sessionStartBudgetTokens: 450,
   alerts: {
     contextWarningPct: 75,
@@ -159,6 +177,29 @@ export function sanitizeConfig(cfg) {
   out.alerts.cacheDropThresholdPct = Math.max(20, Math.min(90, Number(out.alerts.cacheDropThresholdPct) || 50));
   out.alerts.lowTpsThreshold = Math.max(5, Math.min(100, Number(out.alerts.lowTpsThreshold) || 15));
   out.alerts.lowTpsStreak = Math.max(2, Math.min(10, Number(out.alerts.lowTpsStreak) || 3));
+
+  if (!['monitor', 'i18n'].includes(out.console?.defaultModule)) {
+    out.console = { defaultModule: 'monitor' };
+  }
+  out.i18n.installDirOverride = typeof out.i18n.installDirOverride === 'string' ? out.i18n.installDirOverride.trim() : '';
+  out.i18n.updateReminderEnabled = out.i18n.updateReminderEnabled === undefined ? true : Boolean(out.i18n.updateReminderEnabled);
+  out.i18n.menuLocalizationEnabled = out.i18n.menuLocalizationEnabled === undefined ? true : Boolean(out.i18n.menuLocalizationEnabled);
+  if (!['original', 'zh', 'custom', 'hidden'].includes(out.i18n.brandMode)) {
+    out.i18n.brandMode = 'original';
+  }
+  out.i18n.customBrandText = typeof out.i18n.customBrandText === 'string'
+    ? out.i18n.customBrandText.trim().slice(0, 64) || 'Antigravity'
+    : 'Antigravity';
+  out.i18n.communitySourceUrl = typeof out.i18n.communitySourceUrl === 'string' ? out.i18n.communitySourceUrl.trim() : '';
+  out.i18n.immunity = {
+    codeBlocks: out.i18n.immunity?.codeBlocks === undefined ? true : Boolean(out.i18n.immunity.codeBlocks),
+    inputs: out.i18n.immunity?.inputs === undefined ? true : Boolean(out.i18n.immunity.inputs),
+    terminal: out.i18n.immunity?.terminal === undefined ? true : Boolean(out.i18n.immunity.terminal),
+    filePaths: out.i18n.immunity?.filePaths === undefined ? true : Boolean(out.i18n.immunity.filePaths),
+    customSelectors: Array.isArray(out.i18n.immunity?.customSelectors)
+      ? out.i18n.immunity.customSelectors.map((s) => String(s || '').trim()).filter(Boolean).slice(0, 50)
+      : [],
+  };
   return out;
 }
 

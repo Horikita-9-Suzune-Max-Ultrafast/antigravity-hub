@@ -3,6 +3,7 @@ import {
   applyDocumentTheme,
   applyHostStyleVariables,
 } from '@modelcontextprotocol/ext-apps';
+import { createI18nModule } from './modules/i18n-module.mjs';
 
 // Code-level feature flags (all quota UI/backend code is preserved intact when hidden)
 const FEATURE_FLAGS = {
@@ -32,6 +33,9 @@ const state = {
   activeProjectDir: null,
   launcherMode: false,
   popoutStatus: { running: false, port: null, activeClients: 0 },
+  activeModule: 'monitor', // 'monitor' | 'i18n'
+  i18nStatus: null,
+  i18nBannerDismissed: false,
   activeTab: 'context',
   callsMode: 'step',
   agentFilter: 'all',
@@ -58,6 +62,15 @@ const state = {
     uiBanner: { enabled: true },
     sessionStartBudgetTokens: 450,
     alerts: { contextWarningPct: 75, cacheDropThresholdPct: 50 },
+    i18n: {
+      installDirOverride: '',
+      updateReminderEnabled: true,
+      menuLocalizationEnabled: true,
+      brandMode: 'original',
+      customBrandText: 'Antigravity',
+      communitySourceUrl: '',
+      immunity: { codeBlocks: true, inputs: true, terminal: true, filePaths: true, customSelectors: [] },
+    },
   },
   windowPinned: true,
   windowCollapsed: false,
@@ -89,6 +102,7 @@ const popoutClientId = popoutToken
   ? `pop-${Math.random().toString(36).slice(2, 10)}-${Date.now().toString(36)}`
   : null;
 let mcpApp = null;
+let i18nModule = null;
 
 function postHostWindowMsg(cmd) {
   try {
@@ -487,6 +501,7 @@ function renderSelects() {
     options: POPOUT_SIZES,
   });
 
+  i18nModule?.renderSelects();
   clampOpenSelectMenus();
 }
 
@@ -576,6 +591,10 @@ async function handleSelectPick(id, val) {
   if (id === 'newMemKindSelect') {
     state.newMemKind = val;
     renderSelects();
+    return;
+  }
+  if (i18nModule && (await i18nModule.handleSelectPick(id, val))) {
+    return;
   }
 }
 
@@ -1433,16 +1452,15 @@ function setupNativeFramelessChrome() {
     });
   }
 
-  // Also allow dragging by grabbing any empty background area of the top header
-  const headerEl = document.querySelector('.agy-header');
-  if (headerEl) {
+  // Also allow dragging by grabbing any empty background area of module headers
+  document.querySelectorAll('.agy-header').forEach((headerEl) => {
     headerEl.addEventListener('mousedown', (e) => {
       if (e.button !== 0 || e.detail >= 2) return;
       if (e.target.closest('button, input, textarea, a, .agy-select-wrap, .seg-nav, .acc-body')) return;
       e.preventDefault();
       postHostWindowMsg('drag');
     });
-  }
+  });
 
   document.querySelectorAll('#nativeResizeHandles .win-resize').forEach((handle) => {
     handle.addEventListener('mousedown', (e) => {
@@ -1726,10 +1744,68 @@ function restartPollTimer() {
 }
 
 // ==================== Navigation & Modals ====================
+function renderI18nUpdateBanner() {
+  const status = state.i18nStatus;
+  const reminderEnabled =
+    (status?.config?.i18n?.updateReminderEnabled ?? state.config.i18n?.updateReminderEnabled) !== false;
+  const isOutdated = status?.status === 'outdated_after_update' && reminderEnabled;
+  const showBanner = isOutdated && !state.i18nBannerDismissed;
+
+  document.getElementById('i18nUpdateBanner')?.classList.toggle('hidden', !showBanner);
+  document.getElementById('railI18nAlertDot')?.classList.toggle('hidden', !isOutdated);
+  document.getElementById('topBarI18nDot')?.classList.toggle('hidden', !isOutdated);
+}
+
+function handleI18nStatusChange(statusData) {
+  state.i18nStatus = statusData || null;
+  if (statusData?.config?.i18n) {
+    state.config = { ...state.config, i18n: statusData.config.i18n };
+  }
+  renderI18nUpdateBanner();
+}
+
+function syncConsoleNavState() {
+  document.querySelectorAll('.console-rail-btn[data-module], .console-top-btn[data-module]').forEach((btn) => {
+    btn.dataset.active = String(!state.inSettings && btn.dataset.module === state.activeModule);
+  });
+  const railSettings = document.getElementById('railSettingsBtn');
+  if (railSettings) railSettings.dataset.active = String(Boolean(state.inSettings));
+
+  ['settingsBtn', 'i18nSettingsBtn'].forEach((id) => {
+    const btn = document.getElementById(id);
+    if (!btn) return;
+    btn.style.borderColor = state.inSettings ? 'var(--primary)' : 'var(--border)';
+    btn.style.color = state.inSettings ? 'var(--primary)' : 'var(--foreground)';
+  });
+}
+
+function switchModule(mod, subTab = null) {
+  const safeMod = mod === 'i18n' ? 'i18n' : 'monitor';
+  state.activeModule = safeMod;
+  state.inSettings = false;
+
+  document.getElementById('module-monitor')?.classList.toggle('hidden', safeMod !== 'monitor');
+  document.getElementById('module-i18n')?.classList.toggle('hidden', safeMod !== 'i18n');
+  document.getElementById('module-settings')?.classList.add('hidden');
+  syncConsoleNavState();
+
+  if (safeMod === 'monitor') {
+    requestAnimationFrame(() => {
+      positionIndicator('mainSegNav', 'mainSegIndicator');
+      positionIndicator('callsModeNav', 'callsModeIndicator');
+    });
+  } else {
+    void i18nModule?.activate(subTab);
+    requestAnimationFrame(() => i18nModule?.positionSubNav());
+  }
+}
+
 function switchTab(tab) {
   const safeTab = !FEATURE_FLAGS.showQuotaUi && tab === 'quota' ? 'context' : tab;
   state.activeTab = safeTab;
-  if (state.inSettings) exitSettingsView();
+  if (state.activeModule !== 'monitor' || state.inSettings) {
+    switchModule('monitor');
+  }
   ['context', 'calls', 'quota', 'vault'].forEach((t) => {
     document.getElementById(`panel-${t}`).classList.toggle('hidden', t !== safeTab);
   });
@@ -1746,21 +1822,28 @@ function toggleSettingsView() {
     return;
   }
   state.inSettings = true;
-  ['context', 'calls', 'quota', 'vault'].forEach((t) => document.getElementById(`panel-${t}`).classList.add('hidden'));
-  document.getElementById('panel-settings').classList.remove('hidden');
-  const btn = document.getElementById('settingsBtn');
-  btn.style.borderColor = 'var(--primary)';
-  btn.style.color = 'var(--primary)';
+  document.getElementById('module-monitor')?.classList.add('hidden');
+  document.getElementById('module-i18n')?.classList.add('hidden');
+  document.getElementById('module-settings')?.classList.remove('hidden');
+  document.getElementById('panel-settings')?.classList.remove('hidden');
+  syncConsoleNavState();
   void loadConfigAndDoctor();
 }
 
 function exitSettingsView() {
   state.inSettings = false;
-  document.getElementById('panel-settings').classList.add('hidden');
-  document.getElementById(`panel-${state.activeTab}`).classList.remove('hidden');
-  const btn = document.getElementById('settingsBtn');
-  btn.style.borderColor = 'var(--border)';
-  btn.style.color = 'var(--foreground)';
+  document.getElementById('module-settings')?.classList.add('hidden');
+  document.getElementById('module-monitor')?.classList.toggle('hidden', state.activeModule !== 'monitor');
+  document.getElementById('module-i18n')?.classList.toggle('hidden', state.activeModule !== 'i18n');
+  syncConsoleNavState();
+  requestAnimationFrame(() => {
+    if (state.activeModule === 'monitor') {
+      positionIndicator('mainSegNav', 'mainSegIndicator');
+      positionIndicator('callsModeNav', 'callsModeIndicator');
+    } else {
+      i18nModule?.positionSubNav();
+    }
+  });
 }
 
 function openModal(id) {
@@ -1893,7 +1976,7 @@ function bindEvents() {
         state.openSelectId = null;
         renderSelects();
       }
-      ['capsuleModal', 'quotaModal', 'addMemModal'].forEach(closeModal);
+      ['capsuleModal', 'quotaModal', 'addMemModal', 'i18nPatchConfirmModal', 'i18nEntryModal', 'i18nImportModal'].forEach(closeModal);
     }
   });
 
@@ -2004,6 +2087,16 @@ function bindEvents() {
       renderSettings();
       showToast('已关闭独立悬浮窗并释放本地端口');
     })();
+  });
+
+  document.querySelectorAll('.console-rail-btn[data-module], .console-top-btn[data-module]').forEach((btn) => {
+    btn.addEventListener('click', () => switchModule(btn.dataset.module));
+  });
+  document.getElementById('railSettingsBtn')?.addEventListener('click', toggleSettingsView);
+  document.getElementById('i18nBannerGoBtn')?.addEventListener('click', () => switchModule('i18n', 'status'));
+  document.getElementById('i18nBannerDismissBtn')?.addEventListener('click', () => {
+    state.i18nBannerDismissed = true;
+    renderI18nUpdateBanner();
   });
 
   document.getElementById('refreshBtn').addEventListener('click', () => void refreshAll(true, true));
@@ -2258,23 +2351,38 @@ function bindEvents() {
 // ==================== Bootstrap ====================
 async function init() {
   applyFeatureFlags();
+  i18nModule = createI18nModule({
+    callAppTool,
+    esc,
+    showToast,
+    openModal,
+    closeModal,
+    positionIndicator,
+    renderCustomSelect,
+    onStatusChange: handleI18nStatusChange,
+    onOpenSettings: toggleSettingsView,
+  });
+  i18nModule.init();
   bindEvents();
+  syncConsoleNavState();
   renderSelects();
   requestAnimationFrame(() => {
     positionIndicator('mainSegNav', 'mainSegIndicator');
     positionIndicator('callsModeNav', 'callsModeIndicator');
+    i18nModule?.positionSubNav();
   });
 
   const ro = new ResizeObserver(() => {
     positionIndicator('mainSegNav', 'mainSegIndicator');
     positionIndicator('callsModeNav', 'callsModeIndicator');
     positionIndicator('capsuleModeNav', 'capsuleModeIndicator');
+    i18nModule?.positionSubNav();
     if (state.openSelectId) clampOpenSelectMenus();
   });
-  ro.observe(document.getElementById('appShell'));
+  ro.observe(document.getElementById('consoleWorkspace') || document.getElementById('appShell'));
 
   if (!popoutToken) {
-    mcpApp = new App({ name: 'Context Cache & Telemetry', version: '1.2.0' }, {});
+    mcpApp = new App({ name: 'Antigravity Console', version: '1.3.0' }, {});
 
     // Register handlers BEFORE connect() per Antigravity mcp-app-development guidelines
     mcpApp.ontoolinput = ({ arguments: args }) => {
@@ -2282,7 +2390,9 @@ async function init() {
         state.activeConversationId = args.conversationId;
         resetSessionViewState();
       }
-      if (args?.tab && ['context', 'calls', 'quota', 'vault'].includes(args.tab)) {
+      if (args?.module === 'i18n') {
+        switchModule('i18n', args?.i18nTab || null);
+      } else if (args?.tab && ['context', 'calls', 'quota', 'vault'].includes(args.tab)) {
         switchTab(args.tab);
       } else if (args?.tab === 'settings') {
         toggleSettingsView();
@@ -2308,7 +2418,9 @@ async function init() {
         renderContext(false);
         if (state.launcherMode) renderLauncherView();
       }
-      if (sc.initialTab && ['context', 'calls', 'quota', 'vault'].includes(sc.initialTab)) {
+      if (sc.initialModule === 'i18n') {
+        switchModule('i18n', sc.initialI18nTab || null);
+      } else if (sc.initialTab && ['context', 'calls', 'quota', 'vault'].includes(sc.initialTab)) {
         switchTab(sc.initialTab);
       } else if (sc.initialTab === 'settings') {
         toggleSettingsView();
@@ -2386,10 +2498,12 @@ async function init() {
   }
 
   await refreshAll(false, false);
+  void i18nModule?.loadStatus(false);
   restartPollTimer();
   requestAnimationFrame(() => {
     positionIndicator('mainSegNav', 'mainSegIndicator');
     positionIndicator('callsModeNav', 'callsModeIndicator');
+    i18nModule?.positionSubNav();
   });
 }
 

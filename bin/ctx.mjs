@@ -3,6 +3,12 @@ import { buildCompactBrief, saveMemory, searchMemories } from '../src/core/vault
 import { getTelemetryReport } from '../src/core/telemetry.mjs';
 import { getQuotaSnapshot } from '../src/core/quota.mjs';
 import { runDoctor, repairLocalState, exportBackup } from '../src/core/doctor.mjs';
+import {
+  getI18nStatus,
+  refreshRuntimeBundle,
+  triggerApplyPatch,
+  triggerRestorePatch,
+} from '../src/core/i18n/index.mjs';
 
 function parseArgs(argv) {
   const pos = [];
@@ -29,7 +35,7 @@ function parseArgs(argv) {
   return { cmd: pos[0] || 'help', rest: pos.slice(1), flags };
 }
 
-function main() {
+async function main() {
   const { cmd, rest, flags } = parseArgs(process.argv.slice(2));
   const opts = {};
   if (flags['data-dir']) opts.dataDir = flags['data-dir'];
@@ -120,8 +126,39 @@ function main() {
       print(out, `Exported sanitized backup to ${out.displayPath} (${out.counts.memories} memories, ${out.counts.calls} calls)`);
       break;
     }
+    case 'i18n': {
+      const sub = rest[0] || 'status';
+      if (sub === 'status') {
+        const st = getI18nStatus(opts);
+        const lines = [
+          `Status: ${st.status} | Version: ${st.appVersion || 'unknown'}`,
+          `Install Dir: ${st.installDir || '(not found)'}`,
+          `Clean Backup: ${st.hasCleanBackup ? 'YES' : 'NO'} (${(st.backups || []).map((b) => b.name).join(', ') || 'none'})`,
+          `Active Dict Entries: ${st.dictStats?.totalActive ?? 0}`,
+        ];
+        print(st, lines.join('\n'));
+        break;
+      }
+      if (sub === 'refresh') {
+        const res = refreshRuntimeBundle(opts);
+        print(res, `Compiled runtime bundle: ${res.bundlePath} (${res.stats.totalActive} active entries)`);
+        break;
+      }
+      if (sub === 'apply') {
+        const res = await triggerApplyPatch({ sync: Boolean(flags.sync), skipProcessControl: Boolean(flags['skip-process']) }, opts);
+        print(res, res.message || `Applied localization patch (${res.status || 'ok'})`);
+        break;
+      }
+      if (sub === 'restore') {
+        const res = await triggerRestorePatch({ sync: Boolean(flags.sync), skipProcessControl: Boolean(flags['skip-process']) }, opts);
+        print(res, res.message || `Restored original app.asar (${res.status || 'ok'})`);
+        break;
+      }
+      console.error('Usage: ctx i18n <status|refresh|apply|restore> [--json]');
+      process.exit(1);
+    }
     default: {
-      console.log(`context-cache CLI
+      console.log(`Antigravity Console (context-cache) CLI
 Commands:
   brief   [--project <dir>] [--budget <n>] [--json]
   save    --title <text> --summary <text> [--kind <kind>] [--tags a,b]
@@ -129,9 +166,10 @@ Commands:
   calls   [--session <id>] [--agent main|sub] [--drops] [--json]
   quota   [--json]
   doctor  [--repair] [--json]
-  export  [--json]`);
+  export  [--json]
+  i18n    <status|refresh|apply|restore> [--json]`);
     }
   }
 }
 
-main();
+await main();

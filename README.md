@@ -1,16 +1,18 @@
-# context-cache
+# Antigravity Console (`context-cache`)
 
 **简体中文** | [English](./README.en.md)
 
-**Antigravity 原生上下文缓存、多 Agent 实时遥测与跨会话记忆插件（MCP App）**
+**模块化 Antigravity 原生控制台（MCP App）：上下文监控、多 Agent 遥测、跨会话记忆与零依赖界面汉化**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 [![Node.js >= 24](https://img.shields.io/badge/Node.js-%3E%3D24-339933.svg)](https://nodejs.org/)
 [![Zero Runtime Deps](https://img.shields.io/badge/Runtime%20Deps-0-brightgreen.svg)](#架构与设计原则)
 
-`context-cache` 是为 **Google Antigravity** 打造的原生 MCP App 观测与跨会话记忆插件，集 **上下文构成透视、主/子 Agent 实时 TPS 与缓存击穿归因、多对话自动跟随与跨视图联动、左侧边栏一键无框独立悬浮窗、Git 感知跨会话记忆库与双视图交接胶囊、抗宿主更新自愈底座** 于一体。
+`context-cache` 自 **v1.3.0** 起升级为模块化 **Antigravity Console（Antigravity 控制台）**（底层插件 ID `context-cache`、外置数据目录 `%USERPROFILE%\.context-cache` 与 MCP 工具完全向后兼容，老用户平滑升级零迁移成本），采用**宽屏左侧窄图标栏 / 窄屏顶部紧凑切换条**的响应式双形态外壳，当前内置两大核心模块：
+1. **上下文监控（Context Monitor）**：上下文构成透视、主/子 Agent 实时 TPS 与缓存击穿归因、多对话自动跟随与跨视图联动、原生无框独立悬浮窗、Git 感知跨会话记忆库与双视图交接胶囊。
+2. **界面汉化（Antigravity Localization）**：纯 Node.js 零依赖流式 ASAR 补丁引擎、739+ 精校内置词典（含原生菜单与动态模板正则）、三层词典外置热加载、物理免疫区防误翻、品牌名自定义、官方升级覆盖自动提醒与脱离进程一键应用/无损还原。
 
-**核心目标：实时监控 0 模型 Token 消耗、对业务代码仓库零写入污染、Antigravity 升级改版不崩不丢数据。**
+**核心目标：实时监控与控制台管理 0 模型 Token 消耗、对业务代码仓库零写入污染、Antigravity 升级改版不崩不丢数据。**
 
 > [!NOTE]
 > **已知边界说明**
@@ -43,10 +45,17 @@
 - 所有记忆写入前自动脱敏（过滤 Bearer Token、API Key、JWT、PEM 私钥等），`SessionStart` 在 `< 500 tokens` 硬预算内注入极简项目索引并提示 `HEAD` 前进标脏。
 - **固定高度双视图交接胶囊**：默认展示人眼易读卡片（逐条勾选决策实时计算 Token 预算），一键切换 Agent 紧凑载荷原文（`[CTX-CAPSULE] ...`），在 Aux Pane 中支持通过 `updateModelContext` 一键附着到下一条消息。
 
-### 5. 原生无框悬浮窗、响应式边界固定与专属设置（v1.2.0 升级）
-- **Windows 原生无框 WebView2 悬浮窗**（`global`: `Context Monitor`）：基于 `127.0.0.1` 一次性令牌自动拉起无浏览器标题栏的原生圆角悬浮窗（非 Windows 或异常时自动降级至 Edge/Chrome `--app`），支持 Always-on-Top 一键置顶固定、**快捷收缩为迷你悬浮条**、**独立最小化与一键唤醒还原**、8 方向缩放与高 DPI 精准记忆，关闭即释放本地端口。
-- **严格前端视口边界固定**：右侧边栏（`<= 600px`）自动将 7 列明细切换为 `100%` 宽度的紧凑双行卡片（零横向滚动与裁切），所有自定义下拉菜单内置动态视口边界钳制，任意缩放与宽度下均不溢出。
+### 5. 原生无框悬浮窗、响应式控制台外壳与专属设置（v1.3.0 升级）
+- **响应式模块化控制台外壳**：宽屏（`> 680px`，左侧边栏全页或宽屏悬浮窗）展示 `56px` 固定左侧图标导航栏，窄屏（`<= 680px`，右侧边栏或紧凑悬浮窗）自动折叠为顶部紧凑模块切换条；所有自定义下拉菜单内置动态视口边界钳制，零横向滚动与裁切。
+- **Windows 原生无框 WebView2 悬浮窗**（`global`: `Antigravity Console`）：基于 `127.0.0.1` 一次性令牌自动拉起无浏览器标题栏的原生圆角悬浮窗（非 Windows 或异常时自动降级至 Edge/Chrome `--app`），支持 Always-on-Top 一键置顶固定、**快捷收缩为迷你悬浮条（含上下文占比 / TPS / 模型徽章且支持横向拉伸）**、**独立最小化与一键唤醒还原**、8 方向缩放与高 DPI 精准记忆，关闭即释放本地端口。
 - 定时检测周期可调（`3s` / `5s` / `10s` / `30s` / `60s` / `手动暂停`），全部面板刷新走私有工具，**0 模型 Token 消耗**。
+
+### 6. Antigravity 界面汉化模块（v1.3.0 新增）
+- **纯 Node.js 零依赖流式 ASAR 补丁引擎**：无需 `node_modules` 或解包数千文件，直接流式原位重写 `resources/app.asar` 并完整维护 Electron 4 MiB 分块 SHA-256 `integrity` 校验，无损保留 `unpacked`/`executable`/`link` 元数据。
+- **5 态精准感知与干净备份保护**：自动探测客户端安装目录、版本号与汉化状态（未汉化 / 控制台已汉化 / 检测到第三方补丁 / 官方更新待重打 / 未找到）；严格保护原版备份，若检测到第三方补丁（如已有 `app.asar.zh-cn.bak`），自动以干净原版备份为基底，绝不误将已补丁文件存为原版。
+- **脱离进程安全重启（Windows WMI Breakaway）**：点击「一键应用汉化」或「一键还原原版」时，通过脱离宿主进程树与 Job Object 的独立后台进程自动关闭客户端、释放文件锁、写入/还原 `app.asar` 并重新拉起 Antigravity，执行结果回写 `last-job.json`。
+- **高质量默认词典 + 三层外置热加载**：内置 **739+ 精校词条**（127 条 Electron 原生菜单 + 612 条 Antigravity 2.0 高频界面 + 34 条动态变量正则模板），支持 `自定义覆盖 > 社区 MIT 词典导入/HTTPS 同步 > 内置词典` 三层合并，实时编译至 `%USERPROFILE%\.context-cache\i18n\runtime-bundle.json`——**日常改词条、切品牌名、调免疫规则无需重新打包 `app.asar`**。
+- **防误翻物理免疫区、品牌定制与更新提醒**：支持一键开关代码块（`.monaco-editor`/`pre`/`code`）、输入框、终端（`.xterm`）、文件路径及自定义 CSS 选择器免疫；支持原版/中文/自定义/隐藏左上角品牌显示；官方升级覆盖 `app.asar` 后顶部自动提醒一键重新汉化。
 
 ---
 
@@ -57,7 +66,7 @@
 | 层级 | 工具清单 | 可见性 | 对模型上下文的影响 |
 | :--- | :--- | :--- | :--- |
 | **Model-Visible（5 个精简工具）** | `ctx_open_monitor`、`ctx_brief`、`ctx_save`、`ctx_search`、`ctx_doctor` | `["model", "app"]` | 常驻定义极简（约 `0.6K` tokens） |
-| **App-Only（7 个 UI 私有工具）** | `app_get_context_breakdown`、`app_get_calls`、`app_get_quota`、`app_calibrate_quota`、`app_vault_manage`、`app_config_manage`、`app_doctor_action` | `["app"]` | **0 tokens**（模型不可见、不触发推理） |
+| **App-Only（8 个 UI 私有工具）** | `app_get_context_breakdown`、`app_get_calls`、`app_get_quota`、`app_calibrate_quota`、`app_vault_manage`、`app_config_manage`、`app_doctor_action`、`app_i18n_manage` | `["app"]` | **0 tokens**（模型不可见、不触发推理） |
 
 ### 五层抗 Antigravity 破坏性更新设计
 1. **零运行时依赖**：Core Engine、Hooks、MCP Server、CLI 纯基于 Node.js 24 原生能力（含 `node:sqlite`）；仅开发期使用 `@modelcontextprotocol/ext-apps` + `esbuild` 将前端打包为单一零外链静态 HTML，部署产物**零 `node_modules`**。
@@ -77,16 +86,16 @@
 
 ### 方式一：下载 Release 免构建插件包（推荐，零 `npm install`）
 
-1. 前往 [Releases](https://github.com/Horikita-9-Suzune-Max-Ultrafast/context-cache/releases) 下载 `context-cache-v1.2.1-plugin.zip`（内部为全明文可读 `.mjs` 源码 + 预编译单文件 UI，零 `node_modules`）。
+1. 前往 [Releases](https://github.com/Horikita-9-Suzune-Max-Ultrafast/context-cache/releases) 下载 `context-cache-v1.3.0-plugin.zip`（内部为全明文可读 `.mjs` 源码 + 预编译单文件 UI，零 `node_modules`）。
 2. 解压至 Antigravity 插件目录，使目录结构为 `~/.gemini/config/plugins/context-cache/plugin.json`：
    - **Windows PowerShell**：
      ```powershell
-     Expand-Archive -Path .\context-cache-v1.2.1-plugin.zip -DestinationPath "$env:USERPROFILE\.gemini\config\plugins" -Force
+     Expand-Archive -Path .\context-cache-v1.3.0-plugin.zip -DestinationPath "$env:USERPROFILE\.gemini\config\plugins" -Force
      ```
    - **macOS / Linux**：
      ```bash
      mkdir -p ~/.gemini/config/plugins
-     unzip -o context-cache-v1.2.1-plugin.zip -d ~/.gemini/config/plugins
+     unzip -o context-cache-v1.3.0-plugin.zip -d ~/.gemini/config/plugins
      ```
 3. Antigravity 会自动发现并加载插件（无需重启）。
 
@@ -100,7 +109,7 @@ cd context-cache
 # 2. 安装开发期 UI 打包依赖（仅 devDependencies，不会进入部署产物）
 npm install
 
-# 3. 运行全套 8 个自动化测试文件（11 项用例，完全隔离临时目录，零真实数据污染）
+# 3. 运行全套 10 个自动化测试文件（16 项用例，完全隔离临时目录，零真实数据与宿主污染）
 npm test
 
 # 4. 构建单文件 MCP App UI 并幂等部署至 ~/.gemini/config/plugins/context-cache
@@ -112,9 +121,9 @@ npm run pack:release
 ```
 
 部署完成后：
-- 在左侧边栏打开 **`Context Monitor`**（全页视图）；
-- 或在对话右侧边栏 `+` 菜单打开 **`Context & Telemetry`**（侧边栏视图）；
-- 点击右上角齿轮图标进入 **「插件设置」** 调整轮询周期、单行状态条、告警阈值、独立悬浮小窗或执行 Doctor 维护。
+- 在左侧边栏打开 **`Antigravity Console`**（全页视图，含左侧窄图标模块栏）；
+- 或在对话右侧边栏 `+` 菜单打开 **`Antigravity Console`**（侧边栏视图，顶部紧凑模块切换条）；
+- 点击左下角 / 右上角齿轮图标进入 **「插件设置」** 调整轮询周期、单行状态条、告警阈值、独立悬浮小窗或执行 Doctor 维护。
 
 ---
 
@@ -142,6 +151,12 @@ node --no-warnings scripts/doctor.mjs --repair
 
 # 导出脱敏备份至 ~/.context-cache/exports/
 node --no-warnings bin/ctx.mjs export
+
+# Antigravity 汉化状态探测、词典热更新与应急还原
+node --no-warnings bin/ctx.mjs i18n status
+node --no-warnings bin/ctx.mjs i18n refresh
+node --no-warnings bin/ctx.mjs i18n apply
+node --no-warnings bin/ctx.mjs i18n restore
 ```
 
 ---
@@ -167,16 +182,17 @@ context-cache/
 │   │   ├── quota.mjs                    # 5h/7d 滑动窗口、基线校准与 QuotaProvider 扩展口
 │   │   ├── popout-server.mjs            # 127.0.0.1 令牌鉴权悬浮小窗服务、握手与自动降级
 │   │   ├── win-floating-host.ps1        # Windows 原生无框 WebView2 置顶/收缩/最小化悬浮窗宿主
-│   │   └── doctor.mjs                   # 体检、漂移报告、备份导出与自愈
+│   │   ├── doctor.mjs                   # 体检、漂移报告、备份导出与自愈
+│   │   └── i18n/                        # 零依赖 Antigravity 汉化引擎（ASAR/词典/脱离重启）
 │   ├── adapters/antigravity/            # 极薄 Fail-Open Hook 适配层
 │   │   ├── normalize.mjs                # 多版本字段归一化与脱敏漂移录制
 │   │   ├── circuit-breaker.mjs          # 3 次异常熔断 5 分钟
 │   │   └── hook.mjs                     # 统一 Hook 入口（5s 硬超时）
-│   ├── mcp/server.mjs                   # 零依赖 MCP Stdio Server（5 Model + 7 App-Only）
-│   └── ui/                              # 单文件自包含 MCP App 前端与 esbuild 打包脚本
+│   ├── mcp/server.mjs                   # 零依赖 MCP Stdio Server（5 Model + 8 App-Only）
+│   └── ui/                              # 单文件自包含模块化控制台前端（含 modules/i18n-module.mjs）
 ├── plugin/                              # Antigravity 插件清单、Hooks、Rules、Skills 与图标
 ├── scripts/                             # deploy.mjs、pack-release.mjs 与 doctor.mjs
-├── tests/                               # 8 个端到端 / 单元 / 韧性测试文件（11 项用例）
+├── tests/                               # 10 个端到端 / 单元 / 韧性测试文件（16 项用例）
 ├── LICENSE                              # MIT License
 ├── README.md                            # 简体中文文档
 ├── README.en.md                         # English documentation

@@ -105,6 +105,7 @@ button, input, textarea {
 .overflow-x-auto { overflow-x: auto; }
 .overflow-y-auto { overflow-y: auto; }
 .truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.break-all { word-break: break-all; }
 .whitespace-nowrap { white-space: nowrap; }
 .whitespace-pre-wrap { white-space: pre-wrap; }
 .text-left { text-align: left; }
@@ -287,16 +288,291 @@ button, input, textarea {
   transform: rotate(45deg);
 }
 
-/* Shell Container Query */
+/* Responsive Antigravity Console Shell & Container Query */
 #appShell {
-  container-type: inline-size;
-  container-name: agy-shell;
   width: 100%;
-  max-width: 1120px;
+  max-width: 1176px;
   margin: 0 auto;
   min-height: 100vh;
   display: flex;
+  flex-direction: row;
+  align-items: stretch;
+}
+
+.console-rail {
+  width: 56px;
+  flex-shrink: 0;
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  display: flex;
   flex-direction: column;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 6px;
+  background: var(--card);
+  border-right: 1px solid var(--border);
+  z-index: 30;
+}
+
+.console-rail-top,
+.console-rail-bottom {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+}
+
+.console-rail-brand {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 4px;
+}
+
+.console-rail-btn {
+  position: relative;
+  width: 44px;
+  min-height: 44px;
+  padding: 5px 2px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--muted-foreground);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  cursor: pointer;
+  transition: background 150ms ease, color 150ms ease, border-color 150ms ease;
+}
+
+.console-rail-btn:hover {
+  background: color-mix(in srgb, var(--foreground) 5%, transparent);
+  color: var(--foreground);
+}
+
+.console-rail-btn[data-active="true"] {
+  background: color-mix(in srgb, var(--primary) 11%, transparent);
+  border-color: color-mix(in srgb, var(--primary) 26%, transparent);
+  color: var(--primary);
+}
+
+.console-rail-lbl {
+  font-size: 11px;
+  line-height: 1.1;
+  font-weight: 500;
+}
+
+.console-rail-dot {
+  position: absolute;
+  top: 5px;
+  right: 6px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--warning);
+  box-shadow: 0 0 0 2px var(--card);
+}
+
+.console-workspace {
+  container-type: inline-size;
+  container-name: agy-shell;
+  flex: 1 1 0%;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.console-module {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 0%;
+  min-width: 0;
+}
+
+.console-top-bar {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 8px 12px 6px;
+  background: var(--background);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.console-top-switcher {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+  width: 100%;
+  padding: 3px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--foreground) 4.5%, transparent);
+  border: 1px solid var(--border);
+}
+
+.console-top-btn {
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 7px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--muted-foreground);
+  font-size: 12.5px;
+  font-weight: 500;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 0;
+  cursor: pointer;
+  transition: background 150ms ease, color 150ms ease, box-shadow 150ms ease;
+}
+
+.console-top-btn:hover {
+  color: var(--foreground);
+}
+
+.console-top-btn[data-active="true"] {
+  background: var(--card);
+  color: var(--foreground);
+  border-color: var(--border);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+}
+
+@media (max-width: 680px) {
+  #appShell {
+    flex-direction: column;
+  }
+  .console-rail {
+    display: none;
+  }
+  .console-top-bar {
+    display: flex;
+  }
+}
+
+.i18n-update-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+  padding: 9px 16px;
+  background: color-mix(in srgb, var(--warning) 10%, var(--card));
+  border-bottom: 1px solid color-mix(in srgb, var(--warning) 32%, var(--border));
+}
+
+/* i18n Module Styles */
+.i18n-status-pill[data-tone="success"] {
+  color: var(--success);
+  border-color: color-mix(in srgb, var(--success) 42%, var(--border));
+  background: color-mix(in srgb, var(--success) 10%, var(--card));
+}
+.i18n-status-pill[data-tone="warning"] {
+  color: var(--warning);
+  border-color: color-mix(in srgb, var(--warning) 44%, var(--border));
+  background: color-mix(in srgb, var(--warning) 11%, var(--card));
+}
+.i18n-status-pill[data-tone="error"] {
+  color: var(--error);
+  border-color: color-mix(in srgb, var(--error) 42%, var(--border));
+  background: color-mix(in srgb, var(--error) 10%, var(--card));
+}
+.i18n-status-pill[data-tone="neutral"] {
+  color: var(--muted-foreground);
+  border-color: var(--border);
+  background: var(--background);
+}
+
+.i18n-dict-row {
+  padding: 12px 18px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  transition: background 140ms ease;
+}
+.i18n-dict-row:hover {
+  background: color-mix(in srgb, var(--foreground) 2.5%, transparent);
+}
+.i18n-dict-row[data-disabled="true"] .i18n-dict-zh {
+  text-decoration: line-through;
+  opacity: 0.52;
+}
+.i18n-src-badge {
+  display: inline-flex;
+  align-items: center;
+  height: 19px;
+  padding: 0 7px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 500;
+  border: 1px solid var(--border);
+  background: var(--background);
+  color: var(--muted-foreground);
+}
+.i18n-src-badge[data-src="custom"] {
+  color: var(--primary);
+  border-color: color-mix(in srgb, var(--primary) 34%, var(--border));
+  background: color-mix(in srgb, var(--primary) 10%, transparent);
+}
+.i18n-src-badge[data-src="community"] {
+  color: var(--success);
+  border-color: color-mix(in srgb, var(--success) 34%, var(--border));
+  background: color-mix(in srgb, var(--success) 10%, transparent);
+}
+.i18n-row-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+.i18n-mini-action {
+  height: 26px;
+  padding: 0 8px;
+  border-radius: 7px;
+  border: 1px solid var(--border);
+  background: var(--card);
+  color: var(--muted-foreground);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 130ms ease, color 130ms ease, border-color 130ms ease;
+}
+.i18n-mini-action:hover {
+  color: var(--foreground);
+  border-color: color-mix(in srgb, var(--foreground) 22%, var(--border));
+}
+.i18n-mini-action.danger:hover {
+  color: var(--error);
+  border-color: color-mix(in srgb, var(--error) 40%, var(--border));
+}
+
+.agy-btn:disabled {
+  opacity: 0.48;
+  cursor: not-allowed;
+  transform: none !important;
+}
+
+@container agy-shell (max-width: 520px) {
+  .i18n-dict-row {
+    flex-direction: column;
+    padding: 11px 14px;
+    gap: 8px;
+  }
+  .i18n-row-actions {
+    align-self: flex-end;
+  }
+  .i18n-update-banner {
+    padding: 8px 12px;
+  }
 }
 
 .agy-header {
@@ -1356,8 +1632,16 @@ body.native-popout #appShell {
   min-height: 0;
   height: auto;
   flex: 1 1 0%;
+  overflow: hidden;
+}
+body.native-popout .console-rail {
+  height: 100%;
+  position: relative;
+}
+body.native-popout .console-workspace {
   overflow-y: auto;
   overflow-x: hidden;
+  min-height: 0;
 }
 body.native-popout .agy-header {
   padding-top: 10px;

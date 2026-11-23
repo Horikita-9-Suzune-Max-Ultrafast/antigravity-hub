@@ -1,16 +1,18 @@
-# context-cache
+# Antigravity Console (`context-cache`)
 
 [简体中文](./README.md) | **English**
 
-**Native Antigravity MCP App for Context Inspection, Multi-Agent Telemetry, and Git-Aware Cross-Session Memory**
+**Modular Native Antigravity Console (MCP App): Context Monitor, Multi-Agent Telemetry, Cross-Session Vault & Zero-Dep Chinese Localization**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 [![Node.js >= 24](https://img.shields.io/badge/Node.js-%3E%3D24-339933.svg)](https://nodejs.org/)
 [![Zero Runtime Deps](https://img.shields.io/badge/Runtime%20Deps-0-brightgreen.svg)](#architecture--design-principles)
 
-`context-cache` is a native MCP App plugin for **Google Antigravity** combining **context window breakdown, main/sub-agent TPS & prefix-cache drop attribution, auto-following active conversations across views, movable/resizable floating monitor from the left sidebar, Git-aware cross-session memory & dual-view handoff capsules, and an anti-fragile self-healing runtime**.
+Starting in **v1.3.0**, `context-cache` evolves into the modular **Antigravity Console** (preserving the `context-cache` plugin ID, `%USERPROFILE%\.context-cache` data directory, and all existing MCP tools for seamless zero-migration upgrades), featuring a responsive dual-layout shell (left icon rail on wide screens, compact top module bar in narrow side panes) with two built-in modules:
+1. **Context Monitor**: Context window breakdown, main/sub-agent TPS & prefix-cache drop attribution, auto-following active conversations across views, native frameless floating monitor, Git-aware cross-session memory & dual-view handoff capsules.
+2. **Antigravity Localization**: Pure Node.js zero-dependency streaming ASAR patcher, 739+ curated default Chinese entries (native menus + UI + dynamic regex patterns), 3-layer hot-reloaded external dictionary, physical immunity zones, brand customization, update-drift reminders, and detached apply/restore worker.
 
-**Core goals: 0 model tokens consumed by live monitoring, zero files written into target business repositories, and resilient operation across Antigravity host updates.**
+**Core goals: 0 model tokens consumed by live monitoring & console UI, zero files written into target business repositories, and resilient operation across Antigravity host updates.**
 
 > [!NOTE]
 > **Known Host Boundaries**
@@ -43,10 +45,17 @@
 - Auto-redacts secrets (Bearer tokens, API keys, JWTs, PEM private keys) before writing to disk; injects a `< 500 tokens` brief at `SessionStart` with `HEAD` staleness indicators.
 - **Fixed-Height Dual-View Handoff Capsule**: Toggle between human-readable cards (with live per-decision checkboxes updating the token budget) and the compact `[CTX-CAPSULE]` agent payload, with optional `updateModelContext` attachment in Aux Pane.
 
-### 5. Native Frameless Floating Host, Viewport Containment & Settings (Upgraded in v1.2.0)
-- **Native Windows Frameless WebView2 Floating Window** (`global`: `Context Monitor`): Launches a native rounded borderless OS window over a `127.0.0.1` ephemeral port with one-time token auth (automatically falling back to Edge/Chrome `--app` on other platforms or init errors). Supports Always-on-Top pinning, **quick-collapse mini bar**, **independent minimize & instant foreground restore**, high-DPI scaling, 8-edge resize, and **auto-port release on close**.
-- **Strict Viewport Containment**: Automatically switches the 7-column calls table to a 100%-width 2-row compact card list in narrow side panes (`<= 600px`) with zero horizontal overflow, plus dynamic viewport clamping for all popover dropdowns.
+### 5. Native Frameless Floating Host, Responsive Console Shell & Settings (Upgraded in v1.3.0)
+- **Responsive Modular Console Shell**: Displays a `56px` left icon rail on wide viewports (`> 680px`) and automatically collapses into a compact top module bar in narrow side panes (`<= 680px`), maintaining zero horizontal overflow and dynamic popover viewport clamping.
+- **Native Windows Frameless WebView2 Floating Window** (`global`: `Antigravity Console`): Launches a native rounded borderless OS window over a `127.0.0.1` ephemeral port with one-time token auth (falling back to Edge/Chrome `--app` on other platforms). Supports Always-on-Top pinning, **quick-collapse mini bar (with Context %, TPS & Model badges + horizontal resize)**, **independent minimize & foreground restore**, high-DPI scaling, 8-edge resize, and **auto-port release on close**.
 - Configurable auto-refresh interval (`3s` / `5s` / `10s` / `30s` / `60s` / `manual`), running exclusively over app-only tools at **0 LLM token cost**.
+
+### 6. Antigravity Chinese Localization Module (New in v1.3.0)
+- **Zero-Dep Pure Node.js Streaming ASAR Patcher**: Patches `resources/app.asar` in-place without unpacking thousands of `node_modules` files, maintaining full Electron 4 MiB block SHA-256 `integrity` hashes and preserving `unpacked`/`executable`/`link` entries verbatim.
+- **5-State Detection & Clean Backup Guard**: Auto-detects install path, version, and state (`not_found` / `unpatched` / `patched_by_console` / `patched_by_other` / `outdated_after_update`). Never backs up a patched `app.asar` as a clean original—when a third-party patch is present, uses its clean backup (e.g. `app.asar.zh-cn.bak`) as the base.
+- **Detached Breakaway Apply/Restore Worker**: On Windows, spawns via WMI `Win32_Process.Create` completely outside Antigravity's process tree and Job Object to safely close Antigravity, release `app.asar`, apply or restore, and relaunch the app cleanly.
+- **Curated Default Dictionary & 3-Layer Hot-Reload**: Ships **739+ curated entries** (127 Electron menu items + 612 Antigravity 2.0 UI strings + 34 dynamic regex patterns) with 3-layer merging (`custom > community MIT > builtin`) compiled to `%USERPROFILE%\.context-cache\i18n\runtime-bundle.json`—day-to-day dictionary, immunity, and brand edits take effect without repacking `app.asar`.
+- **Physical Immunity Zones, Brand Customization & Update Alerts**: Protects code editors, inputs, terminals, file paths, and custom CSS selectors from accidental translation; customizes top-left brand display; alerts automatically when an official Antigravity update overwrites `app.asar`.
 
 ---
 
@@ -57,7 +66,7 @@
 | Tier | Tools | Visibility | Model Context Impact |
 | :--- | :--- | :--- | :--- |
 | **Model-Visible (5 slim tools)** | `ctx_open_monitor`, `ctx_brief`, `ctx_save`, `ctx_search`, `ctx_doctor` | `["model", "app"]` | Minimal footprint (~`0.6K` tokens) |
-| **App-Only (7 UI private tools)** | `app_get_context_breakdown`, `app_get_calls`, `app_get_quota`, `app_calibrate_quota`, `app_vault_manage`, `app_config_manage`, `app_doctor_action` | `["app"]` | **0 tokens** (invisible to model) |
+| **App-Only (8 UI private tools)** | `app_get_context_breakdown`, `app_get_calls`, `app_get_quota`, `app_calibrate_quota`, `app_vault_manage`, `app_config_manage`, `app_doctor_action`, `app_i18n_manage` | `["app"]` | **0 tokens** (invisible to model) |
 
 ### Five-Layer Anti-Fragile Design
 1. **Zero Runtime Dependencies**: Core Engine, Hooks, MCP Stdio Server, and CLI run purely on Node.js 24 native modules (`node:sqlite`, `node:http`, `node:crypto`). Only dev-time bundling uses `@modelcontextprotocol/ext-apps` + `esbuild` to emit a single self-contained HTML; deployed bundles contain **zero `node_modules`**.
@@ -77,16 +86,16 @@
 
 ### Option A: Prebuilt Release Bundle (Recommended, No `npm install`)
 
-1. Download `context-cache-v1.2.1-plugin.zip` from [Releases](https://github.com/Horikita-9-Suzune-Max-Ultrafast/context-cache/releases) (plain readable `.mjs` source + pre-bundled single-file UI, zero `node_modules`).
+1. Download `context-cache-v1.3.0-plugin.zip` from [Releases](https://github.com/Horikita-9-Suzune-Max-Ultrafast/context-cache/releases) (plain readable `.mjs` source + pre-bundled single-file UI, zero `node_modules`).
 2. Extract into `~/.gemini/config/plugins/` so `plugin.json` lives at `~/.gemini/config/plugins/context-cache/plugin.json`:
    - **Windows PowerShell**:
      ```powershell
-     Expand-Archive -Path .\context-cache-v1.2.1-plugin.zip -DestinationPath "$env:USERPROFILE\.gemini\config\plugins" -Force
+     Expand-Archive -Path .\context-cache-v1.3.0-plugin.zip -DestinationPath "$env:USERPROFILE\.gemini\config\plugins" -Force
      ```
    - **macOS / Linux**:
      ```bash
      mkdir -p ~/.gemini/config/plugins
-     unzip -o context-cache-v1.2.1-plugin.zip -d ~/.gemini/config/plugins
+     unzip -o context-cache-v1.3.0-plugin.zip -d ~/.gemini/config/plugins
      ```
 3. Antigravity discovers and loads the plugin automatically (no restart required).
 
@@ -100,7 +109,7 @@ cd context-cache
 # 2. Install dev-only UI build tools (never copied into deployed bundle)
 npm install
 
-# 3. Run full 8-file automated test suite (11 test cases, isolated temp dirs)
+# 3. Run full 10-file automated test suite (16 test cases, isolated temp dirs)
 npm test
 
 # 4. Build single-file MCP App UI and deploy to ~/.gemini/config/plugins/context-cache
@@ -137,6 +146,12 @@ node --no-warnings scripts/doctor.mjs --repair
 
 # Export sanitized backup to ~/.context-cache/exports/
 node --no-warnings bin/ctx.mjs export
+
+# Antigravity localization status, live bundle refresh, apply, and restore
+node --no-warnings bin/ctx.mjs i18n status
+node --no-warnings bin/ctx.mjs i18n refresh
+node --no-warnings bin/ctx.mjs i18n apply
+node --no-warnings bin/ctx.mjs i18n restore
 ```
 
 ---

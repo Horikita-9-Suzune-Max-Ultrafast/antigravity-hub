@@ -58,7 +58,7 @@ function createJsonRpcClient(child) {
   };
 }
 
-test('MCP App Stdio Server serves ui:// single-file HTML, exposes 5 model + 7 app-only tools, and handles all 12 tools cleanly', async () => {
+test('MCP App Stdio Server serves ui:// single-file HTML, exposes 5 model + 8 app-only tools, and handles all 13 tools cleanly', async () => {
   const root = makeTmpDir('cc-mcp-');
   const dataDir = path.join(root, 'data');
   const appDataDir = path.join(root, 'antigravity');
@@ -117,15 +117,16 @@ test('MCP App Stdio Server serves ui:// single-file HTML, exposes 5 model + 7 ap
     assert.ok(scriptMatch && scriptMatch[1].length > 1000, 'Inline script must exist');
     assert.doesNotThrow(() => new Function(scriptMatch[1]), 'Inline script must be syntactically valid JavaScript');
 
-    // 3. tools/list — verify exact 5 model-visible + 7 app-only isolation
+    // 3. tools/list — verify exact 5 model-visible + 8 app-only isolation
     const toolsResp = await client.request('tools/list');
     const tools = toolsResp.result.tools;
-    assert.equal(tools.length, 12);
+    assert.equal(tools.length, 13);
 
     const modelVisible = tools.filter((t) => t._meta?.ui?.visibility?.includes('model'));
     const appOnly = tools.filter((t) => JSON.stringify(t._meta?.ui?.visibility) === JSON.stringify(['app']));
     assert.equal(modelVisible.length, 5);
-    assert.equal(appOnly.length, 7);
+    assert.equal(appOnly.length, 8);
+    assert.ok(appOnly.some((t) => t.name === 'app_i18n_manage'));
 
     const openMon = tools.find((t) => t.name === 'ctx_open_monitor');
     assert.equal(openMon._meta.ui.resourceUri, 'ui://context-cache/dashboard.html');
@@ -159,7 +160,7 @@ test('MCP App Stdio Server serves ui:// single-file HTML, exposes 5 model + 7 ap
     assert.ok(!rDoctor.result.isError);
     assert.ok(rDoctor.result.structuredContent.report);
 
-    // 5. Call all 7 app-only tools
+    // 5. Call all 8 app-only tools
     const aCtx = await client.request('tools/call', { name: 'app_get_context_breakdown', arguments: {} });
     assert.ok(!aCtx.result.isError);
     assert.ok(Array.isArray(aCtx.result.structuredContent.breakdown));
@@ -211,6 +212,48 @@ test('MCP App Stdio Server serves ui:// single-file HTML, exposes 5 model + 7 ap
     const aDoc = await client.request('tools/call', { name: 'app_doctor_action', arguments: { action: 'rebuild_index' } });
     assert.ok(!aDoc.result.isError);
     assert.ok(aDoc.result.structuredContent.rebuild);
+
+    const fakeInstallDir = path.join(root, 'empty-antigravity');
+    fs.mkdirSync(fakeInstallDir, { recursive: true });
+
+    const aI18nStatus = await client.request('tools/call', {
+      name: 'app_i18n_manage',
+      arguments: { action: 'status', installDirOverride: fakeInstallDir },
+    });
+    assert.ok(!aI18nStatus.result.isError);
+    assert.ok(aI18nStatus.result.structuredContent.status);
+
+    const aI18nDict = await client.request('tools/call', {
+      name: 'app_i18n_manage',
+      arguments: { action: 'list_dict', installDirOverride: fakeInstallDir },
+    });
+    assert.ok(!aI18nDict.result.isError);
+    assert.ok(Array.isArray(aI18nDict.result.structuredContent.items));
+
+    const aI18nUpsert = await client.request('tools/call', {
+      name: 'app_i18n_manage',
+      arguments: {
+        action: 'upsert_entry',
+        installDirOverride: fakeInstallDir,
+        en: 'Test Source',
+        zh: '测试目标',
+        scope: 'ui',
+        disabled: false,
+      },
+    });
+    assert.ok(!aI18nUpsert.result.isError);
+    assert.ok(aI18nUpsert.result.structuredContent.ok !== false);
+
+    const aI18nCfg = await client.request('tools/call', {
+      name: 'app_i18n_manage',
+      arguments: {
+        action: 'update_config',
+        installDirOverride: fakeInstallDir,
+        patch: { enabled: false },
+      },
+    });
+    assert.ok(!aI18nCfg.result.isError);
+    assert.ok(aI18nCfg.result.structuredContent.config);
   } finally {
     child.kill();
     fs.rmSync(root, { recursive: true, force: true });
