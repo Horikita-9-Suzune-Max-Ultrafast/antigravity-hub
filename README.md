@@ -2,7 +2,7 @@
 
 **简体中文** | [English](./README.en.md)
 
-**模块化 Antigravity 原生控制中心（MCP App）：集上下文缓存与监控、多 Agent 遥测、跨会话记忆与零依赖界面汉化于一体**
+**模块化 Antigravity 原生控制中心（MCP App）：集上下文缓存与监控、生态治理与场景预设、外观壁纸引擎与零依赖界面汉化于一体**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 [![Node.js >= 24](https://img.shields.io/badge/Node.js-%3E%3D24-339933.svg)](https://nodejs.org/)
@@ -10,8 +10,8 @@
 
 **Antigravity Hub** 是为 **Google Antigravity** 打造的模块化原生控制中心，采用**宽屏左侧窄图标栏 / 窄屏顶部紧凑切换条**的响应式双形态外壳，内置四大核心模块：
 1. **上下文缓存与监控（Context Cache & Monitor）**：上下文构成透视与切模型水位模拟、主/子 Agent 实时 TPS 与缓存击穿/卫生体检、多对话自动跟随、右侧边栏一键呼出原生无框悬浮窗、Git 感知跨会话记忆库与交接胶囊（含新手悬停说明）。
-2. **生态治理与 Harness 体检（Ecosystem & Harness Governance，v1.4.0）**：Effective Harness 全景生效栈（P1 工作区 → P4 内置）、三合一纯离线体检（MCP 健康/Schema 冗余、Skill 质量/冲突/断链、隐私防泄露审计盾）、五重零事故安全护栏开关、场景预设（Profiles）Diff 切换与宿主配置快照时间机器（含 CLI 应急逃生舱）。
-3. **外观壁纸系统（Appearance & Wallpaper，v1.5.0 新增）**：复用现有 Fail-Open 客户端运行时（零新增 ASAR 侵入点）、3 套原创纯 CSS 渐变氛围预设、外置本地壁纸库与 100% 只读文件夹扫描、15 MiB 体积熔断与 Blob 内存自动释放、实时滑块热调参（不透明度/模糊/遮罩/毛玻璃）、代码与终端可读性护盾、深浅主题独立绑定、定时/启动轮播与秒级热关闭（含 CLI 急救命令）。
+2. **生态治理与 Harness 体检（Ecosystem & Harness Governance）**：Effective Harness 全景生效栈（P1 工作区 → P4 内置）、三合一纯离线体检（MCP 健康/Schema 冗余、Skill 质量/冲突/断链、隐私防泄露审计盾）、五重零事故安全护栏开关、**多信号内容分类与可勾选场景预设（支持用户自定义常驻核心、分类覆盖、Rules/Skills/MCP Token 拆分预览与一步另存）**，以及宿主配置快照时间机器（含 CLI 应急逃生舱）。
+3. **外观壁纸系统（Appearance & Wallpaper）**：复用现有 Fail-Open 客户端运行时（零新增 ASAR 侵入点）、原创纯 CSS 渐变氛围预设、外置本地壁纸库与 100% 只读文件夹扫描、**本地壁纸库轮播池子集选择与双缓冲淡入淡出**、15 MiB 体积熔断与 Blob 内存自动释放、**实时拖动热调参（不透明度/模糊/饱和度/遮罩/面板不透明度/毛玻璃）**、深浅主题独立绑定、定时/启动轮播（支持 1 分钟自定义间隔）与秒级热关闭（含 CLI 急救命令）。
 4. **界面汉化（Antigravity Localization）**：纯 Node.js 零依赖流式 ASAR 补丁引擎、739+ 精校内置词典（含原生菜单与动态模板正则）、三层词典外置热加载、物理免疫区防误翻、品牌名自定义、官方升级覆盖自动提醒与脱离进程一键应用/无损还原。
 
 **核心目标：实时监控与控制台管理 0 模型 Token 消耗、对业务代码仓库零写入污染、Antigravity 升级改版不崩不丢数据。**
@@ -59,6 +59,17 @@
 - **高质量默认词典 + 三层外置热加载**：内置 **739+ 精校词条**（127 条 Electron 原生菜单 + 612 条 Antigravity 2.0 高频界面 + 34 条动态变量正则模板），支持 `自定义覆盖 > 社区 MIT 词典导入/HTTPS 同步 > 内置词典` 三层合并，实时编译至 `%USERPROFILE%\.context-cache\i18n\runtime-bundle.json`——**日常改词条、切品牌名、调免疫规则无需重新打包 `app.asar`**。
 - **防误翻物理免疫区、品牌定制与更新提醒**：支持一键开关代码块（`.monaco-editor`/`pre`/`code`）、输入框、终端（`.xterm`）、文件路径及自定义 CSS 选择器免疫；支持原版/中文/自定义/隐藏左上角品牌显示；官方升级覆盖 `app.asar` 后顶部自动提醒一键重新汉化。
 
+### 7. 生态治理与场景预设（Ecosystem & Harness Governance）
+- **Effective Harness 全景生效栈与离线三合一体检**：按 `P1 工作区 > P2 全局 > P3 插件 > P4 内置` 扫描全部 Rules、Skills、Hooks 与 MCP Server，纯离线检测 MCP 断路径/过重 Schema、Skill 覆盖冲突/断链以及规则文件中的明文密钥风险（自动脱敏）。
+- **多信号内容分类与用户偏好**：内置分类器综合读取插件 Manifest 描述、`SKILL.md` 描述、MCP 工具名与启动参数（支持中英文语义），不再仅凭名称盲猜；用户可在「插件/MCP」页一键将核心插件设为**常驻保护**，或手动覆盖任意插件/全局 MCP 的场景分类（开发 / 办公协作 / 通用），配置持久化于 `%USERPROFILE%\.context-cache\governance\preferences.json`。
+- **确定性预设 + 可勾选推荐模板**：内置「极简省流」「全部启用」（确定性）与「专注编码」「办公协作」（推荐模板，未归类项默认保持现状防误关）；预览弹窗支持**逐项勾选微调**、实时重算 **Rules / Skills / MCP 拆分 Token 变化**，并可一步勾选**「执行后同时另存为自定义预设」**。
+- **五重安全护栏与快照时间机器**：系统级保护 `context-cache` 防失联、所有修改前自动留存不可变宿主配置快照（含永久基线），支持界面一键无损回滚与 CLI 逃生舱（`ctx gov rollback`）。
+
+### 8. 外观壁纸系统（Appearance & Wallpaper）
+- **零新增侵入点热加载**：复用 Fail-Open 客户端运行时实时推送样式，无需重新打包 `app.asar`；支持秒级总开关与 CLI 一键急救关闭（`ctx wallpaper off`）。
+- **多元壁纸来源与轮播池**：支持纯 CSS 渐变氛围预设、外置本地壁纸库（15 MiB 体积熔断）与只读本地文件夹扫描；支持**按来源筛选轮播池与自定义壁纸库子集**、双缓冲平滑淡入淡出及 1 分钟自定义轮播间隔。
+- **实时参数调节与深浅主题绑定**：滑块拖动即时生效，支持不透明度、模糊、饱和度、全局遮罩、面板不透明度（`scrimOpacity`）与毛玻璃调节，并支持浅色/深色主题独立绑定壁纸。
+
 ---
 
 ## 架构与设计原则
@@ -88,16 +99,16 @@
 
 ### 方式一：下载 Release 免构建插件包（推荐，零 `npm install`）
 
-1. 前往 [Releases](https://github.com/Horikita-9-Suzune-Max-Ultrafast/antigravity-hub/releases) 下载 `context-cache-v1.3.0-plugin.zip`（内部为全明文可读 `.mjs` 源码 + 预编译单文件 UI，零 `node_modules`）。
+1. 前往 [Releases](https://github.com/Horikita-9-Suzune-Max-Ultrafast/antigravity-hub/releases) 下载 `context-cache-v1.5.0-plugin.zip`（内部为全明文可读 `.mjs` 源码 + 预编译单文件 UI，零 `node_modules`）。
 2. 解压至 Antigravity 插件目录，使目录结构为 `~/.gemini/config/plugins/context-cache/plugin.json`：
    - **Windows PowerShell**：
      ```powershell
-     Expand-Archive -Path .\context-cache-v1.3.0-plugin.zip -DestinationPath "$env:USERPROFILE\.gemini\config\plugins" -Force
+     Expand-Archive -Path .\context-cache-v1.5.0-plugin.zip -DestinationPath "$env:USERPROFILE\.gemini\config\plugins" -Force
      ```
    - **macOS / Linux**：
      ```bash
      mkdir -p ~/.gemini/config/plugins
-     unzip -o context-cache-v1.3.0-plugin.zip -d ~/.gemini/config/plugins
+     unzip -o context-cache-v1.5.0-plugin.zip -d ~/.gemini/config/plugins
      ```
 3. Antigravity 会自动发现并加载插件（无需重启）。
 
@@ -111,7 +122,7 @@ cd antigravity-hub
 # 2. 安装开发期 UI 打包依赖（仅 devDependencies，不会进入部署产物）
 npm install
 
-# 3. 运行全套 10 个自动化测试文件（16 项用例，完全隔离临时目录，零真实数据与宿主污染）
+# 3. 运行全套 12 个自动化测试文件（27 项用例，完全隔离临时目录，零真实数据与宿主污染）
 npm test
 
 # 4. 构建单文件 MCP App UI 并幂等部署至 ~/.gemini/config/plugins/context-cache
@@ -196,16 +207,18 @@ context-cache/
 │   │   ├── popout-server.mjs            # 127.0.0.1 令牌鉴权悬浮小窗服务、握手与自动降级
 │   │   ├── win-floating-host.ps1        # Windows 原生无框 WebView2 置顶/收缩/最小化悬浮窗宿主
 │   │   ├── doctor.mjs                   # 体检、漂移报告、备份导出与自愈
+│   │   ├── governance/                  # 生态治理（全景扫描/多信号分类器/场景预设/离线体检/护栏快照）
+│   │   ├── appearance/                  # 外观壁纸引擎（预设/外置库/只读扫描/轮播池/热加载）
 │   │   └── i18n/                        # 零依赖 Antigravity 汉化引擎（ASAR/词典/脱离重启）
 │   ├── adapters/antigravity/            # 极薄 Fail-Open Hook 适配层
 │   │   ├── normalize.mjs                # 多版本字段归一化与脱敏漂移录制
 │   │   ├── circuit-breaker.mjs          # 3 次异常熔断 5 分钟
 │   │   └── hook.mjs                     # 统一 Hook 入口（5s 硬超时）
-│   ├── mcp/server.mjs                   # 零依赖 MCP Stdio Server（5 Model + 8 App-Only）
-│   └── ui/                              # 单文件自包含模块化控制台前端（含 modules/i18n-module.mjs）
+│   ├── mcp/server.mjs                   # 零依赖 MCP Stdio Server（5 Model + 10 App-Only）
+│   └── ui/                              # 单文件自包含模块化控制台前端（governance/appearance/i18n）
 ├── plugin/                              # Antigravity 插件清单、Hooks、Rules、Skills 与图标
 ├── scripts/                             # deploy.mjs、pack-release.mjs 与 doctor.mjs
-├── tests/                               # 10 个端到端 / 单元 / 韧性测试文件（16 项用例）
+├── tests/                               # 12 个端到端 / 单元 / 韧性测试文件（27 项用例）
 ├── LICENSE                              # MIT License
 ├── README.md                            # 简体中文文档
 ├── README.en.md                         # English documentation
