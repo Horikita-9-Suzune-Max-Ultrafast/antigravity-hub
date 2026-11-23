@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { execFile } from 'node:child_process';
 import { getDataPaths, formatDisplayPath } from '../paths.mjs';
 
 export const ALLOWED_IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.avif', '.svg']);
@@ -239,17 +240,124 @@ export function deleteLibraryWallpaper(fileNameOrId, options = {}) {
   return { ok: true, deleted: raw };
 }
 
+const THUMB_CACHE = new Map();
+const MAX_THUMB_CACHE = 64;
+
 /**
- * Generate a small data-URI thumbnail preview for UI cards (skips > 2.5 MiB to keep IPC light).
+ * Generate a data-URI thumbnail preview for UI cards with (mtimeMs, size) memory caching.
  */
 export function buildThumbDataUri(absPath, mime) {
   try {
     if (!absPath || !fs.existsSync(absPath)) return null;
     const st = fs.statSync(absPath);
     if (st.size <= 0 || st.size > 8 * 1024 * 1024) return null;
+    const cached = THUMB_CACHE.get(absPath);
+    if (cached && cached.mtimeMs === st.mtimeMs && cached.size === st.size) {
+      return cached.uri;
+    }
     const b64 = fs.readFileSync(absPath).toString('base64');
-    return `data:${mime || 'image/png'};base64,${b64}`;
+    const uri = `data:${mime || 'image/png'};base64,${b64}`;
+    if (THUMB_CACHE.size >= MAX_THUMB_CACHE) {
+      const oldestKey = THUMB_CACHE.keys().next().value;
+      if (oldestKey !== undefined) THUMB_CACHE.delete(oldestKey);
+    }
+    THUMB_CACHE.set(absPath, { mtimeMs: st.mtimeMs, size: st.size, uri });
+    return uri;
   } catch {
     return null;
   }
+}
+
+/**
+ * Open a native OS folder picker dialog without blocking the Node.js event loop.
+ * Strictly returns the chosen directory path; never mutates any files.
+ */
+export function pickLocalFolderNative(initialPath = '') {
+  return new Promise((resolve) => {
+    const startDir = String(initialPath || '').trim();
+    const safeInitial = startDir && fs.existsSync(startDir) ? path.resolve(startDir) : '';
+
+    if (process.platform === 'win32') {
+      const escapedInit = safeInitial.replace(/'/g, "''");
+      const psScript = [
+        '[Console]::OutputEncoding = [System.Text.Encoding]::UTF8',
+        'Add-Type -AssemblyName System.Windows.Forms',
+        '$owner = New-Object System.Windows.Forms.Form',
+        '$owner.TopMost = $true',
+        '$owner.StartPosition = "Manual"',
+        '$owner.Location = New-Object System.Drawing.Point(-32000, -32000)',
+        '$owner.Size = New-Object System.Drawing.Size(1, 1)',
+        '$owner.ShowInTaskbar = $false',
+        '$dlg = New-Object System.Windows.Forms.FolderBrowserDialog',
+        '$dlg.Description = "选择本地壁纸文件夹（严格只读）"',
+        '$dlg.ShowNewFolderButton = $false',
+        escapedInit ? `$dlg.SelectedPath = '${escapedInit}'` : '',
+        '$owner.Show()',
+        '$res = $dlg.ShowDialog($owner)',
+        '$owner.Close()',
+        '$owner.Dispose()',
+        'if ($res -eq [System.Windows.Forms.DialogResult]::OK) { Write-Output $dlg.SelectedPath }',
+      ]
+        .filter(Boolean)
+        .join('; ');
+
+      execFile(
+        'powershell.exe',
+        ['-NoProfile', '-NonInteractive', '-STA', '-Command', psScript],
+        { windowsHide: true, timeout: 180000, maxBuffer: 1024 * 1024 },
+        (err, stdout) => {
+          if (err) {
+            resolve({ ok: false, canceled: false, folderPath: '', error: `无法打开系统文件夹选择框: ${err.message}` });
+            return;
+          }
+          const picked = String(stdout || '').trim();
+          if (!picked) {
+            resolve({ ok: true, canceled: true, folderPath: '' });
+            return;
+          }
+          resolve({ ok: true, canceled: false, folderPath: picked });
+        }
+      );
+      return;
+    }
+
+    if (process.platform === 'darwin') {
+      execFile(
+        'osascript',
+        ['-e', 'POSIX path of (choose folder with prompt "选择本地壁纸文件夹")'],
+        { timeout: 180000 },
+        (err, stdout) => {
+          if (err) {
+            if (/User canceled|-128/i.test(String(err.message || ''))) {
+              resolve({ ok: true, canceled: true, folderPath: '' });
+              return;
+            }
+            resolve({ ok: false, canceled: false, folderPath: '', error: err.message });
+            return;
+          }
+          const picked = String(stdout || '').trim().replace(/\/+$/, '');
+          resolve({ ok: true, canceled: !picked, folderPath: picked });
+        }
+      );
+      return;
+    }
+
+    execFile(
+      'zenity',
+      ['--file-selection', '--directory', '--title=选择本地壁纸文件夹'],
+      { timeout: 180000 },
+      (err, stdout) => {
+        if (err) {
+          if (err.code === 1) {
+            resolve({ ok: true, canceled: true, folderPath: '' });
+            return;
+          }
+          resolve({ ok: false, canceled: false, folderPath: '', error: '当前环境不支持原生目录选择框，请直接输入路径' });
+          return;
+        }
+        const picked = String(stdout || '').trim();
+        resolve({ ok: true, canceled: !picked, folderPath: picked });
+      }
+    );
+  });
 }

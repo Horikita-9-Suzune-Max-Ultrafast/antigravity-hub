@@ -488,3 +488,126 @@ export function rollbackSnapshot(snapshotId, options = {}) {
     message: `已无损还原快照 ${target.id}（${restoredFiles.length} 个文件）`,
   };
 }
+
+export const VALID_ITEM_CATEGORIES = new Set(['coding', 'office', 'general']);
+
+/**
+ * Load user governance preferences (pinned core plugins & manual category overrides).
+ */
+export function loadGovernancePreferences(options = {}) {
+  const { governancePrefsFile } = getDataPaths(options);
+  const raw = safeReadJson(governancePrefsFile, null);
+  const pinnedPlugins = Array.isArray(raw?.pinnedPlugins)
+    ? [...new Set(raw.pinnedPlugins.map((x) => String(x || '').trim()).filter(Boolean))]
+    : [];
+  const categories = {};
+  if (raw?.categories && typeof raw.categories === 'object' && !Array.isArray(raw.categories)) {
+    for (const [k, v] of Object.entries(raw.categories)) {
+      const key = String(k || '').trim();
+      const val = String(v || '').trim();
+      if (key && VALID_ITEM_CATEGORIES.has(val)) {
+        categories[key] = val;
+      }
+    }
+  }
+  return { pinnedPlugins, categories };
+}
+
+export function saveGovernancePreferences(prefs, options = {}) {
+  const { governanceDir, governancePrefsFile } = getDataPaths(options);
+  ensureDir(governanceDir);
+  const normalized = {
+    pinnedPlugins: [...new Set((prefs?.pinnedPlugins || []).map((x) => String(x || '').trim()).filter(Boolean))],
+    categories: {},
+    updatedAt: new Date().toISOString(),
+  };
+  if (prefs?.categories && typeof prefs.categories === 'object') {
+    for (const [k, v] of Object.entries(prefs.categories)) {
+      const key = String(k || '').trim();
+      const val = String(v || '').trim();
+      if (key && VALID_ITEM_CATEGORIES.has(val)) {
+        normalized.categories[key] = val;
+      }
+    }
+  }
+  writeAtomicRaw(governancePrefsFile, `${JSON.stringify(normalized, null, 2)}\n`);
+  return normalized;
+}
+
+/**
+ * Pin or unpin a user-selected core plugin so presets keep it enabled by default.
+ */
+export function setPluginPinned(pluginId, pinned, options = {}) {
+  const id = String(pluginId || '').trim();
+  if (!id) throw new Error('插件 ID 不能为空');
+  if (PROTECTED_PLUGINS.has(id) && !pinned) {
+    throw new Error(`「${id}」为系统保护插件，无法取消常驻`);
+  }
+
+  const prefs = loadGovernancePreferences(options);
+  const set = new Set(prefs.pinnedPlugins);
+  if (pinned) {
+    set.add(id);
+  } else {
+    set.delete(id);
+  }
+  const saved = saveGovernancePreferences({ ...prefs, pinnedPlugins: [...set] }, options);
+
+  appendAuditLog(
+    {
+      action: 'set_plugin_pin',
+      pluginId: id,
+      pinned: Boolean(pinned),
+    },
+    options
+  );
+
+  return {
+    ok: true,
+    pluginId: id,
+    pinned: Boolean(pinned),
+    preferences: saved,
+    message: pinned ? `已将「${id}」设为常驻核心插件` : `已取消「${id}」的常驻保护`,
+  };
+}
+
+/**
+ * Set or clear a manual scenario category override for a plugin (`plugin:<id>`) or global MCP (`mcp:<name>`).
+ */
+export function setItemCategory(itemKey, category, options = {}) {
+  const key = String(itemKey || '').trim();
+  if (!key || (!key.startsWith('plugin:') && !key.startsWith('mcp:'))) {
+    throw new Error('itemKey 格式必须为 plugin:<id> 或 mcp:<name>');
+  }
+  const cat = String(category || '').trim().toLowerCase();
+  const prefs = loadGovernancePreferences(options);
+  const nextCategories = { ...prefs.categories };
+
+  if (!cat || cat === 'auto') {
+    delete nextCategories[key];
+  } else if (VALID_ITEM_CATEGORIES.has(cat)) {
+    nextCategories[key] = cat;
+  } else {
+    throw new Error(`不支持的分类标签: ${category}`);
+  }
+
+  const saved = saveGovernancePreferences({ ...prefs, categories: nextCategories }, options);
+
+  appendAuditLog(
+    {
+      action: 'set_item_category',
+      itemKey: key,
+      category: cat || 'auto',
+    },
+    options
+  );
+
+  const labelMap = { auto: '自动推断', coding: '开发', office: '办公协作', general: '通用' };
+  return {
+    ok: true,
+    itemKey: key,
+    category: cat || 'auto',
+    preferences: saved,
+    message: `已更新分类为「${labelMap[cat || 'auto'] || cat}」`,
+  };
+}

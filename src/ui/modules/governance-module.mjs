@@ -26,11 +26,32 @@ const CATEGORY_LABEL = {
   config: '配置解析',
 };
 
+const ITEM_CATEGORY_LABEL = {
+  coding: '开发',
+  office: '办公协作',
+  general: '通用',
+};
+
 function fmtK(tokens) {
-  const n = Number(tokens) || 0;
+  const n = Math.abs(Number(tokens) || 0);
   if (n >= 1000000) return `${(n / 1000000).toFixed(2)}M`;
   if (n >= 1000) return `${(n / 1000).toFixed(1)}K`;
-  return String(n);
+  return String(Math.round(n));
+}
+
+function fmtSignedK(tokens) {
+  const n = Number(tokens) || 0;
+  if (n === 0) return '±0';
+  return `${n > 0 ? '+' : '-'}${fmtK(n)}t`;
+}
+
+function fmtTokenParts(tb) {
+  if (!tb) return '';
+  const parts = [];
+  if (tb.rules) parts.push(`Rules ${fmtK(tb.rules)}t`);
+  if (tb.skills) parts.push(`Skills ${fmtK(tb.skills)}t`);
+  if (tb.mcp) parts.push(`MCP ${fmtK(tb.mcp)}t`);
+  return parts.join(' / ');
 }
 
 function fmtTime(iso) {
@@ -205,26 +226,54 @@ export function createGovernanceModule({
         pList.innerHTML = `<div class="px-5 py-6 text-center text-xs text-muted">未匹配到插件</div>`;
       } else {
         pList.innerHTML = plugins
-          .map(
-            (p) => `
+          .map((p) => {
+            const cls = p.classification || { category: 'general', source: 'inferred', reason: '' };
+            const selectedCat = cls.source === 'user' ? cls.category : 'auto';
+            const autoLabel = `自动(${ITEM_CATEGORY_LABEL[cls.category] || '通用'})`;
+            const isSysProt = Boolean(p.systemProtected);
+            const isPinned = Boolean(p.userPinned);
+            return `
             <div class="px-5 py-3.5 flex items-center justify-between gap-3">
               <div class="min-w-0 space-y-1">
                 <div class="flex flex-wrap items-center gap-1.5">
                   <span class="text-sm font-medium text-fg truncate">${esc(p.displayName)}</span>
-                  <span class="agy-pill mono-num text-[11px]">${esc(p.version)}</span>
-                  ${p.protected ? `<span class="agy-pill text-[11px] text-primary" style="border-color: var(--primary);">受保护</span>` : ''}
-                  ${!p.enabled ? `<span class="agy-pill text-[11px] text-muted">已停用</span>` : ''}
+                  <span class="agy-pill mono-num text-xs">${esc(p.version)}</span>
+                  ${isSysProt ? `<span class="agy-pill text-xs text-primary" style="border-color: var(--primary);">系统保护</span>` : ''}
+                  ${isPinned ? `<span class="agy-pill text-xs text-primary" style="border-color: var(--primary);">常驻核心</span>` : ''}
+                  ${!p.enabled ? `<span class="agy-pill text-xs text-muted">已停用</span>` : ''}
                 </div>
                 <div class="text-xs text-muted truncate">${esc(p.description || p.displayPath)}</div>
-                <div class="flex flex-wrap items-center gap-2 text-[11px] text-muted mono-num">
+                <div class="flex flex-wrap items-center gap-3 text-xs text-muted mono-num">
                   <span>MCP ${p.counts.mcp}</span>
-                  <span>· Skills ${p.counts.skills}</span>
-                  <span>· Rules ${p.counts.rules}</span>
-                  <span>· Hooks ${p.counts.hooks}</span>
-                  <span>· 估算 ~${fmtK(p.tokens.total)}t</span>
+                  <span>Skills ${p.counts.skills}</span>
+                  <span>Rules ${p.counts.rules}</span>
+                  <span>Hooks ${p.counts.hooks}</span>
+                  <span>估算 ~${fmtK(p.tokens.total)}t</span>
                 </div>
               </div>
               <div class="shrink-0 flex items-center gap-2">
+                ${
+                  isSysProt
+                    ? ''
+                    : `<select
+                        class="agy-input text-xs py-1 px-2"
+                        style="width: auto; min-width: 92px;"
+                        data-gov-item-category="plugin:${esc(p.id)}"
+                        title="${esc(cls.reason || '场景分类')}"
+                      >
+                        <option value="auto" ${selectedCat === 'auto' ? 'selected' : ''}>${esc(autoLabel)}</option>
+                        <option value="coding" ${selectedCat === 'coding' ? 'selected' : ''}>开发</option>
+                        <option value="office" ${selectedCat === 'office' ? 'selected' : ''}>办公协作</option>
+                        <option value="general" ${selectedCat === 'general' ? 'selected' : ''}>通用</option>
+                      </select>
+                      <button
+                        type="button"
+                        class="agy-btn ${isPinned ? 'agy-btn-primary' : 'agy-btn-secondary'} agy-btn-sm text-xs"
+                        data-gov-pin-plugin="${esc(p.id)}"
+                        data-pinned="${isPinned ? 'true' : 'false'}"
+                        title="${isPinned ? '取消常驻核心保护' : '设为常驻核心，场景切换时默认保留'}"
+                      >${isPinned ? '已常驻' : '常驻'}</button>`
+                }
                 <button
                   type="button"
                   class="agy-switch"
@@ -233,11 +282,11 @@ export function createGovernanceModule({
                   data-on="${p.enabled ? 'true' : 'false'}"
                   data-gov-toggle-plugin="${esc(p.id)}"
                   data-enabled="${p.enabled ? 'true' : 'false'}"
-                  ${p.protected ? 'disabled title="受保护核心控制台，禁止关闭以防失联"' : `title="${p.enabled ? '点击安全停用（写前自动快照）' : '点击启用（写前自动快照）'}"`}
+                  ${isSysProt ? 'disabled title="系统保护核心控制台，禁止关闭以防失联"' : `title="${p.enabled ? '点击安全停用（写前自动快照）' : '点击启用（写前自动快照）'}"`}
                 ><span class="agy-switch-thumb"></span></button>
               </div>
-            </div>`
-          )
+            </div>`;
+          })
           .join('');
       }
     }
@@ -248,15 +297,18 @@ export function createGovernanceModule({
         mList.innerHTML = `<div class="px-5 py-6 text-center text-xs text-muted">当前无已配置 MCP Server</div>`;
       } else {
         mList.innerHTML = mcps
-          .map(
-            (m) => `
+          .map((m) => {
+            const cls = m.classification || { category: 'general', source: 'inferred', reason: '' };
+            const selectedCat = cls.source === 'user' ? cls.category : 'auto';
+            const autoLabel = `自动(${ITEM_CATEGORY_LABEL[cls.category] || '通用'})`;
+            return `
             <div class="px-5 py-3.5 flex items-center justify-between gap-3">
               <div class="min-w-0 space-y-1">
                 <div class="flex flex-wrap items-center gap-1.5">
                   <span class="text-sm font-medium text-fg mono-num truncate">${esc(m.name)}</span>
-                  <span class="agy-pill text-[11px]">${m.scope === 'global' ? '全局' : `插件 · ${esc(m.pluginId)}`}</span>
-                  <span class="agy-pill text-[11px]">${esc(MCP_MODE_LABEL[m.mode] || m.mode)}</span>
-                  ${m.tokens > 0 ? `<span class="agy-pill mono-num text-[11px]">~${fmtK(m.tokens)}t</span>` : ''}
+                  <span class="agy-pill text-xs">${m.scope === 'global' ? '全局' : `插件 ${esc(m.pluginId)}`}</span>
+                  <span class="agy-pill text-xs">${esc(MCP_MODE_LABEL[m.mode] || m.mode)}</span>
+                  ${m.tokens > 0 ? `<span class="agy-pill mono-num text-xs">~${fmtK(m.tokens)}t</span>` : ''}
                 </div>
                 <div class="text-xs text-muted mono-num truncate">
                   ${m.transport === 'http' ? esc(m.url) : esc(`${m.command} ${(m.args || []).join(' ')}`.trim())}
@@ -265,7 +317,18 @@ export function createGovernanceModule({
               <div class="shrink-0 flex items-center gap-2">
                 ${
                   m.canToggle
-                    ? `<button
+                    ? `<select
+                        class="agy-input text-xs py-1 px-2"
+                        style="width: auto; min-width: 92px;"
+                        data-gov-item-category="mcp:${esc(m.name)}"
+                        title="${esc(cls.reason || '场景分类')}"
+                      >
+                        <option value="auto" ${selectedCat === 'auto' ? 'selected' : ''}>${esc(autoLabel)}</option>
+                        <option value="coding" ${selectedCat === 'coding' ? 'selected' : ''}>开发</option>
+                        <option value="office" ${selectedCat === 'office' ? 'selected' : ''}>办公协作</option>
+                        <option value="general" ${selectedCat === 'general' ? 'selected' : ''}>通用</option>
+                      </select>
+                      <button
                         type="button"
                         class="agy-switch"
                         role="switch"
@@ -275,11 +338,11 @@ export function createGovernanceModule({
                         data-enabled="${m.enabled ? 'true' : 'false'}"
                         title="${m.enabled ? '停用并移入隔离暂存区（写前自动快照）' : '从隔离暂存区原样恢复'}"
                       ><span class="agy-switch-thumb"></span></button>`
-                    : `<span class="text-[11px] text-muted">随父插件控制</span>`
+                    : `<span class="text-xs text-muted">随父插件控制</span>`
                 }
               </div>
-            </div>`
-          )
+            </div>`;
+          })
           .join('');
       }
     }
@@ -381,12 +444,45 @@ export function createGovernanceModule({
     const ov = state.overview;
     if (!ov) return;
 
+    const builtinList = byId('govBuiltinProfilesList');
+    if (builtinList) {
+      const builtins = ov.builtinProfiles || [];
+      if (!builtins.length) {
+        builtinList.innerHTML = `<div class="px-5 py-5 text-center text-xs text-muted">暂无内置推荐预设</div>`;
+      } else {
+        builtinList.innerHTML = builtins
+          .map((pf) => {
+            const st = pf.stats || {};
+            const sevTone = pf.tone === 'warn' ? 'warn' : pf.tone === 'error' ? 'error' : 'info';
+            return `
+            <div class="px-5 py-3.5 space-y-1.5">
+              <div class="flex flex-wrap items-start justify-between gap-3">
+                <div class="min-w-0 space-y-1 flex-1">
+                  <div class="flex flex-wrap items-center gap-1.5">
+                    <span class="text-sm font-medium text-fg">${esc(pf.name)}</span>
+                    ${pf.badge ? `<span class="gov-sev-badge" data-sev="${sevTone}">${esc(pf.badge)}</span>` : ''}
+                  </div>
+                  <div class="text-xs text-muted leading-snug">${esc(pf.description || '')}</div>
+                  <div class="flex flex-wrap items-center gap-3 text-xs text-muted mono-num pt-0.5">
+                    <span>插件 ${st.enabledPlugins ?? 0}/${st.totalPlugins ?? 0}</span>
+                    <span>全局 MCP ${st.enabledMcp ?? 0}/${st.totalMcp ?? 0}</span>
+                    ${st.uncertainCount > 0 ? `<span>未归类 ${st.uncertainCount}</span>` : ''}
+                  </div>
+                </div>
+                <button type="button" class="agy-btn agy-btn-primary agy-btn-sm text-xs shrink-0" data-gov-apply-profile="${esc(pf.id)}">预览并切换</button>
+              </div>
+            </div>`;
+          })
+          .join('');
+      }
+    }
+
     const pList = byId('govProfilesList');
     if (pList) {
       if (!ov.profiles.length) {
         pList.innerHTML = `
-          <div class="px-5 py-6 text-center text-xs text-muted">
-            尚未保存场景预设。在上方输入名称（如「重度编码」「轻量省流」）即可把当前启停组合存为一键预设。
+          <div class="px-5 py-5 text-center text-xs text-muted">
+            尚未保存自定义预设。你可以直接使用上方内置推荐预设，或在上方输入框将当前启停组合存为专属预设。
           </div>`;
       } else {
         pList.innerHTML = ov.profiles
@@ -397,8 +493,9 @@ export function createGovernanceModule({
             <div class="px-5 py-3.5 flex items-center justify-between gap-3">
               <div class="min-w-0 space-y-0.5">
                 <div class="text-sm font-medium text-fg truncate">${esc(pf.name)}</div>
-                <div class="text-xs text-muted truncate">
-                  ${esc(pf.description || `插件 ${enPlugins}/${totalPlugins} 启用`)} · 更新于 ${fmtTime(pf.updatedAt)}
+                <div class="flex flex-wrap items-center gap-3 text-xs text-muted">
+                  <span class="truncate">${esc(pf.description || `插件 ${enPlugins}/${totalPlugins} 启用`)}</span>
+                  <span class="mono-num shrink-0">更新于 ${fmtTime(pf.updatedAt)}</span>
                 </div>
               </div>
               <div class="shrink-0 flex items-center gap-1.5">
@@ -518,35 +615,179 @@ export function createGovernanceModule({
     }
   }
 
+  async function handlePinPlugin(pluginId, nextPinned) {
+    try {
+      const res = await callAppTool('app_governance_manage', {
+        action: 'set_plugin_pin',
+        pluginId,
+        pinned: nextPinned,
+        projectDir: getProjectDir?.() || undefined,
+      });
+      if (res?.overview) state.overview = res.overview;
+      renderAll();
+      showToast(res?.result?.message || '已更新常驻保护状态', 'success');
+    } catch (err) {
+      showToast(err.message || String(err), 'error');
+      await loadOverview(false);
+    }
+  }
+
+  async function handleSetItemCategory(itemKey, category) {
+    try {
+      const res = await callAppTool('app_governance_manage', {
+        action: 'set_item_category',
+        itemKey,
+        category,
+        projectDir: getProjectDir?.() || undefined,
+      });
+      if (res?.overview) state.overview = res.overview;
+      renderAll();
+      showToast(res?.result?.message || '已更新场景分类', 'success');
+    } catch (err) {
+      showToast(err.message || String(err), 'error');
+      await loadOverview(false);
+    }
+  }
+
+  function updateProfileModalSummary() {
+    const pending = state.pendingConfirm;
+    if (!pending || pending.type !== 'profile' || !pending.items) return;
+    const summaryEl = byId('govProfileDiffSummary');
+    if (!summaryEl) return;
+
+    let count = 0;
+    const totals = { rules: 0, skills: 0, mcp: 0, total: 0 };
+    for (const item of pending.items) {
+      const cb = document.querySelector(`#govConfirmBody input[data-diff-idx="${item.idx}"]`);
+      const checked = cb ? cb.checked : item.defaultChecked;
+      if (!checked) continue;
+      count++;
+      const sign = item.to ? 1 : -1;
+      totals.rules += sign * (item.tokenBreakdown?.rules || 0);
+      totals.skills += sign * (item.tokenBreakdown?.skills || 0);
+      totals.mcp += sign * (item.tokenBreakdown?.mcp || 0);
+      totals.total += sign * (item.tokenBreakdown?.total || 0);
+    }
+
+    const parts = [];
+    if (totals.rules) parts.push(`Rules ${fmtSignedK(totals.rules)}`);
+    if (totals.skills) parts.push(`Skills ${fmtSignedK(totals.skills)}`);
+    if (totals.mcp) parts.push(`MCP ${fmtSignedK(totals.mcp)}`);
+    const breakdownHtml = parts.length ? `（${esc(parts.join(' / '))}）` : '';
+    summaryEl.innerHTML = `执行前自动留存快照；本次变更 <strong>${count}</strong> 项，预计常驻上下文变化 <strong class="mono-num">${esc(fmtSignedK(totals.total))}</strong><span class="mono-num text-muted">${breakdownHtml}</span>`;
+  }
+
   async function handlePreviewProfile(profileId) {
     try {
       const diff = await callAppTool('app_governance_manage', {
         action: 'preview_profile',
         profileId,
       });
-      if (!diff.totalChanges) {
+      const uncertain = Array.isArray(diff.unchangedUncertain) ? diff.unchangedUncertain : [];
+      if (!diff.totalChanges && !uncertain.length) {
         showToast(`当前状态已与预设「${diff.profile.name}」一致，无需修改`, 'info');
         return;
       }
-      const lines = [
-        ...diff.pluginChanges.map(
-          (c) => `<div class="text-xs mono-num">${c.to ? '+ 启用插件' : '- 停用插件'}: <strong>${esc(c.displayName)}</strong> (${esc(c.id)})</div>`
-        ),
-        ...diff.mcpChanges.map(
-          (c) => `<div class="text-xs mono-num">${c.to ? '+ 启用全局 MCP' : '- 隔离全局 MCP'}: <strong>${esc(c.name)}</strong></div>`
-        ),
-      ];
-      const deltaStr = diff.estimatedTokenDelta === 0 ? '±0' : `${diff.estimatedTokenDelta > 0 ? '+' : ''}${fmtK(diff.estimatedTokenDelta)}t`;
+
+      const items = [];
+      for (const c of diff.pluginChanges || []) {
+        items.push({
+          idx: items.length,
+          kind: 'plugin',
+          id: c.id,
+          displayName: c.displayName,
+          from: c.from,
+          to: c.to,
+          defaultChecked: true,
+          uncertain: false,
+          classification: c.classification,
+          tokenBreakdown: c.tokenBreakdown,
+        });
+      }
+      for (const c of diff.mcpChanges || []) {
+        items.push({
+          idx: items.length,
+          kind: 'mcp',
+          id: c.name,
+          displayName: c.name,
+          from: c.from,
+          to: c.to,
+          defaultChecked: true,
+          uncertain: false,
+          classification: c.classification,
+          tokenBreakdown: c.tokenBreakdown,
+        });
+      }
+      for (const u of uncertain) {
+        items.push({
+          idx: items.length,
+          kind: u.kind,
+          id: u.id,
+          displayName: u.displayName,
+          from: u.enabled,
+          to: !u.enabled,
+          defaultChecked: false,
+          uncertain: true,
+          classification: u.classification,
+          tokenBreakdown: u.tokenBreakdown,
+        });
+      }
+
+      const renderRow = (item) => {
+        const cls = item.classification || {};
+        const catLabel = ITEM_CATEGORY_LABEL[cls.category] || '通用';
+        const actionText = item.kind === 'plugin' ? (item.to ? '启用插件' : '停用插件') : item.to ? '启用 MCP' : '隔离 MCP';
+        const tbText = fmtTokenParts(item.tokenBreakdown);
+        return `
+          <label class="flex items-start gap-2 py-1.5 cursor-pointer select-none">
+            <input type="checkbox" class="shrink-0" style="margin-top: 2px;" data-diff-idx="${item.idx}" ${item.defaultChecked ? 'checked' : ''} />
+            <div class="min-w-0 flex-1 space-y-0.5">
+              <div class="flex flex-wrap items-center gap-1.5 text-xs">
+                <span class="mono-num font-medium ${item.to ? 'text-success' : 'text-fg'}">${item.to ? '+' : '-'} ${esc(actionText)}</span>
+                <strong class="text-fg truncate">${esc(item.displayName)}</strong>
+                <span class="agy-pill text-xs">${esc(catLabel)}</span>
+                ${tbText ? `<span class="text-xs text-muted mono-num">${esc(tbText)}</span>` : ''}
+              </div>
+              ${cls.reason ? `<div class="text-xs text-muted truncate">${esc(cls.reason)}</div>` : ''}
+            </div>
+          </label>`;
+      };
+
+      const mainItems = items.filter((x) => !x.uncertain);
+      const uncertainItems = items.filter((x) => x.uncertain);
+
       openConfirmDialog({
         type: 'profile',
         id: profileId,
-        title: `确认切换场景预设：${diff.profile.name}`,
+        title: `预览切换：${diff.profile.name}`,
         bodyHtml: `
-          <div class="text-xs text-muted mb-2">执行前将自动创建不可变宿主配置快照；本次共变更 <strong>${diff.totalChanges}</strong> 项，预计常驻上下文变化 <strong class="mono-num">${esc(deltaStr)}</strong>：</div>
-          <div class="agy-subtle p-3 space-y-1.5">${lines.join('')}</div>
-          ${diff.skippedProtected?.length ? `<div class="text-[11px] text-primary mt-2">已自动跳过受保护项：${esc(diff.skippedProtected.join(', '))}</div>` : ''}
+          <div id="govProfileDiffSummary" class="text-xs text-muted mb-2 leading-relaxed"></div>
+          ${
+            mainItems.length
+              ? `<div class="agy-subtle p-3 divide-y scroll-thin" style="max-height: 240px; overflow-y: auto;">${mainItems.map(renderRow).join('')}</div>`
+              : `<div class="agy-subtle p-3 text-xs text-muted">推荐变更项已与当前状态一致。</div>`
+          }
+          ${
+            uncertainItems.length
+              ? `<div class="space-y-1.5 pt-2">
+                  <div class="text-xs text-muted font-medium">未归类项（默认保持现状，可按需勾选切换）</div>
+                  <div class="agy-subtle p-3 divide-y scroll-thin" style="max-height: 160px; overflow-y: auto;">${uncertainItems.map(renderRow).join('')}</div>
+                </div>`
+              : ''
+          }
+          ${diff.skippedProtected?.length ? `<div class="text-xs text-primary pt-1">已保护跳过：${esc(diff.skippedProtected.join(', '))}</div>` : ''}
+          <div class="pt-2 border-t space-y-2">
+            <label class="flex items-center gap-2 text-xs text-fg cursor-pointer select-none">
+              <input id="govConfirmSaveAsToggle" type="checkbox" />
+              <span>执行后同时另存为自定义预设</span>
+            </label>
+            <input id="govConfirmSaveAsName" type="text" class="agy-input text-xs hidden" placeholder="输入新预设名称（如：我的开发配置）" value="${esc(diff.profile.name)} 自定义" />
+          </div>
         `,
       });
+
+      state.pendingConfirm = { type: 'profile', id: profileId, diff, items };
+      updateProfileModalSummary();
     } catch (err) {
       showToast(err.message || String(err), 'error');
     }
@@ -578,12 +819,41 @@ export function createGovernanceModule({
   async function executePendingConfirm() {
     const pending = state.pendingConfirm;
     if (!pending) return;
+
+    let overrides = undefined;
+    let saveAsName = undefined;
+    if (pending.type === 'profile' && Array.isArray(pending.items)) {
+      const pluginOverrides = {};
+      const mcpOverrides = {};
+      for (const item of pending.items) {
+        const cb = document.querySelector(`#govConfirmBody input[data-diff-idx="${item.idx}"]`);
+        const checked = cb ? cb.checked : item.defaultChecked;
+        const desired = checked ? item.to : item.from;
+        if (item.kind === 'plugin') pluginOverrides[item.id] = desired;
+        else if (item.kind === 'mcp') mcpOverrides[item.id] = desired;
+      }
+      overrides = { plugins: pluginOverrides, globalMcp: mcpOverrides };
+      const saveToggle = byId('govConfirmSaveAsToggle');
+      const saveInput = byId('govConfirmSaveAsName');
+      if (saveToggle?.checked) {
+        const nm = String(saveInput?.value || '').trim();
+        if (!nm) {
+          showToast('请输入要保存的自定义预设名称', 'warning');
+          saveInput?.focus();
+          return;
+        }
+        saveAsName = nm;
+      }
+    }
+
     closeConfirmDialog();
     try {
       if (pending.type === 'profile') {
         const res = await callAppTool('app_governance_manage', {
           action: 'apply_profile',
           profileId: pending.id,
+          overrides,
+          saveAsName,
           projectDir: getProjectDir?.() || undefined,
         });
         if (res?.overview) state.overview = res.overview;
@@ -665,6 +935,11 @@ export function createGovernanceModule({
         void handleToggleMcp(target.dataset.govToggleMcp, nextEnabled);
         return;
       }
+      if (target.dataset.govPinPlugin) {
+        const nextPinned = target.dataset.pinned !== 'true';
+        void handlePinPlugin(target.dataset.govPinPlugin, nextPinned);
+        return;
+      }
       if (target.dataset.govPreviewFile) {
         void openFilePreview(target.dataset.govPreviewFile, target.dataset.govPreviewTitle);
         return;
@@ -688,6 +963,26 @@ export function createGovernanceModule({
       }
       if (target.dataset.govRollback) {
         void handlePreviewRollback(target.dataset.govRollback);
+      }
+    });
+
+    byId('module-governance')?.addEventListener('change', (e) => {
+      const sel = e.target.closest('select[data-gov-item-category]');
+      if (!sel) return;
+      void handleSetItemCategory(sel.dataset.govItemCategory, sel.value);
+    });
+
+    byId('govConfirmBody')?.addEventListener('change', (e) => {
+      if (e.target.matches('input[data-diff-idx]')) {
+        updateProfileModalSummary();
+        return;
+      }
+      if (e.target.id === 'govConfirmSaveAsToggle') {
+        const inp = byId('govConfirmSaveAsName');
+        if (inp) {
+          inp.classList.toggle('hidden', !e.target.checked);
+          if (e.target.checked) inp.focus();
+        }
       }
     });
 

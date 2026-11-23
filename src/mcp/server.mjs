@@ -314,6 +314,8 @@ export const TOOL_DEFINITIONS = [
             'preview_file',
             'toggle_plugin',
             'toggle_mcp',
+            'set_plugin_pin',
+            'set_item_category',
             'list_profiles',
             'save_profile',
             'delete_profile',
@@ -329,11 +331,16 @@ export const TOOL_DEFINITIONS = [
         pluginId: { type: 'string' },
         serverName: { type: 'string' },
         enabled: { type: 'boolean' },
+        pinned: { type: 'boolean' },
+        itemKey: { type: 'string' },
+        category: { type: 'string' },
         profileId: { type: 'string' },
         name: { type: 'string' },
         description: { type: 'string' },
         plugins: { type: 'object' },
         globalMcp: { type: 'object' },
+        overrides: { type: 'object' },
+        saveAsName: { type: 'string' },
         snapshotId: { type: 'string' },
       },
       additionalProperties: true,
@@ -356,11 +363,13 @@ export const TOOL_DEFINITIONS = [
             'import_wallpaper',
             'delete_wallpaper',
             'scan_folder',
+            'pick_folder',
             'next_wallpaper',
             'emergency_off',
           ],
         },
         patch: { type: 'object' },
+        light: { type: 'boolean' },
         fileName: { type: 'string' },
         base64: { type: 'string' },
         absPath: { type: 'string' },
@@ -734,7 +743,7 @@ export function createMcpDispatcher(options = {}) {
         }
 
         case 'app_appearance_manage': {
-          const res = handleAppearanceAction(args, options);
+          const res = await handleAppearanceAction(args, options);
           return toolOk('ok', res);
         }
 

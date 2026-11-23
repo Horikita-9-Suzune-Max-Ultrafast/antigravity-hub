@@ -78,6 +78,7 @@ export function getDataPaths(options = {}) {
     i18nUntranslatedFile: path.join(dataDir, 'i18n', 'untranslated.json'),
     governanceDir: path.join(dataDir, 'governance'),
     governanceProfilesFile: path.join(dataDir, 'governance', 'profiles.json'),
+    governancePrefsFile: path.join(dataDir, 'governance', 'preferences.json'),
     governanceDisabledMcpFile: path.join(dataDir, 'governance', 'disabled-mcp.json'),
     governanceAuditLog: path.join(dataDir, 'governance', 'audit.jsonl'),
     hostBackupsDir: path.join(dataDir, 'backups', 'host-config'),

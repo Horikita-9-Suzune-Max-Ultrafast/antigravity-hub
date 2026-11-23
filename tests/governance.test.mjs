@@ -17,6 +17,10 @@ import {
   rollbackSnapshot,
   previewGovernanceFile,
   handleGovernanceAction,
+  setPluginPinned,
+  setItemCategory,
+  listBuiltinProfiles,
+  listProfiles,
 } from '../src/core/governance/index.mjs';
 import { evaluateAlerts } from '../src/core/telemetry.mjs';
 import { loadConfig } from '../src/core/config.mjs';
@@ -176,6 +180,13 @@ test('Five-layer guardrails: self-protection, atomic toggle, MCP staging, profil
     assert.equal(applied.ok, true);
     assert.equal(applied.changed, 2);
 
+    // Built-in presets resolve dynamically, preview diff accurately, and protect context-cache
+    const ovWithBuiltins = handleGovernanceAction({ action: 'overview', projectDir: env.workspaceDir }, env.options);
+    assert.ok(Array.isArray(ovWithBuiltins.builtinProfiles) && ovWithBuiltins.builtinProfiles.length >= 4);
+    const minDiff = previewProfileDiff('builtin:minimal-chat', env.options);
+    assert.equal(minDiff.profile.builtin, true);
+    assert.equal(minDiff.profile.plugins['context-cache'], true, 'builtin minimal-chat must keep protected context-cache enabled');
+
     // Rollback to baseline snapshot restores original config.json
     const snaps = listSnapshots(env.options);
     const baseline = snaps.find((s) => s.baseline);
@@ -281,4 +292,104 @@ test('Telemetry read-only cache hygiene checks: long-context media drop & micro-
   const alerts = evaluateAlerts(calls, cfg, 20);
   assert.ok(alerts.some((a) => a.code === 'long_ctx_media_cache_risk'), 'should warn on long-context media cache drop');
   assert.ok(alerts.some((a) => a.code === 'micro_step_streak'), 'should hint on consecutive micro-steps');
+});
+
+test('Multi-signal classification, user pinning, category overrides, and interactive diff overrides + saveAsName', () => {
+  const env = makeTempEnv();
+  try {
+    const configDir = env.options.configDir;
+    // Add 3 third-party plugins with opaque names to verify content-based classification
+    // 1) corp-helper: opaque name, but SKILL.md describes email & docs -> office
+    fs.mkdirSync(path.join(configDir, 'plugins', 'corp-helper', 'skills', 'mail-bot'), { recursive: true });
+    fs.writeFileSync(
+      path.join(configDir, 'plugins', 'corp-helper', 'plugin.json'),
+      JSON.stringify({ name: 'corp-helper', displayName: '企业助手', version: '1.0.0' })
+    );
+    fs.writeFileSync(
+      path.join(configDir, 'plugins', 'corp-helper', 'skills', 'mail-bot', 'SKILL.md'),
+      '---\nname: mail-bot\ndescription: 自动整理飞书文档、邮件与会议日程安排。\n---\n# Mail Bot\n'
+    );
+
+    // 2) team-kit: opaque name, but SKILL.md describes debugging & refactoring -> coding
+    fs.mkdirSync(path.join(configDir, 'plugins', 'team-kit', 'skills', 'code-check'), { recursive: true });
+    fs.writeFileSync(
+      path.join(configDir, 'plugins', 'team-kit', 'plugin.json'),
+      JSON.stringify({ name: 'team-kit', displayName: '研发套件', version: '1.0.0' })
+    );
+    fs.writeFileSync(
+      path.join(configDir, 'plugins', 'team-kit', 'skills', 'code-check', 'SKILL.md'),
+      '---\nname: code-check\ndescription: 前端代码重构、单元测试与调试工具链。\n---\n# Code Check\n'
+    );
+
+    // 3) mystery-box: no clear signals -> general (uncertain)
+    fs.mkdirSync(path.join(configDir, 'plugins', 'mystery-box'), { recursive: true });
+    fs.writeFileSync(
+      path.join(configDir, 'plugins', 'mystery-box', 'plugin.json'),
+      JSON.stringify({ name: 'mystery-box', displayName: 'Mystery Box', version: '1.0.0', description: 'Misc utilities' })
+    );
+
+    const eco = scanEcosystem({ projectDir: env.options.projectDir }, env.options);
+    const corp = eco.plugins.find((p) => p.id === 'corp-helper');
+    const team = eco.plugins.find((p) => p.id === 'team-kit');
+    const mystery = eco.plugins.find((p) => p.id === 'mystery-box');
+    const globalSql = eco.mcpServers.find((m) => m.scope === 'global' && m.name === 'local-sqlite');
+
+    assert.equal(corp.classification.category, 'office');
+    assert.equal(corp.classification.source, 'inferred');
+    assert.equal(team.classification.category, 'coding');
+    assert.equal(mystery.classification.category, 'general');
+    assert.equal(mystery.classification.uncertain, true);
+    assert.equal(globalSql.classification.category, 'coding');
+
+    // Coding-focus should disable office plugin, keep coding plugin, and leave general plugin unchanged (in unchangedUncertain)
+    const codingDiff = previewProfileDiff('builtin:coding-focus', env.options);
+    assert.ok(codingDiff.pluginChanges.some((c) => c.id === 'corp-helper' && c.to === false));
+    assert.ok(!codingDiff.pluginChanges.some((c) => c.id === 'mystery-box'));
+    assert.ok(codingDiff.unchangedUncertain.some((u) => u.kind === 'plugin' && u.id === 'mystery-box'));
+    assert.equal(typeof codingDiff.estimatedTokenBreakdown.rules, 'number');
+    assert.equal(typeof codingDiff.estimatedTokenBreakdown.skills, 'number');
+
+    // Pin team-kit as user core plugin -> minimal-chat must keep both context-cache and team-kit enabled
+    const pinRes = setPluginPinned('team-kit', true, env.options);
+    assert.equal(pinRes.ok, true);
+    const builtinsAfterPin = listBuiltinProfiles(null, env.options);
+    const minimal = builtinsAfterPin.find((b) => b.id === 'builtin:minimal-chat');
+    assert.equal(minimal.plugins['context-cache'], true);
+    assert.equal(minimal.plugins['team-kit'], true);
+    assert.equal(minimal.plugins['corp-helper'], false);
+
+    // System protected plugin cannot be unpinned
+    assert.throws(() => setPluginPinned('context-cache', false, env.options), /系统保护/);
+
+    // Manual category override supersedes inferred category
+    setItemCategory('plugin:mystery-box', 'office', env.options);
+    const ecoAfterOverride = scanEcosystem({ projectDir: env.options.projectDir }, env.options);
+    const mysteryAfter = ecoAfterOverride.plugins.find((p) => p.id === 'mystery-box');
+    assert.equal(mysteryAfter.classification.category, 'office');
+    assert.equal(mysteryAfter.classification.source, 'user');
+
+    // Apply with overrides (keep corp-helper enabled despite coding-focus wanting it off) + saveAsName
+    const applyRes = handleGovernanceAction(
+      {
+        action: 'apply_profile',
+        profileId: 'builtin:coding-focus',
+        overrides: { plugins: { 'corp-helper': true, 'mystery-box': false } },
+        saveAsName: '我的开发特调',
+        projectDir: env.options.projectDir,
+      },
+      env.options
+    );
+    assert.equal(applyRes.result.ok, true);
+    assert.ok(applyRes.result.savedProfile);
+    assert.equal(applyRes.result.savedProfile.name, '我的开发特调');
+
+    const cfgAfter = JSON.parse(fs.readFileSync(path.join(configDir, 'config.json'), 'utf8'));
+    assert.equal(cfgAfter.plugins['mystery-box'].enabled, false);
+    assert.notEqual(cfgAfter.plugins['corp-helper']?.enabled, false);
+
+    const savedList = listProfiles(env.options);
+    assert.ok(savedList.some((p) => p.name === '我的开发特调'));
+  } finally {
+    env.cleanup();
+  }
 });

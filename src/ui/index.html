@@ -660,24 +660,37 @@
 
           <!-- 子页 4：场景预设与快照时间机器 -->
           <section id="gov-panel-profiles" class="hidden space-y-5 panel-enter">
+            <div class="agy-group overflow-hidden">
+              <div class="px-5 py-3.5 border-b flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <div class="text-sm font-semibold">内置场景预设</div>
+                  <div class="text-xs text-muted">切换前展示可勾选 Diff 并自动留存快照，新会话生效</div>
+                </div>
+              </div>
+              <div id="govBuiltinProfilesList" class="divide-y"></div>
+            </div>
+
             <div class="agy-group p-5 space-y-3">
-              <div class="text-sm font-semibold">保存当前启停组合为场景预设</div>
+              <div>
+                <div class="text-sm font-semibold">保存当前启停组合为自定义预设</div>
+                <div class="text-2xs text-muted">在「插件/MCP」页手动调好组合后，可在此固化成你的专属一键方案</div>
+              </div>
               <div class="flex flex-wrap items-center gap-2">
-                <input id="govProfileNameInput" type="text" placeholder="预设名（如：重度编码 / 轻量问答）" class="agy-input flex-1" style="min-width: min(160px, 100%);" />
-                <input id="govProfileDescInput" type="text" placeholder="可选备注..." class="agy-input flex-1" style="min-width: min(150px, 100%);" />
+                <input id="govProfileNameInput" type="text" placeholder="预设名（如：前端精简 / 论文调研）" class="agy-input flex-1" style="min-width: min(160px, 100%);" />
+                <input id="govProfileDescInput" type="text" placeholder="可选备注（适用场景说明）..." class="agy-input flex-1" style="min-width: min(150px, 100%);" />
                 <button id="govSaveProfileBtn" type="button" class="agy-btn agy-btn-primary shrink-0">保存预设</button>
               </div>
             </div>
 
             <div class="agy-group overflow-hidden">
-              <div class="px-5 py-3.5 border-b text-sm font-semibold">已保存场景预设（切换前展示精确 Diff）</div>
+              <div class="px-5 py-3.5 border-b text-sm font-semibold">我的自定义预设（切换前展示精确 Diff）</div>
               <div id="govProfilesList" class="divide-y"></div>
             </div>
 
             <div class="agy-group overflow-hidden">
               <div class="px-5 py-3.5 border-b flex flex-wrap items-center justify-between gap-2">
                 <span class="text-sm font-semibold">宿主配置快照时间机器（一键无损还原）</span>
-                <span class="text-[11px] text-muted mono-num">CLI 逃生舱: node bin/ctx.mjs gov rollback</span>
+                <span class="text-2xs text-muted mono-num">CLI 逃生舱: node bin/ctx.mjs gov rollback</span>
               </div>
               <div id="govSnapshotsList" class="divide-y"></div>
             </div>
@@ -734,22 +747,22 @@
           <section id="app-panel-gallery" class="space-y-5 panel-enter">
             <div class="agy-group p-5 space-y-3">
               <div class="flex flex-wrap items-center justify-between gap-2">
-                <span class="text-sm font-semibold">原创纯 CSS 氛围预设（零版权风险 · 开箱即用）</span>
+                <span class="text-sm font-semibold">氛围渐变预设</span>
               </div>
               <div id="appPresetsGrid" class="wp-presets-grid"></div>
             </div>
 
             <div class="agy-group overflow-hidden">
               <div class="px-5 py-3.5 border-b flex flex-wrap items-center justify-between gap-2">
-                <div>
-                  <div class="text-sm font-semibold">本地壁纸库（外置存储 · 单图上限 15 MiB）</div>
-                  <div class="text-[11px] text-muted">支持 PNG / JPG / WebP / AVIF / SVG，导入至 ~/.context-cache/wallpapers/，绝不写入业务仓库</div>
+                <div class="min-w-0">
+                  <div class="text-sm font-semibold">本地壁纸库</div>
                 </div>
                 <label class="agy-btn agy-btn-primary agy-btn-sm cursor-pointer shrink-0">
-                  <span>+ 导入本地图片</span>
+                  <span>导入图片</span>
                   <input id="appImportFileInput" type="file" accept=".png,.jpg,.jpeg,.webp,.avif,.svg,image/*" class="hidden" />
                 </label>
               </div>
+              <div id="appThemeBindBar" class="wp-theme-bar hidden"></div>
               <div id="appLibraryGrid" class="wp-lib-grid p-4"></div>
             </div>
           </section>
@@ -757,48 +770,51 @@
           <!-- 子页 2：质感与护眼调参 -->
           <section id="app-panel-tuning" class="hidden space-y-5 panel-enter">
             <div class="agy-group p-5 space-y-4">
-              <div class="text-sm font-semibold">实时视觉参数（拖动即刻热更新，无需重启）</div>
-              <div class="space-y-3 text-xs">
+              <div class="flex flex-wrap items-center justify-between gap-2">
+                <div class="text-sm font-semibold">实时视觉参数</div>
+                <button id="appResetTuningBtn" type="button" class="agy-btn agy-btn-secondary agy-btn-sm shrink-0">恢复默认</button>
+              </div>
+              <div class="space-y-3.5 text-xs">
                 <div class="wp-slider-row">
-                  <div class="flex justify-between"><span class="text-muted">壁纸不透明度</span><span id="appOpacityVal" class="mono-num font-medium">24%</span></div>
+                  <div class="wp-slider-head">
+                    <span class="text-muted">壁纸不透明度</span>
+                    <span id="appOpacityVal" class="mono-num font-medium">24%</span>
+                  </div>
                   <input id="appOpacityRange" type="range" min="5" max="85" value="24" class="wp-range" />
                 </div>
                 <div class="wp-slider-row">
-                  <div class="flex justify-between"><span class="text-muted">背景高斯模糊</span><span id="appBlurVal" class="mono-num font-medium">2px</span></div>
+                  <div class="wp-slider-head">
+                    <span class="text-muted">背景高斯模糊</span>
+                    <span id="appBlurVal" class="mono-num font-medium">2px</span>
+                  </div>
                   <input id="appBlurRange" type="range" min="0" max="24" value="2" class="wp-range" />
                 </div>
                 <div class="wp-slider-row">
-                  <div class="flex justify-between"><span class="text-muted">自适应明暗遮罩</span><span id="appScrimVal" class="mono-num font-medium">42%</span></div>
+                  <div class="wp-slider-head">
+                    <span class="text-muted">自适应明暗遮罩</span>
+                    <span id="appScrimVal" class="mono-num font-medium">42%</span>
+                  </div>
                   <input id="appScrimRange" type="range" min="0" max="85" value="42" class="wp-range" />
                 </div>
                 <div class="wp-slider-row">
-                  <div class="flex justify-between"><span class="text-muted">面板不透明度（毛玻璃透出控制）</span><span id="appGlassVal" class="mono-num font-medium">86%</span></div>
-                  <input id="appGlassRange" type="range" min="55" max="98" value="86" class="wp-range" />
+                  <div class="wp-slider-head">
+                    <span class="text-muted">壁纸色彩饱和度</span>
+                    <span id="appSatVal" class="mono-num font-medium">100%</span>
+                  </div>
+                  <input id="appSatRange" type="range" min="0" max="160" value="100" class="wp-range" />
                 </div>
               </div>
 
               <div class="pt-3 border-t space-y-3 text-xs">
                 <div class="flex items-center justify-between gap-3">
                   <span class="text-muted">画面填充方式</span>
-                  <select id="appFitSelect" class="agy-native-select">
-                    <option value="cover">铺满裁剪</option>
-                    <option value="contain">完整适应</option>
-                    <option value="center">原始居中</option>
-                  </select>
+                  <div id="appFitSelectHost" class="agy-select-wrap"></div>
                 </div>
                 <div class="flex items-center justify-between gap-3">
-                  <div>
-                    <div class="font-medium text-fg">代码与终端可读性护盾（推荐开启）</div>
-                    <div class="text-[11px] text-muted">保持 Monaco 编辑器、代码块、终端与弹窗高对比度，绝不糊字</div>
+                  <div class="min-w-0">
+                    <div class="font-medium text-fg">深浅主题独立绑定</div>
                   </div>
-                  <button id="appReadabilitySwitch" type="button" class="agy-switch" role="switch" aria-checked="true" data-on="true"><span class="agy-switch-thumb"></span></button>
-                </div>
-                <div class="flex items-center justify-between gap-3">
-                  <div>
-                    <div class="font-medium text-fg">深浅主题独立绑定壁纸</div>
-                    <div class="text-[11px] text-muted">开启后可在壁纸库卡片点「深 / 浅」分别为深色和浅色主题指定壁纸</div>
-                  </div>
-                  <button id="appSeparateThemeSwitch" type="button" class="agy-switch" role="switch" aria-checked="false" data-on="false"><span class="agy-switch-thumb"></span></button>
+                  <button id="appSeparateThemeSwitch" type="button" class="agy-switch shrink-0" role="switch" aria-checked="false" data-on="false"><span class="agy-switch-thumb"></span></button>
                 </div>
               </div>
             </div>
@@ -807,43 +823,47 @@
           <!-- 子页 3：轮播、只读文件夹与急救 -->
           <section id="app-panel-rotation" class="hidden space-y-5 panel-enter">
             <div class="agy-group p-5 space-y-4">
-              <div class="text-sm font-semibold">自动轮播与本地文件夹只读扫描</div>
-              <div class="space-y-3 text-xs">
+              <div class="text-sm font-semibold">自动轮播</div>
+              <div class="space-y-4 text-xs">
                 <div class="flex flex-wrap items-center justify-between gap-2">
                   <span class="text-muted">轮播模式</span>
-                  <select id="appRotationSelect" class="agy-native-select">
-                    <option value="off">关闭自动轮播</option>
-                    <option value="startup">每次启动随机切换</option>
-                    <option value="interval">按时间间隔自动切换</option>
-                  </select>
+                  <div id="appRotationSelectHost" class="agy-select-wrap"></div>
                 </div>
-                <div class="flex flex-wrap items-center justify-between gap-2">
-                  <span class="text-muted">定时切换间隔</span>
-                  <select id="appRotationMinSelect" class="agy-native-select">
-                    <option value="15">每 15 分钟</option>
-                    <option value="30">每 30 分钟</option>
-                    <option value="60">每 1 小时</option>
-                    <option value="240">每 4 小时</option>
-                  </select>
-                </div>
-                <div class="space-y-1.5 pt-1">
-                  <div class="text-muted">本地壁纸文件夹路径（严格 100% 只读，绝不改动原图）</div>
-                  <div class="flex flex-wrap items-center gap-2">
-                    <input id="appFolderInput" type="text" placeholder="例如：D:\Pictures\Wallpapers（留空仅使用壁纸库）" class="agy-input flex-1 mono-num" style="min-width: min(180px, 100%);" />
-                    <button id="appScanFolderBtn" type="button" class="agy-btn agy-btn-secondary shrink-0">只读扫描并保存</button>
+
+                <div id="appIntervalRow" class="space-y-2.5 pt-2 border-t">
+                  <div class="flex flex-wrap items-center justify-between gap-2">
+                    <span class="text-muted">定时切换间隔</span>
+                    <div class="wp-custom-interval">
+                      <input id="appRotationMinInput" type="number" min="1" max="1440" step="1" value="30" class="agy-input wp-interval-input mono-num" aria-label="自定义切换间隔分钟数" />
+                      <span class="text-muted">分钟</span>
+                    </div>
                   </div>
-                  <div id="appFolderMeta" class="text-[11px] text-muted"></div>
+                  <div id="appIntervalPresets" class="wp-interval-chips" role="group" aria-label="快捷切换间隔">
+                    <button type="button" class="wp-chip-btn" data-app-interval="5">5 分钟</button>
+                    <button type="button" class="wp-chip-btn" data-app-interval="10">10 分钟</button>
+                    <button type="button" class="wp-chip-btn" data-app-interval="15">15 分钟</button>
+                    <button type="button" class="wp-chip-btn" data-app-interval="30">30 分钟</button>
+                    <button type="button" class="wp-chip-btn" data-app-interval="60">1 小时</button>
+                  </div>
                 </div>
+
+                <div class="wp-pool-summary">
+                  <div class="min-w-0 space-y-0.5">
+                    <div class="font-medium text-fg">轮播候选池</div>
+                    <div id="appPoolSummaryText" class="text-xs text-muted truncate">读取中...</div>
+                  </div>
+                  <button id="appOpenPoolModalBtn" type="button" class="agy-btn agy-btn-secondary agy-btn-sm shrink-0">管理轮播池</button>
+                </div>
+
                 <div class="flex flex-wrap items-center gap-2 pt-2 border-t">
                   <button id="appNextWallpaperBtn" type="button" class="agy-btn agy-btn-primary">立即换下一张</button>
-                  <button id="appEmergencyOffBtn" type="button" class="agy-btn agy-btn-secondary">一键急救关闭壁纸</button>
+                  <button id="appEmergencyOffBtn" type="button" class="agy-btn agy-btn-secondary">一键关闭壁纸</button>
                 </div>
               </div>
             </div>
 
-            <div class="agy-group p-4 text-xs text-muted space-y-1.5">
-              <div class="font-semibold text-fg">零事故安全逃生舱</div>
-              <div>如遇壁纸参数过亮/过暗导致界面不便操作，可在任意终端运行以下命令秒级关闭，无需重启客户端：</div>
+            <div class="agy-group p-4 text-xs text-muted space-y-2">
+              <div class="font-semibold text-fg">终端应急关闭</div>
               <div class="agy-subtle px-3 py-2 mono-num text-fg">node --no-warnings bin/ctx.mjs wallpaper off</div>
             </div>
           </section>
@@ -1488,7 +1508,7 @@
 
   <!-- 模态框 7：生态治理 Diff 确认 -->
   <div id="govConfirmModal" class="gov-modal-backdrop hidden">
-    <div class="modal-card p-5 space-y-4">
+    <div class="modal-card wide p-5 space-y-4">
       <div class="flex items-center justify-between gap-2">
         <span id="govConfirmTitle" class="text-base font-semibold">确认变更</span>
         <button id="govConfirmCloseBtn" type="button" class="agy-btn agy-btn-secondary agy-icon-btn">✕</button>
@@ -1510,6 +1530,59 @@
       </div>
       <div id="govPreviewPath" class="text-xs text-muted mono-num truncate"></div>
       <pre id="govPreviewContent" class="gov-preview-pre scroll-thin"></pre>
+    </div>
+  </div>
+
+  <!-- 模态框 9：管理壁纸轮播池 -->
+  <div id="appRotationPoolModal" class="modal-backdrop" data-open="false">
+    <div class="modal-card wide p-5 space-y-4">
+      <div class="flex items-center justify-between gap-2">
+        <span class="text-base font-semibold">管理轮播池</span>
+        <button type="button" data-close-modal="appRotationPoolModal" class="agy-btn agy-btn-secondary agy-icon-btn">✕</button>
+      </div>
+
+      <div class="space-y-4 text-xs">
+        <div class="space-y-2">
+          <div class="text-muted font-medium">轮播来源</div>
+          <div id="appPoolSourceGroup" class="wp-source-tabs" role="radiogroup" aria-label="轮播来源">
+            <button type="button" class="wp-source-tab" data-pool-source="all">壁纸库与文件夹</button>
+            <button type="button" class="wp-source-tab" data-pool-source="library">仅本地壁纸库</button>
+            <button type="button" class="wp-source-tab" data-pool-source="folder">仅本地文件夹</button>
+          </div>
+        </div>
+
+        <div id="appPoolLibrarySection" class="space-y-2.5 pt-2 border-t">
+          <div class="flex items-center justify-between gap-2">
+            <span id="appPoolLibraryTitle" class="text-muted font-medium">本地壁纸库</span>
+            <div class="flex items-center gap-1.5">
+              <button id="appPoolSelectAllBtn" type="button" class="wp-mini-btn">全选</button>
+              <button id="appPoolSelectNoneBtn" type="button" class="wp-mini-btn">清空</button>
+            </div>
+          </div>
+          <div id="appPoolLibraryGrid" class="wp-pool-grid scroll-thin"></div>
+        </div>
+
+        <div id="appPoolFolderSection" class="space-y-2 pt-2 border-t">
+          <div class="flex items-center justify-between gap-2">
+            <span class="text-muted font-medium">本地只读文件夹</span>
+            <button id="appClearFolderBtn" type="button" class="wp-mini-btn danger hidden">移除路径</button>
+          </div>
+          <div class="flex flex-wrap items-center gap-2">
+            <button id="appPickFolderBtn" type="button" class="agy-btn agy-btn-primary agy-btn-sm shrink-0">选择文件夹</button>
+            <input id="appFolderInput" type="text" placeholder="或输入文件夹路径" class="agy-input flex-1 mono-num" style="min-width: min(160px, 100%);" />
+            <button id="appScanFolderBtn" type="button" class="agy-btn agy-btn-secondary agy-btn-sm shrink-0">扫描</button>
+          </div>
+          <div id="appFolderMeta" class="text-xs text-muted"></div>
+        </div>
+      </div>
+
+      <div class="flex flex-wrap items-center justify-between gap-2 pt-2 border-t">
+        <span id="appPoolModalCount" class="text-xs text-muted"></span>
+        <div class="flex items-center gap-2">
+          <button type="button" data-close-modal="appRotationPoolModal" class="agy-btn agy-btn-secondary">取消</button>
+          <button id="appSavePoolBtn" type="button" class="agy-btn agy-btn-primary">保存轮播池</button>
+        </div>
+      </div>
     </div>
   </div>
 

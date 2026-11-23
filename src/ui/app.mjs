@@ -155,10 +155,11 @@ function fmtRelativeTime(iso) {
   return `${Math.floor(diffSec / 86400)} 天前`;
 }
 
-function showToast(msg) {
+function showToast(msg, tone = 'info') {
   const t = document.getElementById('toast');
   if (!t) return;
   t.textContent = msg;
+  t.dataset.tone = tone || 'info';
   t.dataset.show = 'true';
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => {
@@ -506,6 +507,7 @@ function renderSelects() {
   });
 
   i18nModule?.renderSelects();
+  appearanceModule?.renderSelects();
   clampOpenSelectMenus();
 }
 
@@ -598,6 +600,9 @@ async function handleSelectPick(id, val) {
     return;
   }
   if (i18nModule && (await i18nModule.handleSelectPick(id, val))) {
+    return;
+  }
+  if (appearanceModule && (await appearanceModule.handleSelectPick(id, val))) {
     return;
   }
 }
@@ -2018,7 +2023,7 @@ function bindEvents() {
         state.openSelectId = null;
         renderSelects();
       }
-      ['capsuleModal', 'quotaModal', 'addMemModal', 'i18nPatchConfirmModal', 'i18nEntryModal', 'i18nImportModal'].forEach(closeModal);
+      ['capsuleModal', 'quotaModal', 'addMemModal', 'i18nPatchConfirmModal', 'i18nEntryModal', 'i18nImportModal', 'appRotationPoolModal'].forEach(closeModal);
     }
   });
 
@@ -2446,7 +2451,10 @@ async function init() {
     callAppTool,
     esc,
     showToast,
+    openModal,
+    closeModal,
     positionIndicator,
+    renderCustomSelect,
     onOpenSettings: toggleSettingsView,
     onGoI18nPatch: () => switchModule('i18n', 'status'),
   });

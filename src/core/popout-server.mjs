@@ -123,10 +123,15 @@ export class PopoutServerManager {
   }
 
   async _readJsonBody(req) {
+    const MAX_BODY_BYTES = 24 * 1024 * 1024; // Supports 15 MiB image base64 import (~20 MiB JSON)
     let body = '';
     for await (const chunk of req) {
       body += chunk.toString('utf8');
-      if (body.length > 2 * 1024 * 1024) break;
+      if (body.length > MAX_BODY_BYTES) {
+        const err = new Error('Request payload too large');
+        err.statusCode = 413;
+        throw err;
+      }
     }
     if (!body.trim()) return {};
     try {
@@ -212,7 +217,8 @@ export class PopoutServerManager {
         res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
         res.end('Not found');
       } catch (err) {
-        res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
+        const code = err?.statusCode === 413 ? 413 : 500;
+        res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8' });
         res.end(JSON.stringify({ error: err?.message || 'Internal error' }));
       }
     });

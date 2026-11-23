@@ -696,14 +696,21 @@ export function buildRendererRuntimeSource(bundleSnapshot, bundleFilePath = '', 
     }
 
     var APPEARANCE_FILE = resolveAppearanceFile();
+    var CROSSFADE_MS = 450;
     var st = {
       lastMtimeMs: -1,
       cfg: null,
       blobUrl: null,
       loadedImagePath: '',
       startupPickedPath: '',
+      lastCfgActivePath: '',
       lastRotateAt: 0,
       lastTheme: '',
+      activeSlot: 0,
+      slotBlobUrls: [null, null],
+      currentSourceKey: '',
+      transitionSeq: 0,
+      revokeTimers: [null, null],
     };
 
     function parseOpaqueLum(el) {
@@ -740,17 +747,38 @@ export function buildRendererRuntimeSource(bundleSnapshot, bundleFilePath = '', 
       return false;
     }
 
+    function safeRevokeBlobUrl(url) {
+      if (!url || typeof url !== 'string' || url.indexOf('blob:') !== 0) return;
+      if (url === st.blobUrl || url === st.slotBlobUrls[0] || url === st.slotBlobUrls[1]) return;
+      try {
+        if (typeof URL !== 'undefined' && typeof URL.revokeObjectURL === 'function') {
+          URL.revokeObjectURL(url);
+        }
+      } catch (_) {}
+    }
+
     function cleanupWallpaper() {
       try {
+        st.transitionSeq++;
+        for (var t = 0; t < 2; t++) {
+          if (st.revokeTimers[t]) {
+            clearTimeout(st.revokeTimers[t]);
+            st.revokeTimers[t] = null;
+          }
+        }
         var styleEl = document.getElementById(STYLE_ID);
         if (styleEl && styleEl.parentNode) styleEl.parentNode.removeChild(styleEl);
         var layerEl = document.getElementById(LAYER_ID);
         if (layerEl && layerEl.parentNode) layerEl.parentNode.removeChild(layerEl);
-        if (st.blobUrl && typeof URL !== 'undefined' && typeof URL.revokeObjectURL === 'function') {
-          URL.revokeObjectURL(st.blobUrl);
-        }
+        var urlsToRevoke = [st.blobUrl, st.slotBlobUrls[0], st.slotBlobUrls[1]];
         st.blobUrl = null;
+        st.slotBlobUrls = [null, null];
         st.loadedImagePath = '';
+        st.currentSourceKey = '';
+        st.activeSlot = 0;
+        for (var i = 0; i < urlsToRevoke.length; i++) {
+          safeRevokeBlobUrl(urlsToRevoke[i]);
+        }
       } catch (_) {}
     }
 
@@ -773,11 +801,12 @@ export function buildRendererRuntimeSource(bundleSnapshot, bundleFilePath = '', 
           nextUrl = 'data:' + mime + ';base64,' + buf.toString('base64');
         }
         if (nextUrl) {
-          if (st.blobUrl && st.blobUrl.indexOf('blob:') === 0 && typeof URL.revokeObjectURL === 'function') {
-            try { URL.revokeObjectURL(st.blobUrl); } catch (_) {}
-          }
+          var prevUrl = st.blobUrl;
           st.blobUrl = nextUrl;
           st.loadedImagePath = imgPath;
+          if (prevUrl && prevUrl !== nextUrl) {
+            setTimeout(function () { safeRevokeBlobUrl(prevUrl); }, CROSSFADE_MS + 120);
+          }
           return nextUrl;
         }
       } catch (_) {}
@@ -793,25 +822,31 @@ export function buildRendererRuntimeSource(bundleSnapshot, bundleFilePath = '', 
     }
 
     function resolveTargetImagePath(cfg, isDark) {
+      var cfgActive = cfg.activeWallpaperPath || '';
+      if (cfgActive && cfgActive !== st.lastCfgActivePath) {
+        st.lastCfgActivePath = cfgActive;
+        st.startupPickedPath = cfgActive;
+        st.lastRotateAt = Date.now();
+      }
       if (cfg.separateThemeWallpapers) {
         var themed = isDark ? cfg.darkWallpaperPath : cfg.lightWallpaperPath;
         if (themed) return themed;
       }
       if (cfg.rotationMode === 'startup') {
         if (!st.startupPickedPath) {
-          st.startupPickedPath = pickFromPool(cfg) || cfg.activeWallpaperPath || '';
+          st.startupPickedPath = pickFromPool(cfg) || cfgActive;
         }
         return st.startupPickedPath;
       }
       if (cfg.rotationMode === 'interval') {
-        var ms = Math.max(5, Number(cfg.rotationMinutes) || 30) * 60000;
+        var ms = Math.max(1, Number(cfg.rotationMinutes) || 30) * 60000;
         if (!st.lastRotateAt || Date.now() - st.lastRotateAt >= ms) {
-          st.startupPickedPath = pickFromPool(cfg) || cfg.activeWallpaperPath || '';
+          st.startupPickedPath = pickFromPool(cfg) || cfgActive;
           st.lastRotateAt = Date.now();
         }
-        return st.startupPickedPath || cfg.activeWallpaperPath || '';
+        return st.startupPickedPath || cfgActive;
       }
-      return cfg.activeWallpaperPath || '';
+      return cfgActive;
     }
 
     function base64ToBlobUrl(b64, mime) {
@@ -826,7 +861,89 @@ export function buildRendererRuntimeSource(bundleSnapshot, bundleFilePath = '', 
       return 'data:' + mime + ';base64,' + b64;
     }
 
-    function applyAppearance(cfg, resolvedImgUrl) {
+    function preloadAndDecode(imgUrl, onReady) {
+      if (!imgUrl || typeof Image === 'undefined') {
+        onReady();
+        return;
+      }
+      var settled = false;
+      var finish = function () {
+        if (settled) return;
+        settled = true;
+        onReady();
+      };
+      var guard = setTimeout(finish, 2000);
+      var done = function () {
+        clearTimeout(guard);
+        finish();
+      };
+      try {
+        var img = new Image();
+        img.decoding = 'async';
+        img.onload = function () {
+          if (typeof img.decode === 'function') {
+            img.decode().then(done, done);
+          } else {
+            done();
+          }
+        };
+        img.onerror = done;
+        img.src = imgUrl;
+        if (img.complete && typeof img.decode === 'function') {
+          img.decode().then(done, done);
+        }
+      } catch (_) {
+        done();
+      }
+    }
+
+    function ensureLayerAndSlots() {
+      var layer = document.getElementById(LAYER_ID);
+      if (!layer) {
+        layer = document.createElement('div');
+        layer.id = LAYER_ID;
+        layer.setAttribute('aria-hidden', 'true');
+        layer.style.setProperty('position', 'fixed', 'important');
+        layer.style.setProperty('top', '-16px', 'important');
+        layer.style.setProperty('left', '-16px', 'important');
+        layer.style.setProperty('right', '-16px', 'important');
+        layer.style.setProperty('bottom', '-16px', 'important');
+        layer.style.setProperty('z-index', '2147483000', 'important');
+        layer.style.setProperty('pointer-events', 'none', 'important');
+        layer.style.setProperty('user-select', 'none', 'important');
+        layer.style.setProperty('will-change', 'opacity, filter', 'important');
+        (document.documentElement || document.body).appendChild(layer);
+      }
+      var slots = [];
+      for (var i = 0; i < 2; i++) {
+        var slot = layer.querySelector('[data-wp-slot="' + i + '"]');
+        if (!slot) {
+          slot = document.createElement('div');
+          slot.setAttribute('data-wp-slot', String(i));
+          slot.style.setProperty('position', 'absolute', 'important');
+          slot.style.setProperty('inset', '0', 'important');
+          slot.style.setProperty('pointer-events', 'none', 'important');
+          slot.style.setProperty('opacity', '0', 'important');
+          slot.style.setProperty('transition', 'opacity ' + CROSSFADE_MS + 'ms ease-out', 'important');
+          slot.style.setProperty('will-change', 'opacity', 'important');
+          layer.appendChild(slot);
+        }
+        slots.push(slot);
+      }
+      return { layer: layer, slots: slots };
+    }
+
+    function writeSlotBg(slot, bgImage, bgSize, bgPos, bgRepeat) {
+      var sig = bgImage + '|' + bgSize;
+      if (slot.dataset.bgSig === sig) return;
+      slot.dataset.bgSig = sig;
+      slot.style.setProperty('background-image', bgImage, 'important');
+      slot.style.setProperty('background-size', bgSize, 'important');
+      slot.style.setProperty('background-position', bgPos, 'important');
+      slot.style.setProperty('background-repeat', bgRepeat, 'important');
+    }
+
+    function applyAppearance(cfg, resolvedImgUrl, resolvedImgPath) {
       if (!cfg || cfg.enabled !== true || typeof document === 'undefined' || !document.body) {
         cleanupWallpaper();
         return;
@@ -836,63 +953,131 @@ export function buildRendererRuntimeSource(bundleSnapshot, bundleFilePath = '', 
       st.lastTheme = isDark ? 'dark' : 'light';
       var opacity = Math.max(0.05, Math.min(0.85, Number(cfg.opacity) || 0.24));
       var blurPx = Math.max(0, Math.min(24, Number(cfg.blurPx) || 0));
-      var scrimOpacity = Math.max(0, Math.min(0.85, Number(cfg.scrimOpacity) || 0.42));
-      var glassPct = Math.round(Math.max(0.55, Math.min(0.98, Number(cfg.glassOpacity) || 0.86)) * 100);
+      var rawScrim = Number(cfg.scrimOpacity);
+      var scrimOpacity = Math.max(0, Math.min(0.85, Number.isFinite(rawScrim) ? rawScrim : 0.42));
+      var rawSat = Number(cfg.saturation);
+      var saturation = Math.max(0, Math.min(160, Number.isFinite(rawSat) ? rawSat : 100));
       var fit = cfg.fit === 'contain' ? 'contain' : cfg.fit === 'center' ? 'auto' : 'cover';
 
-      var bgRule = '';
+      var scrimRgb = isDark ? '0, 0, 0' : '255, 255, 255';
+      var scrimLayer = scrimOpacity > 0.005 ? 'linear-gradient(rgba(' + scrimRgb + ', ' + scrimOpacity.toFixed(2) + '), rgba(' + scrimRgb + ', ' + scrimOpacity.toFixed(2) + '))' : '';
+
+      var bgImage = '';
+      var bgSize = 'cover';
+      var bgPos = 'center';
+      var bgRepeat = 'no-repeat';
+      var imgUrl = null;
+      var sourceKey = '';
+
       if (cfg.mode === 'image') {
-        var imgUrl = resolvedImgUrl || null;
+        imgUrl = resolvedImgUrl || null;
+        var targetImg = resolvedImgPath || '';
         if (!imgUrl && nodeFs) {
-          var targetImg = resolveTargetImagePath(cfg, isDark);
+          targetImg = resolveTargetImagePath(cfg, isDark);
           imgUrl = loadImageAsUrl(targetImg, cfg.maxBytes);
         }
         if (imgUrl) {
-          bgRule = 'background-image: url("' + imgUrl.replace(/"/g, '\\\\"') + '"); background-size: ' + fit + '; background-position: center; background-repeat: no-repeat;';
+          sourceKey = 'img|' + (targetImg || imgUrl);
+          var urlPart = 'url("' + imgUrl.replace(/"/g, '\\\\"') + '")';
+          if (scrimLayer) {
+            bgImage = scrimLayer + ', ' + urlPart;
+            bgSize = '100% 100%, ' + fit;
+            bgPos = 'center, center';
+            bgRepeat = 'no-repeat, no-repeat';
+          } else {
+            bgImage = urlPart;
+            bgSize = fit;
+            bgPos = 'center';
+            bgRepeat = 'no-repeat';
+          }
         }
       }
-      if (!bgRule) {
+      if (!bgImage) {
         var presetCss = isDark ? (cfg.preset && cfg.preset.darkCss) : (cfg.preset && cfg.preset.lightCss);
         if (!presetCss) {
           cleanupWallpaper();
           return;
         }
-        bgRule = 'background: ' + presetCss + ';';
+        sourceKey = 'preset|' + ((cfg.preset && cfg.preset.id) || '') + '|' + (isDark ? 'd' : 'l');
+        bgImage = scrimLayer ? scrimLayer + ', ' + presetCss : presetCss;
+        bgSize = 'cover';
+        bgPos = 'center';
+        bgRepeat = 'no-repeat';
       }
 
       var blendMode = isDark ? 'screen' : 'multiply';
-      var effectiveOpacity = cfg.protectCodeReadability !== false ? Math.min(opacity, 0.55) : opacity;
+      var effectiveOpacity = opacity;
+      var filterVal = 'blur(' + blurPx + 'px) saturate(' + Math.round(saturation) + '%)';
 
-      var layer = document.getElementById(LAYER_ID);
-      if (!layer) {
-        layer = document.createElement('div');
-        layer.id = LAYER_ID;
-        layer.setAttribute('aria-hidden', 'true');
-        (document.documentElement || document.body).appendChild(layer);
-      }
+      var dom = ensureLayerAndSlots();
+      var layer = dom.layer;
+      var slots = dom.slots;
 
-      // Apply directly via inline element style (bypasses strict style-src CSP & pseudo-element blend isolation)
-      var inlineCss = [
-        'position: fixed !important',
-        'top: -16px !important',
-        'left: -16px !important',
-        'right: -16px !important',
-        'bottom: -16px !important',
-        'z-index: 2147483000 !important',
-        'pointer-events: none !important',
-        'user-select: none !important',
-        'mix-blend-mode: ' + blendMode + ' !important',
-        'opacity: ' + effectiveOpacity + ' !important',
-        'filter: blur(' + blurPx + 'px) !important',
-        'transition: opacity 220ms ease, filter 220ms ease !important',
-        bgRule,
-      ].join('; ');
-      if (layer.style.cssText !== inlineCss) {
-        layer.style.cssText = inlineCss;
-      }
+      // Outer container receives real-time slider parameters with zero transition lag
+      layer.style.setProperty('mix-blend-mode', blendMode, 'important');
+      layer.style.setProperty('opacity', String(effectiveOpacity), 'important');
+      layer.style.setProperty('filter', filterVal, 'important');
 
       var oldStyle = document.getElementById(STYLE_ID);
       if (oldStyle && oldStyle.parentNode) oldStyle.parentNode.removeChild(oldStyle);
+
+      // Same wallpaper/preset: update scrim/fit in place immediately without re-fading
+      if (st.currentSourceKey === sourceKey) {
+        var curSlot = slots[st.activeSlot];
+        writeSlotBg(curSlot, bgImage, bgSize, bgPos, bgRepeat);
+        curSlot.style.setProperty('opacity', '1', 'important');
+        return;
+      }
+
+      // New wallpaper/preset: pre-decode image off-screen, then crossfade between A/B slots (450ms ease-out)
+      var seq = ++st.transitionSeq;
+      var nextIdx = st.currentSourceKey ? (1 - st.activeSlot) : st.activeSlot;
+      var prevIdx = 1 - nextIdx;
+      var nextSlot = slots[nextIdx];
+      var prevSlot = slots[prevIdx];
+      var nextBlob = imgUrl || null;
+
+      preloadAndDecode(imgUrl, function () {
+        if (seq !== st.transitionSeq) return;
+        if (!document.getElementById(LAYER_ID)) return;
+
+        var oldSlotBlob = st.slotBlobUrls[nextIdx];
+        st.slotBlobUrls[nextIdx] = nextBlob;
+        if (oldSlotBlob && oldSlotBlob !== nextBlob) {
+          safeRevokeBlobUrl(oldSlotBlob);
+        }
+
+        writeSlotBg(nextSlot, bgImage, bgSize, bgPos, bgRepeat);
+        nextSlot.style.setProperty('z-index', '2', 'important');
+        prevSlot.style.setProperty('z-index', '1', 'important');
+
+        var commitFade = function () {
+          if (seq !== st.transitionSeq) return;
+          nextSlot.style.setProperty('opacity', '1', 'important');
+          if (st.currentSourceKey && prevSlot !== nextSlot) {
+            prevSlot.style.setProperty('opacity', '0', 'important');
+            var retiringBlob = st.slotBlobUrls[prevIdx];
+            if (st.revokeTimers[prevIdx]) clearTimeout(st.revokeTimers[prevIdx]);
+            st.revokeTimers[prevIdx] = setTimeout(function () {
+              st.revokeTimers[prevIdx] = null;
+              if (st.activeSlot !== prevIdx) {
+                st.slotBlobUrls[prevIdx] = null;
+                safeRevokeBlobUrl(retiringBlob);
+              }
+            }, CROSSFADE_MS + 100);
+          }
+          st.activeSlot = nextIdx;
+          st.currentSourceKey = sourceKey;
+        };
+
+        if (typeof requestAnimationFrame === 'function') {
+          requestAnimationFrame(function () {
+            requestAnimationFrame(commitFade);
+          });
+        } else {
+          commitFade();
+        }
+      });
     }
 
     function renderWithIpcImage(cfg) {
@@ -902,36 +1087,37 @@ export function buildRendererRuntimeSource(bundleSnapshot, bundleFilePath = '', 
       }
       var isDark = detectDarkTheme();
       if (cfg.mode !== 'image') {
-        applyAppearance(cfg, null);
+        applyAppearance(cfg, null, '');
         return;
       }
       var targetImg = resolveTargetImagePath(cfg, isDark);
       if (!targetImg) {
-        applyAppearance(cfg, null);
+        applyAppearance(cfg, null, '');
         return;
       }
       if (st.loadedImagePath === targetImg && st.blobUrl) {
-        applyAppearance(cfg, st.blobUrl);
+        applyAppearance(cfg, st.blobUrl, targetImg);
         return;
       }
       if (!ipcRenderer) {
-        applyAppearance(cfg, null);
+        applyAppearance(cfg, null, '');
         return;
       }
       ipcRenderer.invoke('agy-hub:read-wallpaper', targetImg).then(function (imgRes) {
         if (imgRes && imgRes.ok && imgRes.base64) {
           var nextUrl = base64ToBlobUrl(imgRes.base64, imgRes.mime || 'image/png');
-          if (st.blobUrl && st.blobUrl.indexOf('blob:') === 0 && typeof URL !== 'undefined' && typeof URL.revokeObjectURL === 'function') {
-            try { URL.revokeObjectURL(st.blobUrl); } catch (_) {}
-          }
+          var prevUrl = st.blobUrl;
           st.blobUrl = nextUrl;
           st.loadedImagePath = targetImg;
-          applyAppearance(cfg, nextUrl);
+          if (prevUrl && prevUrl !== nextUrl) {
+            setTimeout(function () { safeRevokeBlobUrl(prevUrl); }, CROSSFADE_MS + 120);
+          }
+          applyAppearance(cfg, nextUrl, targetImg);
         } else {
-          applyAppearance(cfg, null);
+          applyAppearance(cfg, null, '');
         }
       }).catch(function () {
-        applyAppearance(cfg, null);
+        applyAppearance(cfg, null, '');
       });
     }
 
@@ -988,7 +1174,40 @@ export function buildRendererRuntimeSource(bundleSnapshot, bundleFilePath = '', 
 
     function bootAppearance() {
       pollAppearance(true);
-      var timer = setInterval(function () { pollAppearance(false); }, 1500);
+
+      // Real-time push channel from Electron main-process fs.watch (<30ms latency during slider drag)
+      if (ipcRenderer && typeof ipcRenderer.on === 'function') {
+        try {
+          ipcRenderer.on('agy-hub:appearance-push', function (_evt, pushedCfg) {
+            try {
+              if (!pushedCfg || typeof pushedCfg !== 'object') return;
+              st.cfg = pushedCfg;
+              st.lastMtimeMs = Date.now();
+              renderWithIpcImage(st.cfg);
+            } catch (_) {}
+          });
+        } catch (_) {}
+      }
+
+      // Direct fs.watch when preload has Node fs access
+      if (nodeFs && nodePath && APPEARANCE_FILE && typeof nodeFs.watch === 'function') {
+        var watchTimer = null;
+        try {
+          var appDir = nodePath.dirname(APPEARANCE_FILE);
+          var appBase = nodePath.basename(APPEARANCE_FILE);
+          if (nodeFs.existsSync(appDir)) {
+            var watcher = nodeFs.watch(appDir, { persistent: false }, function (_evt, fname) {
+              if (fname && String(fname).indexOf(appBase) !== 0) return;
+              if (watchTimer) clearTimeout(watchTimer);
+              watchTimer = setTimeout(function () { pollAppearance(true); }, 10);
+            });
+            if (watcher && typeof watcher.unref === 'function') watcher.unref();
+          }
+        } catch (_) {}
+      }
+
+      // Fallback timer for theme transitions & interval rotation
+      var timer = setInterval(function () { pollAppearance(false); }, 800);
       if (timer && typeof timer.unref === 'function') timer.unref();
     }
 
@@ -1180,6 +1399,56 @@ export function buildMainRuntimeSource(bundleSnapshot, bundleFilePath = '') {
             return { changed: false };
           }
         });
+
+        // Push runtime-appearance.json updates to ALL WebContents (BrowserWindow + WebContentsView + BrowserView) in real time (<30ms)
+        if (fs && appearanceFileMain && typeof fs.watch === 'function') {
+          try {
+            var appWatchDir = nodePathMain.dirname(appearanceFileMain);
+            var appWatchBase = nodePathMain.basename(appearanceFileMain);
+            if (!fs.existsSync(appWatchDir)) {
+              try { fs.mkdirSync(appWatchDir, { recursive: true }); } catch (_) {}
+            }
+            if (fs.existsSync(appWatchDir)) {
+              var pushTimer = null;
+              var lastPushRaw = '';
+              var broadcastAppearance = function () {
+                try {
+                  if (!fs.existsSync(appearanceFileMain)) return;
+                  var raw = fs.readFileSync(appearanceFileMain, 'utf8');
+                  if (!raw || !raw.trim() || raw === lastPushRaw) return;
+                  var parsed = JSON.parse(raw);
+                  lastPushRaw = raw;
+                  var sent = 0;
+                  if (electron.webContents && typeof electron.webContents.getAllWebContents === 'function') {
+                    var allWc = electron.webContents.getAllWebContents();
+                    for (var ci = 0; ci < allWc.length; ci++) {
+                      var wc = allWc[ci];
+                      if (wc && !wc.isDestroyed() && typeof wc.send === 'function') {
+                        wc.send('agy-hub:appearance-push', parsed);
+                        sent++;
+                      }
+                    }
+                  }
+                  if (sent === 0 && electron.BrowserWindow && typeof electron.BrowserWindow.getAllWindows === 'function') {
+                    var wins = electron.BrowserWindow.getAllWindows();
+                    for (var wi = 0; wi < wins.length; wi++) {
+                      var w = wins[wi];
+                      if (w && !w.isDestroyed() && w.webContents && typeof w.webContents.send === 'function') {
+                        w.webContents.send('agy-hub:appearance-push', parsed);
+                      }
+                    }
+                  }
+                } catch (_) {}
+              };
+              var appWatcher = fs.watch(appWatchDir, { persistent: false }, function (_evt, fname) {
+                if (fname && String(fname).indexOf(appWatchBase) !== 0) return;
+                if (pushTimer) clearTimeout(pushTimer);
+                pushTimer = setTimeout(broadcastAppearance, 10);
+              });
+              if (appWatcher && typeof appWatcher.unref === 'function') appWatcher.unref();
+            }
+          } catch (_) {}
+        }
 
         electron.ipcMain.handle('agy-hub:read-wallpaper', function (_evt, imgPath) {
           try {

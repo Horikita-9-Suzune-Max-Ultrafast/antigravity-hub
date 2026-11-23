@@ -2,7 +2,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { getAppDataDir, getConfigRoot, formatDisplayPath } from '../paths.mjs';
 import { estimateTokens } from '../vault.mjs';
-import { PROTECTED_PLUGINS, loadDisabledGlobalMcp } from './guardrails.mjs';
+import { PROTECTED_PLUGINS, loadDisabledGlobalMcp, loadGovernancePreferences } from './guardrails.mjs';
+import { classifyGlobalMcp, classifyPlugin } from './classifier.mjs';
 
 function safeReadText(p) {
   try {
@@ -277,6 +278,8 @@ export function scanEcosystem(params = {}, options = {}) {
   const hostMcpRes = safeReadJsonDetailed(hostMcpPath);
   const hostConfig = hostConfigRes.data || {};
   const pluginStates = hostConfig.plugins && typeof hostConfig.plugins === 'object' ? hostConfig.plugins : {};
+  const preferences = loadGovernancePreferences(options);
+  const pinnedSet = new Set(preferences.pinnedPlugins || []);
 
   const mcpCache = scanMcpSchemaCache(appDataDir);
   const disabledGlobalMcp = loadDisabledGlobalMcp(options);
@@ -352,7 +355,9 @@ export function scanEcosystem(params = {}, options = {}) {
     const cached = mcpCache.get(srvName);
     const eagerTools = srvCfg?.tools ? Object.values(srvCfg.tools).filter((t) => t?.eager).length : 0;
     const mode = eagerTools > 0 ? 'eager' : cached ? 'deferred' : 'configured';
-    mcpServers.push({
+    const toolNames = cached ? cached.tools.map((t) => t.name) : [];
+    const potentialTokens = cached ? cached.tokens : eagerTools * 220;
+    const srvEntry = {
       id: `global:${srvName}`,
       name: srvName,
       scope: 'global',
@@ -367,17 +372,25 @@ export function scanEcosystem(params = {}, options = {}) {
       mode,
       eagerCount: eagerTools,
       toolCount: cached ? cached.toolCount : eagerTools,
-      tokens: cached ? cached.tokens : eagerTools * 220,
+      toolNames,
+      tokens: potentialTokens,
+      potentialTokens,
       configFile: hostMcpPath,
       displayConfigFile: formatDisplayPath(hostMcpPath),
-    });
+    };
+    srvEntry.classification = classifyGlobalMcp(srvEntry, { preferences });
+    mcpServers.push(srvEntry);
   }
 
   // Global disabled (staged) MCP servers
   for (const [srvName, staged] of Object.entries(disabledGlobalMcp.servers || {})) {
     if (globalMcpMap[srvName]) continue;
     const srvCfg = staged?.config || {};
-    mcpServers.push({
+    const cached = mcpCache.get(srvName);
+    const eagerTools = srvCfg?.tools ? Object.values(srvCfg.tools).filter((t) => t?.eager).length : 0;
+    const toolNames = cached ? cached.tools.map((t) => t.name) : [];
+    const potentialTokens = cached ? cached.tokens : eagerTools * 220;
+    const srvEntry = {
       id: `global:${srvName}`,
       name: srvName,
       scope: 'global',
@@ -392,11 +405,15 @@ export function scanEcosystem(params = {}, options = {}) {
       envKeys: srvCfg?.env && typeof srvCfg.env === 'object' ? Object.keys(srvCfg.env) : [],
       mode: 'disabled',
       eagerCount: 0,
-      toolCount: 0,
+      toolCount: cached ? cached.toolCount : 0,
+      toolNames,
       tokens: 0,
+      potentialTokens,
       configFile: hostMcpPath,
       displayConfigFile: formatDisplayPath(hostMcpPath),
-    });
+    };
+    srvEntry.classification = classifyGlobalMcp(srvEntry, { preferences });
+    mcpServers.push(srvEntry);
   }
 
   // 3. Installed Plugins (Priority 3)
@@ -462,7 +479,9 @@ export function scanEcosystem(params = {}, options = {}) {
       }
 
       let pMcpTokens = 0;
+      let pMcpPotentialTokens = 0;
       let pMcpCount = 0;
+      const pMcpEntries = [];
       const pMcpPath = path.join(pDir, 'mcp_config.json');
       if (fs.existsSync(pMcpPath)) {
         const pMcpRes = safeReadJsonDetailed(pMcpPath);
@@ -474,16 +493,17 @@ export function scanEcosystem(params = {}, options = {}) {
           const fullKey = `${dirName}_${srvKey}`;
           const cached = mcpCache.get(fullKey) || mcpCache.get(srvKey);
           const eagerTools = srvCfg?.tools ? Object.values(srvCfg.tools).filter((t) => t?.eager).length : 0;
-          const tok = !enabled
-            ? 0
-            : dirName === 'context-cache'
+          const potTok =
+            dirName === 'context-cache'
               ? 600
               : cached
                 ? cached.tokens
                 : Math.max(400, eagerTools * 220);
+          const tok = enabled ? potTok : 0;
           pMcpTokens += tok;
+          pMcpPotentialTokens += potTok;
           pMcpCount++;
-          mcpServers.push({
+          const mcpEntry = {
             id: `plugin:${fullKey}`,
             name: fullKey,
             shortName: srvKey,
@@ -500,18 +520,27 @@ export function scanEcosystem(params = {}, options = {}) {
             mode: !enabled ? 'disabled' : eagerTools > 0 ? 'eager' : cached ? 'deferred' : 'configured',
             eagerCount: eagerTools,
             toolCount: cached ? cached.toolCount : dirName === 'context-cache' ? 5 : eagerTools,
+            toolNames: cached ? cached.tools.map((t) => t.name) : [],
             tokens: tok,
+            potentialTokens: potTok,
             configFile: pMcpPath,
             displayConfigFile: formatDisplayPath(pMcpPath),
-          });
+          };
+          pMcpEntries.push(mcpEntry);
+          mcpServers.push(mcpEntry);
         }
       }
 
-      const ruleTokens = enabled ? pRules.reduce((s, r) => s + r.tokens, 0) : 0;
-      const skillDescTokens = enabled ? pSkills.reduce((s, sk) => s + sk.descTokens, 0) : 0;
+      const potentialRuleTokens = pRules.reduce((s, r) => s + r.tokens, 0);
+      const potentialSkillDescTokens = pSkills.reduce((s, sk) => s + sk.descTokens, 0);
+      const potentialTotalTokens = potentialRuleTokens + potentialSkillDescTokens + pMcpPotentialTokens;
+      const ruleTokens = enabled ? potentialRuleTokens : 0;
+      const skillDescTokens = enabled ? potentialSkillDescTokens : 0;
       const totalTokens = ruleTokens + skillDescTokens + pMcpTokens;
+      const systemProtected = PROTECTED_PLUGINS.has(dirName);
+      const userPinned = !systemProtected && pinnedSet.has(dirName);
 
-      plugins.push({
+      const pluginEntry = {
         id: dirName,
         name: manifest.name || dirName,
         displayName: manifest.displayName || manifest.name || dirName,
@@ -521,7 +550,9 @@ export function scanEcosystem(params = {}, options = {}) {
         marketplaceId: stateEntry.installedFrom?.id || null,
         enabled,
         statusSource,
-        protected: PROTECTED_PLUGINS.has(dirName),
+        systemProtected,
+        userPinned,
+        protected: systemProtected || userPinned,
         dirPath: pDir,
         displayPath: formatDisplayPath(pDir),
         manifestPath: fs.existsSync(manifestPath) ? manifestPath : null,
@@ -537,7 +568,20 @@ export function scanEcosystem(params = {}, options = {}) {
           mcp: pMcpTokens,
           total: totalTokens,
         },
+        potentialTokens: {
+          rules: potentialRuleTokens,
+          skills: potentialSkillDescTokens,
+          mcp: pMcpPotentialTokens,
+          total: potentialTotalTokens,
+        },
+      };
+      pluginEntry.classification = classifyPlugin(pluginEntry, {
+        skills: pSkills,
+        mcpServers: pMcpEntries,
+        rules: pRules,
+        preferences,
       });
+      plugins.push(pluginEntry);
     }
   }
 
@@ -608,5 +652,6 @@ export function scanEcosystem(params = {}, options = {}) {
     rules,
     hooks,
     configIssues,
+    preferences,
   };
 }

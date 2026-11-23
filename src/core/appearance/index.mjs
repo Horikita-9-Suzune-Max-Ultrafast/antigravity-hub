@@ -11,6 +11,7 @@ import {
   importWallpaperFromPath,
   deleteLibraryWallpaper,
   buildThumbDataUri,
+  pickLocalFolderNative,
 } from './library.mjs';
 
 export {
@@ -21,6 +22,7 @@ export {
   importWallpaperFromBase64,
   importWallpaperFromPath,
   deleteLibraryWallpaper,
+  pickLocalFolderNative,
 };
 
 export const DEFAULT_APPEARANCE_STATE = {
@@ -35,14 +37,27 @@ export const DEFAULT_APPEARANCE_STATE = {
   opacity: 0.24, // 0.05 ~ 0.85
   blurPx: 2, // 0 ~ 24
   scrimOpacity: 0.42, // 0 ~ 0.85
-  glassOpacity: 0.86, // 0.55 ~ 0.98
+  saturation: 100, // 0 ~ 160
+  glassOpacity: 0.86, // legacy compatibility
   fit: 'cover', // 'cover' | 'contain' | 'center'
   protectCodeReadability: true,
   rotationMode: 'off', // 'off' | 'startup' | 'interval'
-  rotationMinutes: 30, // 15 | 30 | 60 | 240
+  rotationMinutes: 30, // 1 ~ 1440
+  rotationSource: 'all', // 'all' | 'library' | 'folder'
+  rotationLibrarySelection: null, // null = all library items; string[] = explicit library item IDs
   folderPath: '',
   updatedAt: null,
 };
+
+const VISUAL_ONLY_KEYS = new Set([
+  'opacity',
+  'blurPx',
+  'scrimOpacity',
+  'saturation',
+  'glassOpacity',
+  'fit',
+  'protectCodeReadability',
+]);
 
 function ensureDir(dir) {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
@@ -67,6 +82,16 @@ export function normalizeAppearanceState(raw = {}) {
   const mode = src.mode === 'image' ? 'image' : 'preset';
   const fit = ['cover', 'contain', 'center'].includes(src.fit) ? src.fit : 'cover';
   const rotationMode = ['off', 'startup', 'interval'].includes(src.rotationMode) ? src.rotationMode : 'off';
+  const rotationSource = ['all', 'library', 'folder'].includes(src.rotationSource) ? src.rotationSource : 'all';
+  const rotationLibrarySelection = Array.isArray(src.rotationLibrarySelection)
+    ? Array.from(
+        new Set(
+          src.rotationLibrarySelection
+            .map((v) => String(v || '').trim())
+            .filter(Boolean)
+        )
+      )
+    : null;
   const preset = getPresetById(src.presetId);
 
   return {
@@ -81,11 +106,14 @@ export function normalizeAppearanceState(raw = {}) {
     opacity: Number(clamp(src.opacity, 0.05, 0.85, DEFAULT_APPEARANCE_STATE.opacity).toFixed(2)),
     blurPx: Math.round(clamp(src.blurPx, 0, 24, DEFAULT_APPEARANCE_STATE.blurPx)),
     scrimOpacity: Number(clamp(src.scrimOpacity, 0, 0.85, DEFAULT_APPEARANCE_STATE.scrimOpacity).toFixed(2)),
+    saturation: Math.round(clamp(src.saturation, 0, 160, DEFAULT_APPEARANCE_STATE.saturation)),
     glassOpacity: Number(clamp(src.glassOpacity, 0.55, 0.98, DEFAULT_APPEARANCE_STATE.glassOpacity).toFixed(2)),
     fit,
     protectCodeReadability: src.protectCodeReadability !== false,
     rotationMode,
-    rotationMinutes: Math.round(clamp(src.rotationMinutes, 5, 1440, DEFAULT_APPEARANCE_STATE.rotationMinutes)),
+    rotationMinutes: Math.round(clamp(src.rotationMinutes, 1, 1440, DEFAULT_APPEARANCE_STATE.rotationMinutes)),
+    rotationSource,
+    rotationLibrarySelection,
     folderPath: typeof src.folderPath === 'string' ? src.folderPath.trim() : '',
     updatedAt: src.updatedAt || null,
   };
@@ -112,28 +140,64 @@ export function saveAppearanceState(patch = {}, options = {}) {
   });
   const { appearanceStateFile } = getDataPaths(options);
   writeAtomicJson(appearanceStateFile, next);
-  compileRuntimeAppearance(options, next);
+  const patchKeys = Object.keys(patch || {});
+  const isVisualOnly = patchKeys.length > 0 && patchKeys.every((k) => VISUAL_ONLY_KEYS.has(k));
+  compileRuntimeAppearance(options, next, { skipPoolScan: isVisualOnly });
   return next;
 }
 
 /**
- * Collect the unified wallpaper pool (library + read-only local folder).
+ * Collect the rotation wallpaper pool respecting rotationSource & rotationLibrarySelection.
  */
 export function getWallpaperPool(state, options = {}) {
   const libItems = listLibraryWallpapers(options);
-  const folderRes = state.folderPath ? scanLocalFolderReadOnly(state.folderPath) : { ok: true, items: [], skippedTooLarge: 0 };
-  const pool = [...libItems, ...(folderRes.items || [])];
-  return { libItems, folderRes, pool };
+  let selectedLibItems = libItems;
+  if (Array.isArray(state.rotationLibrarySelection)) {
+    const selSet = new Set(state.rotationLibrarySelection);
+    selectedLibItems = libItems.filter(
+      (it) => selSet.has(it.id) || selSet.has(it.name) || selSet.has(it.filePath)
+    );
+  }
+  const folderRes = state.folderPath
+    ? scanLocalFolderReadOnly(state.folderPath)
+    : { ok: true, items: [], skippedTooLarge: 0 };
+  const folderItems = folderRes.items || [];
+
+  let pool;
+  if (state.rotationSource === 'library') {
+    pool = [...selectedLibItems];
+  } else if (state.rotationSource === 'folder') {
+    pool = [...folderItems];
+  } else {
+    pool = [...selectedLibItems, ...folderItems];
+  }
+  return { libItems, selectedLibItems, folderRes, pool };
+}
+
+function readCachedPoolPaths(runtimeFile) {
+  try {
+    if (!fs.existsSync(runtimeFile)) return null;
+    const raw = fs.readFileSync(runtimeFile, 'utf8');
+    if (!raw.trim()) return null;
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed?.poolPaths) ? parsed.poolPaths : null;
+  } catch {
+    return null;
+  }
 }
 
 /**
  * Compile runtime-appearance.json consumed hot by the preload Fail-Open engine.
  */
-export function compileRuntimeAppearance(options = {}, stateOverride = null) {
+export function compileRuntimeAppearance(options = {}, stateOverride = null, compileOpts = {}) {
   const state = stateOverride || loadAppearanceState(options);
   const { appearanceRuntimeFile } = getDataPaths(options);
   const preset = getPresetById(state.presetId);
-  const { pool } = getWallpaperPool(state, options);
+  let poolPaths = compileOpts.skipPoolScan ? readCachedPoolPaths(appearanceRuntimeFile) : null;
+  if (!poolPaths) {
+    const { pool } = getWallpaperPool(state, options);
+    poolPaths = pool.map((p) => p.filePath);
+  }
 
   const payload = {
     version: 1,
@@ -152,12 +216,14 @@ export function compileRuntimeAppearance(options = {}, stateOverride = null) {
     opacity: state.opacity,
     blurPx: state.blurPx,
     scrimOpacity: state.scrimOpacity,
+    saturation: state.saturation,
     glassOpacity: state.glassOpacity,
     fit: state.fit,
     protectCodeReadability: state.protectCodeReadability,
     rotationMode: state.rotationMode,
     rotationMinutes: state.rotationMinutes,
-    poolPaths: pool.map((p) => p.filePath),
+    rotationSource: state.rotationSource,
+    poolPaths,
     maxBytes: MAX_WALLPAPER_BYTES,
   };
 
@@ -207,7 +273,7 @@ export function pickNextWallpaper(options = {}) {
 
 export function getAppearanceStatus(options = {}) {
   const state = loadAppearanceState(options);
-  const { libItems, folderRes, pool } = getWallpaperPool(state, options);
+  const { libItems, selectedLibItems, folderRes, pool } = getWallpaperPool(state, options);
   let runtimePatched = false;
   let i18nPatchStatus = 'unknown';
   try {
@@ -242,6 +308,7 @@ export function getAppearanceStatus(options = {}) {
         displayPath: it.displayPath,
       })),
     },
+    selectedLibraryCount: selectedLibItems.length,
     poolCount: pool.length,
   };
 }
@@ -253,6 +320,9 @@ export function handleAppearanceAction(args = {}, options = {}) {
       return getAppearanceStatus(options);
     case 'update_config': {
       const next = saveAppearanceState(args.patch || {}, options);
+      if (args.light) {
+        return { ok: true, state: next };
+      }
       return { ok: true, state: next, status: getAppearanceStatus(options) };
     }
     case 'import_wallpaper': {
@@ -269,8 +339,32 @@ export function handleAppearanceAction(args = {}, options = {}) {
     case 'delete_wallpaper': {
       const del = deleteLibraryWallpaper(args.id || args.fileName, options);
       const cur = loadAppearanceState(options);
+      const cleanupPatch = {};
       if (cur.activeWallpaperPath && path.basename(cur.activeWallpaperPath) === del.deleted) {
-        saveAppearanceState({ activeWallpaperPath: '', mode: 'preset' }, options);
+        cleanupPatch.activeWallpaperPath = '';
+        cleanupPatch.mode = 'preset';
+      }
+      if (cur.darkWallpaperPath && path.basename(cur.darkWallpaperPath) === del.deleted) {
+        cleanupPatch.darkWallpaperPath = '';
+      }
+      if (cur.lightWallpaperPath && path.basename(cur.lightWallpaperPath) === del.deleted) {
+        cleanupPatch.lightWallpaperPath = '';
+      }
+      if (Array.isArray(cur.rotationLibrarySelection)) {
+        const nextSel = cur.rotationLibrarySelection.filter(
+          (entry) => entry !== `lib:${del.deleted}` && entry !== del.deleted && path.basename(entry) !== del.deleted
+        );
+        if (nextSel.length !== cur.rotationLibrarySelection.length) {
+          cleanupPatch.rotationLibrarySelection = nextSel;
+        }
+      }
+      if (Object.keys(cleanupPatch).length > 0) {
+        const nextDark = cleanupPatch.darkWallpaperPath !== undefined ? cleanupPatch.darkWallpaperPath : cur.darkWallpaperPath;
+        const nextLight = cleanupPatch.lightWallpaperPath !== undefined ? cleanupPatch.lightWallpaperPath : cur.lightWallpaperPath;
+        if (!nextDark && !nextLight && cur.separateThemeWallpapers) {
+          cleanupPatch.separateThemeWallpapers = false;
+        }
+        saveAppearanceState(cleanupPatch, options);
       } else {
         compileRuntimeAppearance(options);
       }
@@ -283,6 +377,32 @@ export function handleAppearanceAction(args = {}, options = {}) {
         saveAppearanceState({ folderPath }, options);
       }
       return { ok: scan.ok, scan, status: getAppearanceStatus(options) };
+    }
+    case 'pick_folder': {
+      const cur = loadAppearanceState(options);
+      const initialPath = String(args.initialPath ?? cur.folderPath ?? '').trim();
+      const autoSave = args.autoSave !== false;
+      return pickLocalFolderNative(initialPath).then((picked) => {
+        if (!picked.ok || picked.canceled) {
+          return {
+            ok: picked.ok,
+            canceled: Boolean(picked.canceled),
+            folderPath: '',
+            error: picked.error || null,
+          };
+        }
+        const scan = scanLocalFolderReadOnly(picked.folderPath);
+        if (autoSave && scan.ok) {
+          saveAppearanceState({ folderPath: picked.folderPath }, options);
+        }
+        return {
+          ok: scan.ok,
+          canceled: false,
+          folderPath: picked.folderPath,
+          scan,
+          status: getAppearanceStatus(options),
+        };
+      });
     }
     case 'next_wallpaper': {
       const res = pickNextWallpaper(options);

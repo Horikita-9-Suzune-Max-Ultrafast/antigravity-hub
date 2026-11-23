@@ -174,3 +174,123 @@ test('Extended fail-open renderer & main runtime scripts execute IPC handlers cl
     env.cleanup();
   }
 });
+
+test('Lightweight update_config skips full status payload, clamps saturation, and delete cleans theme bindings', () => {
+  const env = makeTempEnv();
+  try {
+    const imp = importWallpaperFromBase64({ fileName: 'night.png', base64: TINY_PNG_B64 }, env.options);
+
+    // Bind dark & light + test lightweight update_config
+    const lightRes = handleAppearanceAction(
+      {
+        action: 'update_config',
+        light: true,
+        patch: {
+          enabled: true,
+          mode: 'image',
+          separateThemeWallpapers: true,
+          darkWallpaperPath: imp.filePath,
+          saturation: 199,
+          scrimOpacity: 0.35,
+        },
+      },
+      env.options
+    );
+    assert.equal(lightRes.ok, true);
+    assert.equal(lightRes.status, undefined, 'light mode should omit heavy status/library payload');
+    assert.equal(lightRes.state.saturation, 160, 'saturation should clamp to max 160');
+    assert.equal(lightRes.state.scrimOpacity, 0.35);
+
+    // Deleting a wallpaper bound to dark theme must clear darkWallpaperPath & disable separateThemeWallpapers
+    const delRes = handleAppearanceAction({ action: 'delete_wallpaper', id: imp.id }, env.options);
+    assert.equal(delRes.ok, true);
+    assert.equal(delRes.status.state.darkWallpaperPath, '');
+    assert.equal(delRes.status.state.separateThemeWallpapers, false);
+  } finally {
+    env.cleanup();
+  }
+});
+
+test('Renderer & main runtime scripts wire real-time appearance push, scrimOpacity, and saturation', () => {
+  const env = makeTempEnv();
+  try {
+    const { i18nBundleFile, i18nDir } = getDataPaths(env.options);
+    fs.mkdirSync(i18nDir, { recursive: true });
+    fs.writeFileSync(i18nBundleFile, JSON.stringify({ version: 1, ui: {}, menu: {}, patterns: [] }));
+
+    const rendererSrc = buildRendererRuntimeSource(null, i18nBundleFile);
+    assert.ok(rendererSrc.includes('agy-hub:appearance-push'), 'renderer must subscribe to real-time push');
+    assert.ok(rendererSrc.includes('saturate('), 'renderer must apply saturation filter');
+    assert.ok(rendererSrc.includes('linear-gradient(rgba('), 'renderer must apply scrimOpacity overlay');
+    assert.doesNotThrow(() => new Function(rendererSrc));
+
+    const mainSrc = buildMainRuntimeSource(null, i18nBundleFile);
+    assert.ok(mainSrc.includes('agy-hub:appearance-push'), 'main runtime must broadcast appearance push');
+    assert.ok(mainSrc.includes('webContents.getAllWebContents'), 'main runtime must broadcast to WebContentsView via webContents.getAllWebContents');
+    assert.doesNotThrow(() => new Function(mainSrc));
+  } finally {
+    env.cleanup();
+  }
+});
+
+test('Rotation source filtering, library subset selection, 1-min custom interval, and dual-buffer crossfade', () => {
+  const env = makeTempEnv();
+  try {
+    const lib1 = importWallpaperFromBase64({ fileName: 'alpha.png', base64: TINY_PNG_B64 }, env.options);
+    const lib2 = importWallpaperFromBase64({ fileName: 'beta.png', base64: TINY_PNG_B64 }, env.options);
+
+    // Custom 1-minute interval + library-only subset
+    const saved = saveAppearanceState(
+      {
+        enabled: true,
+        mode: 'image',
+        folderPath: env.folderDir,
+        rotationMode: 'interval',
+        rotationMinutes: 1,
+        rotationSource: 'library',
+        rotationLibrarySelection: [lib1.id],
+      },
+      env.options
+    );
+    assert.equal(saved.rotationMinutes, 1, 'should allow 1-minute custom interval');
+    assert.equal(saved.rotationSource, 'library');
+
+    let status = handleAppearanceAction({ action: 'status' }, env.options);
+    assert.equal(status.selectedLibraryCount, 1);
+    assert.equal(status.poolCount, 1, 'library-only mode with 1 selected item should yield poolCount=1');
+
+    // Switch to folder-only
+    saveAppearanceState({ rotationSource: 'folder' }, env.options);
+    status = handleAppearanceAction({ action: 'status' }, env.options);
+    assert.equal(status.poolCount, 2, 'folder-only mode should use the 2 folder images');
+
+    // Switch to all (1 selected library + 2 folder = 3)
+    saveAppearanceState({ rotationSource: 'all' }, env.options);
+    status = handleAppearanceAction({ action: 'status' }, env.options);
+    assert.equal(status.poolCount, 3);
+
+    // Deleting lib1 should prune it from rotationLibrarySelection
+    const del = handleAppearanceAction({ action: 'delete_wallpaper', id: lib1.id }, env.options);
+    assert.deepEqual(del.status.state.rotationLibrarySelection, []);
+    assert.equal(del.status.selectedLibraryCount, 0);
+    assert.equal(del.status.poolCount, 2);
+
+    // Null selection restores all remaining library items (lib2)
+    saveAppearanceState({ rotationLibrarySelection: null, rotationSource: 'library' }, env.options);
+    status = handleAppearanceAction({ action: 'status' }, env.options);
+    assert.equal(status.selectedLibraryCount, 1);
+    assert.equal(status.poolCount, 1);
+
+    // Dual-buffer pre-decoded crossfade in renderer runtime
+    const { i18nBundleFile, i18nDir } = getDataPaths(env.options);
+    fs.mkdirSync(i18nDir, { recursive: true });
+    fs.writeFileSync(i18nBundleFile, JSON.stringify({ version: 1, ui: {}, menu: {}, patterns: [] }));
+    const rendererSrc = buildRendererRuntimeSource(null, i18nBundleFile);
+    assert.ok(rendererSrc.includes('CROSSFADE_MS = 450'), 'renderer must configure 450ms crossfade');
+    assert.ok(rendererSrc.includes('preloadAndDecode'), 'renderer must pre-decode image before crossfade');
+    assert.ok(rendererSrc.includes('data-wp-slot'), 'renderer must manage dual A/B wallpaper slots');
+    assert.doesNotThrow(() => new Function(rendererSrc));
+  } finally {
+    env.cleanup();
+  }
+});

@@ -10,8 +10,12 @@ import {
   listSnapshots,
   previewRollback,
   rollbackSnapshot,
+  loadGovernancePreferences,
+  setPluginPinned,
+  setItemCategory,
 } from './guardrails.mjs';
 import {
+  listBuiltinProfiles,
   listProfiles,
   saveProfile,
   deleteProfile,
@@ -27,6 +31,10 @@ export {
   listSnapshots,
   previewRollback,
   rollbackSnapshot,
+  loadGovernancePreferences,
+  setPluginPinned,
+  setItemCategory,
+  listBuiltinProfiles,
   listProfiles,
   saveProfile,
   deleteProfile,
@@ -74,11 +82,13 @@ export function previewGovernanceFile(filePath, projectDir, options = {}) {
 export function getGovernanceOverview(params = {}, options = {}) {
   const ecosystem = scanEcosystem(params, options);
   const lint = runGovernanceLint(ecosystem, options);
+  const builtinProfiles = listBuiltinProfiles(ecosystem, options);
   const profiles = listProfiles(options);
   const snapshots = listSnapshots(options);
   return {
     ecosystem,
     lint,
+    builtinProfiles,
     profiles,
     snapshots,
   };
@@ -108,6 +118,14 @@ export function handleGovernanceAction(args = {}, options = {}) {
       const result = toggleGlobalMcpServer(args.serverName, Boolean(args.enabled), options);
       return { result, overview: getGovernanceOverview({ projectDir }, options) };
     }
+    case 'set_plugin_pin': {
+      const result = setPluginPinned(args.pluginId, Boolean(args.pinned), options);
+      return { result, overview: getGovernanceOverview({ projectDir }, options) };
+    }
+    case 'set_item_category': {
+      const result = setItemCategory(args.itemKey, args.category, options);
+      return { result, overview: getGovernanceOverview({ projectDir }, options) };
+    }
     case 'list_profiles':
       return { profiles: listProfiles(options) };
     case 'save_profile': {
@@ -128,9 +146,13 @@ export function handleGovernanceAction(args = {}, options = {}) {
       return { result: deleted, profiles: listProfiles(options) };
     }
     case 'preview_profile':
-      return previewProfileDiff(args.profileId, options);
+      return previewProfileDiff(args.profileId, { ...options, overrides: args.overrides });
     case 'apply_profile': {
-      const result = applyProfile(args.profileId, options);
+      const result = applyProfile(args.profileId, {
+        ...options,
+        overrides: args.overrides,
+        saveAsName: args.saveAsName,
+      });
       return { result, overview: getGovernanceOverview({ projectDir }, options) };
     }
     case 'list_snapshots':
