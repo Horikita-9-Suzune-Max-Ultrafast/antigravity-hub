@@ -7,12 +7,12 @@
     "url": "https://github.com/Horikita-9-Suzune-Max-Ultrafast"
   },
   "repository": "https://github.com/Horikita-9-Suzune-Max-Ultrafast/antigravity-hub",
-  "description": "Modular Antigravity Hub (MCP App): Context Monitor (breakdown, multi-agent TPS & cache telemetry, floating monitor, cross-session vault), Ecosystem & Harness Governance (multi-signal profiles, offline linting, snapshot rollback), Appearance & Wallpaper Engine, and Zero-Dep Chinese Localization.",
+  "description": "Modular Antigravity Hub (MCP App): Context Monitor (breakdown, click-through asset inspector, multi-agent TPS & alert jumps, Radix mini bar, 3-source handoff capsule), Ecosystem & Harness Governance (multi-signal profiles, offline linting, snapshot rollback), Local Wallpaper Engine, and Zero-Dep Chinese Localization.",
   "logo": "assets/logo.svg",
   "suggestedPrompts": [
-    "打开 Antigravity 控制台，分析当前会话的上下文构成和缓存命中率",
-    "打开 Antigravity 控制台的界面汉化模块，检查客户端汉化状态与词典配置",
-    "生成当前分支的交接胶囊并沉淀已敲定的架构决策",
-    "运行 context-cache 健康体检，检查 Hook 漂移与 SQLite FTS5 索引状态"
+    "打开 Antigravity Hub，分析当前会话的上下文构成、已挂载资产和缓存命中率",
+    "打开 Antigravity Hub 的生态治理模块，体检当前插件/MCP 并切换场景预设",
+    "生成当前分支的三源交接胶囊，汇总改动文件与架构决策",
+    "打开 Antigravity Hub 检查本地壁纸引擎与客户端界面汉化状态"
   ]
 }
