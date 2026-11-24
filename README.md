@@ -47,7 +47,10 @@
 - 所有记忆写入前自动脱敏（过滤 Bearer Token、API Key、JWT、PEM 私钥等），`SessionStart` 在 `< 500 tokens` 硬预算内注入极简项目索引并提示 `HEAD` 前进标脏。
 - **固定高度双视图交接胶囊**：默认展示人眼易读卡片（逐条勾选决策实时计算 Token 预算），一键切换 Agent 紧凑载荷原文（`[CTX-CAPSULE] ...`），在 Aux Pane 中支持通过 `updateModelContext` 一键附着到下一条消息。
 
-### 5. 原生无框悬浮窗、响应式控制台外壳、双语界面与专属设置（v1.5.2 升级）
+### 5. 原生无框悬浮窗、迷你条交互排序、Gemini KV 倒计时与专属设置（v1.5.3 升级）
+- **随 Antigravity 启动自动弹出悬浮窗**：MCP Server 握手完成后自动拉起默认形态无框悬浮窗（基于宿主 `language_server.exe` PID 去重，单次运行仅弹一次，退出自动收尾，设置页可随时开关）。
+- **迷你悬浮条快捷长度档位与跟手拖拽排序**：彻底修复窄宽截断（按模块整块显隐），内置「极简 1 / 紧凑 2 / 标准 3 / 加宽 4 / 完整 5」5 级快捷长度并保留自由拖宽；设置页提供等比可视化预览条，支持跟手拖拽实时让位（FLIP 动画 + 折行防抖）与点击选中互换。
+- **Gemini KV Cache 保鲜倒计时与图标三态变色**：对话结束后本地 1 秒倒计时（0 模型 Token，默认 15 分钟参考窗口且可自定义），悬浮窗与侧栏 Hub 图标随空闲风险平滑切换 **蓝 → 琥珀黄 → 警示红**，配套 `?` 原理轻提示；同步统一顶栏 Git 徽章视觉与「非 Git 目录」语义展示。
 - **响应式模块化控制台外壳与双语实时切换**：宽屏（`> 680px`，左侧边栏全页或宽屏悬浮窗）展示 `56px` 固定左侧图标导航栏，窄屏（`<= 680px`，右侧边栏或紧凑悬浮窗）自动折叠为顶部紧凑模块切换条；内置零依赖中英双语词典（`src/ui/i18n-ui.mjs`），可在设置中一键切换 **简体中文 / English** 并即时生效，完整汉化监控页「已挂载资产」（MCP 服务、按需/常驻工具、记忆与规则文件、生效技能与自定义代理等）。
 - **监控顶栏安全重启与 4 分区设置中心**：监控页顶栏与设置页维护区均提供 **「重启 Antigravity」** 按钮（带确认弹窗防误触，通过脱离进程安全重启且绝不触碰 `app.asar`）；设置页按「常规与语言 / 监控与告警 / 独立悬浮窗 / 维护与快捷操作」清晰分组，集成健康体检、重建索引、导出备份与恢复默认配置。
 - **Windows 原生无框 WebView2 悬浮窗**（`global`: `Antigravity Hub`）：基于 `127.0.0.1` 一次性令牌自动拉起无浏览器标题栏的原生圆角悬浮窗（非 Windows 或异常时自动降级至 Edge/Chrome `--app`），支持 Always-on-Top 一键置顶固定、**快捷收缩为迷你悬浮条（含上下文占比 / TPS / 模型徽章且支持横向拉伸）**、**独立最小化与一键唤醒还原**、8 方向缩放与高 DPI 精准记忆，关闭即释放本地端口。
@@ -101,16 +104,16 @@
 
 ### 方式一：下载 Release 免构建插件包（推荐，零 `npm install`）
 
-1. 前往 [Releases](https://github.com/Horikita-9-Suzune-Max-Ultrafast/antigravity-hub/releases) 下载 `context-cache-v1.5.2-plugin.zip`（内部为全明文可读 `.mjs` 源码 + 预编译单文件 UI，零 `node_modules`）。
+1. 前往 [Releases](https://github.com/Horikita-9-Suzune-Max-Ultrafast/antigravity-hub/releases) 下载 `context-cache-v1.5.3-plugin.zip`（内部为全明文可读 `.mjs` 源码 + 预编译单文件 UI，零 `node_modules`）。
 2. 解压至 Antigravity 插件目录，使目录结构为 `~/.gemini/config/plugins/context-cache/plugin.json`：
    - **Windows PowerShell**：
      ```powershell
-     Expand-Archive -Path .\context-cache-v1.5.2-plugin.zip -DestinationPath "$env:USERPROFILE\.gemini\config\plugins" -Force
+     Expand-Archive -Path .\context-cache-v1.5.3-plugin.zip -DestinationPath "$env:USERPROFILE\.gemini\config\plugins" -Force
      ```
    - **macOS / Linux**：
      ```bash
      mkdir -p ~/.gemini/config/plugins
-     unzip -o context-cache-v1.5.2-plugin.zip -d ~/.gemini/config/plugins
+     unzip -o context-cache-v1.5.3-plugin.zip -d ~/.gemini/config/plugins
      ```
 3. Antigravity 会自动发现并加载插件（无需重启）。
 

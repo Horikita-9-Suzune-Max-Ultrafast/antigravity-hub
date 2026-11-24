@@ -25,15 +25,16 @@
   <!-- 统一 Antigravity 2.0 设计语言的无框自定义顶栏（替代原生 Edge/Windows 标题栏） -->
   <div id="nativeTitleBar" class="native-titlebar hidden">
     <div id="titleBarDragZone" class="native-titlebar-drag" title="拖动窗口，双击放大或还原" data-i18n-title="titlebar.dragTitle">
-      <svg width="18" height="18" viewBox="0 0 128 128" fill="none" class="shrink-0">
-        <rect x="10" y="10" width="108" height="108" rx="26" fill="#1D4ED8"/>
-        <rect x="12" y="12" width="104" height="104" rx="24" stroke="#93C5FD" stroke-opacity="0.35" stroke-width="3"/>
+      <svg id="titleBarBrandIcon" width="18" height="18" viewBox="0 0 128 128" fill="none" class="shrink-0 hub-brand-svg" data-kv-state="safe">
+        <rect class="brand-bg" x="10" y="10" width="108" height="108" rx="26" fill="#1D4ED8"/>
+        <rect class="brand-ring" x="12" y="12" width="104" height="104" rx="24" stroke="#93C5FD" stroke-opacity="0.35" stroke-width="3"/>
         <path d="M64 32L95 48L64 64L33 48L64 32Z" fill="#FFFFFF" fill-opacity="0.96"/>
-        <path d="M33 65L64 81L95 65" stroke="#93C5FD" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
-        <path d="M33 82L64 98L95 82" stroke="#34D399" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
-        <circle cx="93" cy="35" r="8" fill="#34D399" stroke="#1D4ED8" stroke-width="3"/>
+        <path class="brand-mid" d="M33 65L64 81L95 65" stroke="#93C5FD" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+        <path class="brand-accent" d="M33 82L64 98L95 82" stroke="#34D399" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+        <circle class="brand-dot" cx="93" cy="35" r="8" fill="#34D399" stroke="#1D4ED8" stroke-width="3"/>
       </svg>
       <span class="native-titlebar-name truncate">Antigravity Hub</span>
+      <div id="titleBarMiniModules" class="native-titlebar-modules hidden" aria-label="迷你状态模块"></div>
       <span id="titleBarMiniSummary" class="native-titlebar-mini hidden mono-num">0.0%</span>
       <span id="titleBarTpsBadge" class="native-titlebar-chip native-titlebar-tps mono-num hidden" title="有效输出速度" data-i18n-title="titlebar.tpsTitle"></span>
       <span id="titleBarModelBadge" class="native-titlebar-chip native-titlebar-model mono-num hidden" title="当前模型" data-i18n-title="titlebar.modelTitle"></span>
@@ -108,12 +109,12 @@
     <aside id="consoleRail" class="console-rail" aria-label="Antigravity Hub 模块导航" data-i18n-aria="nav.ariaModules">
       <div class="console-rail-top">
         <div class="console-rail-brand" title="Antigravity Hub">
-          <svg width="22" height="22" viewBox="0 0 128 128" fill="none">
-            <rect x="10" y="10" width="108" height="108" rx="26" fill="#1D4ED8"/>
+          <svg id="railBrandIcon" width="22" height="22" viewBox="0 0 128 128" fill="none" class="hub-brand-svg" data-kv-state="safe">
+            <rect class="brand-bg" x="10" y="10" width="108" height="108" rx="26" fill="#1D4ED8"/>
             <path d="M64 32L95 48L64 64L33 48L64 32Z" fill="#FFFFFF" fill-opacity="0.96"/>
-            <path d="M33 65L64 81L95 65" stroke="#93C5FD" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
-            <path d="M33 82L64 98L95 82" stroke="#34D399" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
-            <circle cx="93" cy="35" r="8" fill="#34D399" stroke="#1D4ED8" stroke-width="3"/>
+            <path class="brand-mid" d="M33 65L64 81L95 65" stroke="#93C5FD" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+            <path class="brand-accent" d="M33 82L64 98L95 82" stroke="#34D399" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+            <circle class="brand-dot" cx="93" cy="35" r="8" fill="#34D399" stroke="#1D4ED8" stroke-width="3"/>
           </svg>
         </div>
 
@@ -275,18 +276,34 @@
       </div>
 
       <div class="header-meta-row">
-        <span class="agy-pill mono-num min-w-0 max-w-full" style="height: 28px; background: var(--card);">
-          <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" class="shrink-0">
+        <span id="gitBadgePill" class="git-meta-pill min-w-0 max-w-full" data-nogit="false">
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" class="git-meta-icon shrink-0">
             <circle cx="5" cy="4" r="1.8"/><circle cx="11" cy="12" r="1.8"/><path d="M5 5.8V12M5 8.5c0-1.6 6-1.2 6 1.7"/>
           </svg>
-          <span id="gitBranchLabel" class="text-fg font-medium truncate">main</span>
-          <span id="gitHeadLabel" class="shrink-0">@—</span>
+          <span id="gitBranchLabel" class="git-meta-branch truncate">main</span>
+          <span id="gitHeadLabel" class="git-meta-head mono-num shrink-0"></span>
+          <span id="gitDirtyDot" class="git-dirty-dot hidden shrink-0" title="存在未提交改动" data-i18n-title="monitor.header.gitDirtyTitle"></span>
         </span>
 
-        <button id="alertBtn" type="button" class="agy-btn agy-btn-secondary agy-btn-sm text-xs">
-          <span id="alertDot" class="dot-sm" style="background: var(--success);"></span>
-          <span id="alertCountLabel" class="mono-num">0 项预警</span>
-        </button>
+        <div class="header-meta-right">
+          <div id="kvCountdownWrap" class="kv-pill-wrap hidden">
+            <span id="kvCountdownPill" class="kv-meta-pill mono-num" data-kv-state="safe">
+              <span class="kv-state-dot" aria-hidden="true"></span>
+              <span id="kvCountdownText">--:--</span>
+            </span>
+            <button id="kvHelpBtn" type="button" class="kv-help-btn" aria-label="关于 Gemini KV Cache 倒计时" data-i18n-title="monitor.kv.helpTitle">?</button>
+            <div id="kvHelpPopover" class="kv-help-popover hidden" role="tooltip">
+              <div class="text-xs font-semibold text-fg mb-1" data-i18n="monitor.kv.helpTitle">关于 Gemini KV Cache 倒计时</div>
+              <p class="text-xs text-muted m-0 leading-relaxed" data-i18n="monitor.kv.helpBody1"></p>
+              <p class="text-xs text-muted m-0 mt-1.5 leading-relaxed" data-i18n="monitor.kv.helpBody2"></p>
+            </div>
+          </div>
+
+          <button id="alertBtn" type="button" class="agy-btn agy-btn-secondary agy-btn-sm text-xs">
+            <span id="alertDot" class="dot-sm" style="background: var(--success);"></span>
+            <span id="alertCountLabel" class="mono-num">0 项预警</span>
+          </button>
+        </div>
       </div>
 
       <div id="alertsAcc" class="acc-body" data-open="false">
@@ -1218,6 +1235,40 @@
               </div>
             </div>
 
+            <div class="px-5 py-3.5 space-y-3">
+              <div class="flex items-center justify-between gap-4">
+                <div class="min-w-0">
+                  <div class="text-sm font-medium flex items-center gap-1.5">
+                    <span data-i18n="settings.kvCache.title">Gemini KV 缓存保鲜倒计时</span>
+                    <span class="kv-help-inline-wrap">
+                      <button id="settingsKvHelpBtn" type="button" class="kv-help-btn" aria-label="关于 Gemini KV Cache 倒计时" data-i18n-title="monitor.kv.helpTitle">?</button>
+                      <div id="settingsKvHelpPopover" class="kv-help-popover kv-help-popover-left hidden" role="tooltip">
+                        <div class="text-xs font-semibold text-fg mb-1" data-i18n="monitor.kv.helpTitle">关于 Gemini KV Cache 倒计时</div>
+                        <p class="text-xs text-muted m-0 leading-relaxed" data-i18n="monitor.kv.helpBody1"></p>
+                        <p class="text-xs text-muted m-0 mt-1.5 leading-relaxed" data-i18n="monitor.kv.helpBody2"></p>
+                      </div>
+                    </span>
+                  </div>
+                  <div class="text-xs text-muted mt-0.5" data-i18n="settings.kvCache.desc">对话结束后自动倒计时，图标按蓝 / 黄 / 红三态预警</div>
+                </div>
+                <button id="kvCacheSwitch" type="button" class="agy-switch" data-on="true">
+                  <span class="agy-switch-thumb"></span>
+                </button>
+              </div>
+              <div id="kvCacheControls" class="flex flex-wrap items-center justify-between gap-2.5 text-xs">
+                <span class="text-muted" data-i18n="settings.kvCache.windowLabel">参考窗口（分钟）</span>
+                <div class="flex items-center gap-1.5 flex-wrap">
+                  <div class="kv-preset-group" id="kvPresetGroup">
+                    <button type="button" class="kv-preset-btn mono-num" data-kv-min="5">5m</button>
+                    <button type="button" class="kv-preset-btn mono-num" data-kv-min="10">10m</button>
+                    <button type="button" class="kv-preset-btn mono-num" data-kv-min="15" data-active="true">15m</button>
+                    <button type="button" class="kv-preset-btn mono-num" data-kv-min="30">30m</button>
+                  </div>
+                  <input id="cfgKvTtlInput" type="number" value="15" min="3" max="60" step="1" class="agy-input mono-num" style="width: 64px; height: 28px; padding: 0 8px;" />
+                </div>
+              </div>
+            </div>
+
             <div class="px-5 py-3.5 grid-3-sm text-xs">
               <label class="space-y-1.5 block">
                 <span class="text-muted block" data-i18n="settings.budget.label">SessionStart 注入上限</span>
@@ -1241,12 +1292,63 @@
           <div class="agy-group divide-y overflow-hidden">
             <div class="px-5 py-3.5 flex items-center justify-between gap-4">
               <div class="min-w-0">
+                <div class="text-sm font-medium" data-i18n="settings.startupPopout.title">随 Antigravity 启动自动弹出悬浮窗</div>
+                <div class="text-xs text-muted mt-0.5" data-i18n="settings.startupPopout.desc">打开 Antigravity 并加载完成后自动弹出，单次运行仅弹一次</div>
+              </div>
+              <button id="startupAutoPopoutSwitch" type="button" class="agy-switch" data-on="true">
+                <span class="agy-switch-thumb"></span>
+              </button>
+            </div>
+
+            <div class="px-5 py-3.5 flex items-center justify-between gap-4">
+              <div class="min-w-0">
                 <div class="text-sm font-medium" data-i18n="settings.sidebarPopout.title">左侧边栏自动弹出悬浮窗</div>
                 <div class="text-xs text-muted mt-0.5" data-i18n="settings.sidebarPopout.desc">点击左侧入口自动拉起独立悬浮窗</div>
               </div>
               <button id="sidebarAutoPopoutSwitch" type="button" class="agy-switch" data-on="true">
                 <span class="agy-switch-thumb"></span>
               </button>
+            </div>
+
+            <div class="px-5 py-3.5 space-y-3" id="miniBarStudioSection">
+              <div class="flex items-start justify-between gap-3">
+                <div class="min-w-0">
+                  <div class="text-sm font-medium flex items-center gap-2 flex-wrap">
+                    <span data-i18n="settings.miniBar.title">迷你悬浮条长度与模块排序</span>
+                    <span id="miniBarCustomBadge" class="agy-pill mono-num hidden"></span>
+                  </div>
+                  <div class="text-xs text-muted mt-0.5" data-i18n="settings.miniBar.desc">选择快捷长度档位，拖拽或点击模块调整展示顺序（仍支持手动拖宽）</div>
+                </div>
+                <button id="miniBarResetOrderBtn" type="button" class="agy-btn agy-btn-secondary agy-btn-sm text-xs shrink-0" data-i18n="settings.miniBar.resetOrder">恢复默认顺序</button>
+              </div>
+
+              <div class="minibar-preset-row" id="miniBarPresetRow" role="radiogroup" aria-label="迷你悬浮条长度档位">
+                <button type="button" class="minibar-preset-btn" data-preset="minimal" data-count="1" data-i18n="settings.miniBar.presetMinimal">极简 1</button>
+                <button type="button" class="minibar-preset-btn" data-preset="compact" data-count="2" data-i18n="settings.miniBar.presetCompact">紧凑 2</button>
+                <button type="button" class="minibar-preset-btn" data-preset="standard" data-count="3" data-active="true" data-i18n="settings.miniBar.presetStandard">标准 3</button>
+                <button type="button" class="minibar-preset-btn" data-preset="wide" data-count="4" data-i18n="settings.miniBar.presetWide">加宽 4</button>
+                <button type="button" class="minibar-preset-btn" data-preset="full" data-count="5" data-i18n="settings.miniBar.presetFull">完整 5</button>
+              </div>
+
+              <div class="minibar-studio" id="miniBarStudio">
+                <div class="minibar-preview-shell" id="miniBarPreviewShell" data-preset="standard">
+                  <div class="minibar-preview-brand" aria-hidden="true">
+                    <svg width="16" height="16" viewBox="0 0 128 128" fill="none" class="hub-brand-svg" data-kv-state="safe">
+                      <rect class="brand-bg" x="10" y="10" width="108" height="108" rx="26" fill="#1D4ED8"/>
+                      <path d="M64 32L95 48L64 64L33 48L64 32Z" fill="#FFFFFF" fill-opacity="0.96"/>
+                      <path class="brand-mid" d="M33 65L64 81L95 65" stroke="#93C5FD" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+                      <path class="brand-accent" d="M33 82L64 98L95 82" stroke="#34D399" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                  </div>
+                  <div class="minibar-preview-track" id="miniBarPreviewTrack"></div>
+                  <div class="minibar-preview-chrome" aria-hidden="true">
+                    <span class="minibar-chrome-dot"></span>
+                    <span class="minibar-chrome-dot"></span>
+                    <span class="minibar-chrome-dot"></span>
+                  </div>
+                </div>
+                <div class="text-xs text-muted mt-2" data-i18n="settings.miniBar.hint">拖动模块卡片或点击选中后点目标位置互换顺序；高亮区为当前档位显示项</div>
+              </div>
             </div>
 
             <div class="px-5 py-3.5 flex items-center justify-between gap-4">

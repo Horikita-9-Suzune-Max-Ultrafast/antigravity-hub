@@ -138,7 +138,7 @@ test('restartAntigravity safe failure, dryRun, mocked detached spawn, and zero A
   }
 });
 
-test('MCP app_config_manage handles uiLanguage persistence, restart_antigravity, and v1.5.2 version', async () => {
+test('MCP app_config_manage handles uiLanguage persistence, restart_antigravity, and v1.5.3 version', async () => {
   const root = makeTmpDir('cc-mcp-cfg-');
   const dataDir = path.join(root, 'data');
   const emptyDir = path.join(root, 'missing-install');
@@ -148,7 +148,7 @@ test('MCP app_config_manage handles uiLanguage persistence, restart_antigravity,
 
   const dispatcher = createMcpDispatcher({ dataDir, projectDir: root });
   try {
-    assert.equal(SERVER_INFO.version, '1.5.2');
+    assert.equal(SERVER_INFO.version, '1.5.3');
 
     // Default config get
     const rGet = await dispatcher.callTool('app_config_manage', { action: 'get' });

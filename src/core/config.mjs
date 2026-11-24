@@ -4,6 +4,8 @@ import { atomicWriteJson } from './storage.mjs';
 
 export const VALID_POLL_INTERVALS = [3, 5, 10, 30, 60, 0];
 export const VALID_UI_LANGUAGES = ['zh-CN', 'en'];
+export const VALID_MINI_BAR_MODULES = ['context', 'cache', 'kv', 'tps', 'model'];
+export const VALID_MINI_BAR_PRESETS = ['full', 'wide', 'standard', 'compact', 'minimal', 'custom'];
 
 export const DEFAULT_CONFIG = {
   version: 1,
@@ -12,10 +14,18 @@ export const DEFAULT_CONFIG = {
   auxAutoOpen: true,
   popout: {
     enabled: false,
+    autoLaunchOnStartup: true,
     autoLaunchFromSidebar: true,
     alwaysOnTop: true,
     size: '460x720',
     position: null,
+    miniBarPreset: 'standard',
+    miniBarModules: ['context', 'cache', 'kv', 'tps', 'model'],
+    miniBarCustomWidth: null,
+  },
+  kvCache: {
+    enabled: true,
+    ttlMinutes: 15,
   },
   uiBanner: {
     enabled: true,
@@ -169,6 +179,8 @@ export function sanitizeConfig(cfg) {
   }
   out.auxAutoOpen = Boolean(out.auxAutoOpen);
   out.popout.enabled = Boolean(out.popout.enabled);
+  out.popout.autoLaunchOnStartup =
+    out.popout.autoLaunchOnStartup === undefined ? true : Boolean(out.popout.autoLaunchOnStartup);
   out.popout.autoLaunchFromSidebar =
     out.popout.autoLaunchFromSidebar === undefined ? true : Boolean(out.popout.autoLaunchFromSidebar);
   out.popout.alwaysOnTop =
@@ -176,6 +188,34 @@ export function sanitizeConfig(cfg) {
   if (!/^\d{3,4}x\d{3,4}$/.test(String(out.popout.size || ''))) {
     out.popout.size = '460x720';
   }
+  if (!VALID_MINI_BAR_PRESETS.includes(out.popout.miniBarPreset)) {
+    out.popout.miniBarPreset = 'standard';
+  }
+  {
+    const rawMods = Array.isArray(out.popout.miniBarModules) ? out.popout.miniBarModules : [];
+    const seen = new Set();
+    const cleaned = [];
+    for (const m of rawMods) {
+      const k = String(m || '').trim();
+      if (VALID_MINI_BAR_MODULES.includes(k) && !seen.has(k)) {
+        seen.add(k);
+        cleaned.push(k);
+      }
+    }
+    for (const defMod of VALID_MINI_BAR_MODULES) {
+      if (!seen.has(defMod)) cleaned.push(defMod);
+    }
+    out.popout.miniBarModules = cleaned;
+  }
+  if (Number.isFinite(Number(out.popout.miniBarCustomWidth)) && Number(out.popout.miniBarCustomWidth) >= 220) {
+    out.popout.miniBarCustomWidth = Math.max(220, Math.min(1200, Math.round(Number(out.popout.miniBarCustomWidth))));
+  } else {
+    out.popout.miniBarCustomWidth = null;
+  }
+  out.kvCache = {
+    enabled: out.kvCache?.enabled === undefined ? true : Boolean(out.kvCache.enabled),
+    ttlMinutes: Math.max(3, Math.min(60, Math.round(Number(out.kvCache?.ttlMinutes) || 15))),
+  };
   if (
     out.popout.position &&
     typeof out.popout.position === 'object' &&

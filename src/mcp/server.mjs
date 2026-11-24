@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { getDataPaths, formatDisplayPath } from '../core/paths.mjs';
+import { atomicWriteJson, ensureDataDirs, readJsonSafe } from '../core/storage.mjs';
 import { loadConfig, saveConfig } from '../core/config.mjs';
 import { getGitContext } from '../core/git-context.mjs';
 import { rebuildIndex } from '../core/index-db.mjs';
@@ -33,7 +34,7 @@ export const APP_RESOURCE_URI = 'ui://context-cache/dashboard.html';
 export const APP_RESOURCE_MIME = 'text/html;profile=mcp-app';
 export const SERVER_INFO = {
   name: 'context-cache-server',
-  version: '1.5.2',
+  version: '1.5.3',
 };
 
 const APP_ONLY_META = { ui: { visibility: ['app'] } };
@@ -424,9 +425,78 @@ function toolErr(message) {
 }
 
 /**
+ * Auto-launch the native floating popout window once per Antigravity host lifecycle (keyed by parent PID).
+ * Prevents duplicate popouts on MCP reconnects and respects user opt-out / test environment guards.
+ */
+export async function maybeAutoLaunchPopoutOnStartup({
+  popout,
+  options = {},
+  ppid = process.ppid,
+  env = process.env,
+} = {}) {
+  if (!popout || options.enableStartupAutoPopout !== true) {
+    return { launched: false, reason: 'disabled_by_option' };
+  }
+  if (env?.CONTEXT_CACHE_DISABLE_AUTOSTART === '1' || env?.NODE_TEST_CONTEXT) {
+    return { launched: false, reason: 'disabled_by_env' };
+  }
+  const cfg = loadConfig(options);
+  if (cfg.popout?.autoLaunchOnStartup === false) {
+    return { launched: false, reason: 'disabled_in_config' };
+  }
+  if (typeof popout.hasActiveClient === 'function' && popout.hasActiveClient()) {
+    return { launched: false, reason: 'already_active' };
+  }
+
+  const paths = ensureDataDirs(options);
+  const stateFile = path.join(paths.dataDir, 'autostart-state.json');
+  const hostPpid = Number(ppid) || 0;
+  const prev = readJsonSafe(stateFile, null);
+  if (hostPpid > 0 && prev && Number(prev.ppid) === hostPpid) {
+    return { launched: false, reason: 'already_launched_for_host_pid' };
+  }
+
+  try {
+    atomicWriteJson(stateFile, {
+      ppid: hostPpid,
+      pid: process.pid,
+      launchedAt: new Date().toISOString(),
+    });
+  } catch {
+    // Non-fatal; proceed fail-open
+  }
+
+  try {
+    if (!cfg.popout?.enabled) {
+      saveConfig({ popout: { enabled: true } }, options);
+    }
+    const status = await popout.launchWindow({
+      size: cfg.popout?.size || '460x720',
+      position: cfg.popout?.position || null,
+      alwaysOnTop: cfg.popout?.alwaysOnTop !== false,
+    });
+    return { launched: true, reason: 'launched', status };
+  } catch (err) {
+    return { launched: false, reason: 'launch_failed', error: String(err?.message || err) };
+  }
+}
+
+/**
  * Create a self-contained MCP request dispatcher (used by stdio server, popout server, and unit tests).
  */
 export function createMcpDispatcher(options = {}) {
+  let startupAutoLaunchTimer = null;
+  let startupAutoLaunchTriggered = false;
+
+  const scheduleStartupAutoPopout = (delayMs = 1000) => {
+    if (startupAutoLaunchTriggered || options.enableStartupAutoPopout !== true) return;
+    startupAutoLaunchTriggered = true;
+    startupAutoLaunchTimer = setTimeout(() => {
+      startupAutoLaunchTimer = null;
+      void maybeAutoLaunchPopoutOnStartup({ popout, options }).catch(() => {});
+    }, Math.max(0, Number(delayMs) || 0));
+    startupAutoLaunchTimer.unref?.();
+  };
   const defaultWorkspace = options.projectDir || process.env.CONTEXT_CACHE_WORKSPACE || process.cwd();
   const popout = new PopoutServerManager({
     getHtml: () => readUiHtml(options),
@@ -782,6 +852,7 @@ export function createMcpDispatcher(options = {}) {
 
     if (method === 'initialize') {
       const clientVer = typeof params?.protocolVersion === 'string' ? params.protocolVersion : '2025-03-26';
+      scheduleStartupAutoPopout(options.startupAutoPopoutDelayMs ?? 1200);
       return reply({
         protocolVersion: clientVer,
         capabilities: {
@@ -793,6 +864,9 @@ export function createMcpDispatcher(options = {}) {
     }
 
     if (method === 'notifications/initialized' || method === 'notifications/cancelled') {
+      if (method === 'notifications/initialized') {
+        scheduleStartupAutoPopout(options.startupAutoPopoutDelayMs ?? 800);
+      }
       return null;
     }
 
@@ -856,6 +930,10 @@ export function createMcpDispatcher(options = {}) {
   }
 
   async function close() {
+    if (startupAutoLaunchTimer) {
+      clearTimeout(startupAutoLaunchTimer);
+      startupAutoLaunchTimer = null;
+    }
     await popout.stop();
   }
 
@@ -866,7 +944,10 @@ export function createMcpDispatcher(options = {}) {
  * Start JSON-RPC 2.0 Stdio transport (supports both newline-delimited JSON and Content-Length framing).
  */
 export function startStdioServer(options = {}) {
-  const dispatcher = createMcpDispatcher(options);
+  const dispatcher = createMcpDispatcher({
+    ...options,
+    enableStartupAutoPopout: options.enableStartupAutoPopout !== false,
+  });
   let buffer = Buffer.alloc(0);
   let useContentLength = false;
 

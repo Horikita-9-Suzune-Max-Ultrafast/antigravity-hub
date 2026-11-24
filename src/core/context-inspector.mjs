@@ -585,6 +585,15 @@ export function inspectContext(params = {}, options = {}) {
     },
     model,
     latestModel: telemetry.summary.latestModel || latestPlanner?.model || matchedSession?.lastModel || '',
+    latestCallTsMs: (() => {
+      const latestCall = (telemetry.calls || []).find((c) => c.agentType === 'main') || (telemetry.calls || [])[0];
+      if (latestCall?.tsMs) {
+        const dur = Number(latestCall.durationMs) || 0;
+        return latestCall.tsMs + (dur > 0 && dur < 600_000 ? dur : 0);
+      }
+      return latestPlanner?.tsMs || matchedSession?.mtimeMs || 0;
+    })(),
+    isTurnActive: Boolean(matchedSession?.isActive && target.activeSession?.event === 'PreInvocation'),
     usedTokens: effectiveUsed,
     limitTokens,
     freeTokens,

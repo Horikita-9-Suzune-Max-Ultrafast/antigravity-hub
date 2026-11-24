@@ -21,7 +21,10 @@ const FEATURE_FLAGS = {
   showQuotaUi: false,
 };
 
-const APP_VERSION = '1.5.2';
+const APP_VERSION = '1.5.3';
+const MINI_BAR_DEFAULT_ORDER = ['context', 'cache', 'kv', 'tps', 'model'];
+const MINI_BAR_PRESET_COUNTS = { minimal: 1, compact: 2, standard: 3, wide: 4, full: 5, custom: 5 };
+const MINI_BAR_PRESET_WIDTHS = { minimal: 255, compact: 340, standard: 440, wide: 540, full: 650 };
 
 function getUiLang() {
   return normalizeUiLang(state.config?.uiLanguage || DEFAULT_UI_LANG);
@@ -681,12 +684,54 @@ function fitNativeTitleBar() {
   if (!titleBar || !dragZone || titleBar.classList.contains('hidden')) return;
 
   const nameEl = dragZone.querySelector('.native-titlebar-name');
+  const miniModsEl = document.getElementById('titleBarMiniModules');
   const tpsEl = document.getElementById('titleBarTpsBadge');
   const modelEl = document.getElementById('titleBarModelBadge');
   const hasModel = Boolean(modelEl && modelEl.dataset.fullModel && !modelEl.classList.contains('hidden'));
   const hasTps = Boolean(tpsEl && !tpsEl.classList.contains('hidden'));
   const collapsed = state.windowCollapsed;
 
+  if (collapsed) {
+    nameEl?.classList.add('titlebar-fit-hidden');
+    miniModsEl?.classList.remove('hidden');
+    if (!miniModsEl) return;
+
+    const preset = state.config?.popout?.miniBarPreset || 'standard';
+    const maxSlots = MINI_BAR_PRESET_COUNTS[preset] || 3;
+    const chips = [...miniModsEl.querySelectorAll('.mini-mod-chip')];
+    const activeChips = [];
+
+    chips.forEach((chip, idx) => {
+      const mod = chip.dataset.mod;
+      if (mod === 'model' && chip.dataset.fullModel) {
+        chip.textContent = chip.dataset.fullModel;
+      }
+      const allowedByPreset = idx < maxSlots;
+      const available = chip.dataset.available !== 'false';
+      const show = allowedByPreset && available;
+      chip.classList.toggle('titlebar-fit-hidden', !show);
+      if (show) activeChips.push(chip);
+    });
+
+    const overflows = () => dragZone.scrollWidth > dragZone.clientWidth + 1;
+    if (!overflows()) return;
+
+    // 1. Shorten model chip before hiding any module
+    const modelChip = activeChips.find((c) => c.dataset.mod === 'model');
+    if (modelChip && modelChip.dataset.shortModel) {
+      modelChip.textContent = modelChip.dataset.shortModel;
+      if (!overflows()) return;
+    }
+
+    // 2. Hide trailing chips cleanly one by one so zero glyphs or borders get clipped
+    for (let i = activeChips.length - 1; i >= 0; i--) {
+      if (!overflows()) break;
+      activeChips[i].classList.add('titlebar-fit-hidden');
+    }
+    return;
+  }
+
+  miniModsEl?.classList.add('hidden');
   nameEl?.classList.remove('titlebar-fit-hidden');
   tpsEl?.classList.remove('titlebar-fit-hidden');
   modelEl?.classList.remove('titlebar-fit-hidden');
@@ -694,30 +739,6 @@ function fitNativeTitleBar() {
 
   const overflows = () => dragZone.scrollWidth > dragZone.clientWidth + 1;
   if (!overflows()) return;
-
-  if (collapsed) {
-    // 1. Hide brand text first (keep icon) so live metrics take priority
-    nameEl?.classList.add('titlebar-fit-hidden');
-    if (!overflows()) return;
-
-    // 2. Switch model badge to concise short name (e.g. 4-neon-M)
-    if (hasModel && modelEl.dataset.shortModel) {
-      modelEl.textContent = modelEl.dataset.shortModel;
-      if (!overflows()) return;
-    }
-
-    // 3. Hide model badge cleanly rather than clipping to a fragment
-    if (hasModel) {
-      modelEl.classList.add('titlebar-fit-hidden');
-      if (!overflows()) return;
-    }
-
-    // 4. Finally hide TPS on extremely narrow widths
-    if (hasTps) {
-      tpsEl.classList.add('titlebar-fit-hidden');
-    }
-    return;
-  }
 
   // Expanded mode: keep brand visible; degrade model/TPS cleanly without clipping
   if (hasModel && modelEl.dataset.shortModel) {
@@ -731,6 +752,146 @@ function fitNativeTitleBar() {
   if (hasTps) {
     tpsEl.classList.add('titlebar-fit-hidden');
   }
+}
+
+function getMiniBarModules() {
+  const raw = state.config?.popout?.miniBarModules;
+  if (!Array.isArray(raw) || raw.length === 0) return [...MINI_BAR_DEFAULT_ORDER];
+  const seen = new Set();
+  const out = [];
+  for (const m of raw) {
+    if (MINI_BAR_DEFAULT_ORDER.includes(m) && !seen.has(m)) {
+      seen.add(m);
+      out.push(m);
+    }
+  }
+  for (const m of MINI_BAR_DEFAULT_ORDER) {
+    if (!seen.has(m)) out.push(m);
+  }
+  return out;
+}
+
+function computeGeminiKvState() {
+  const enabled = state.config?.kvCache?.enabled !== false;
+  const ctx = state.contextData;
+  const activeModel = String(ctx?.latestModel || ctx?.model || '').trim();
+  const isGemini = /gemini/i.test(activeModel);
+  const ttlMin = Math.max(3, Math.min(60, Math.round(Number(state.config?.kvCache?.ttlMinutes) || 15)));
+  const ttlMs = ttlMin * 60_000;
+
+  if (!enabled || !isGemini) {
+    return { visible: false, isGemini, state: 'safe', text: '--:--', title: '', ttlMin };
+  }
+  if (ctx?.isTurnActive) {
+    return {
+      visible: true,
+      isGemini: true,
+      state: 'safe',
+      active: true,
+      text: tr('monitor.kv.active'),
+      title: tr('monitor.kv.titleActive'),
+      ttlMin,
+    };
+  }
+  const lastTs = Number(ctx?.latestCallTsMs) || 0;
+  if (!lastTs || (Number(ctx?.totalCallsCount) || 0) === 0) {
+    return {
+      visible: true,
+      isGemini: true,
+      state: 'safe',
+      waiting: true,
+      text: tr('monitor.kv.waiting'),
+      title: tr('monitor.kv.titleSafe', { rem: `${ttlMin}:00`, ttl: ttlMin }),
+      ttlMin,
+    };
+  }
+
+  const idleMs = Math.max(0, Date.now() - lastTs);
+  const remMs = Math.max(0, ttlMs - idleMs);
+  const ratio = idleMs / ttlMs;
+  const kvState = ratio <= 1 / 3 ? 'safe' : ratio <= 4 / 5 ? 'warn' : 'danger';
+
+  const fmtClock = (ms) => {
+    const totalSec = Math.max(0, Math.floor(ms / 1000));
+    const m = Math.floor(totalSec / 60);
+    const s = totalSec % 60;
+    return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+  };
+
+  const text = remMs > 0 ? fmtClock(remMs) : tr('monitor.kv.expired');
+  const title =
+    kvState === 'safe'
+      ? tr('monitor.kv.titleSafe', { rem: fmtClock(remMs), ttl: ttlMin })
+      : kvState === 'warn'
+        ? tr('monitor.kv.titleWarn', { rem: fmtClock(remMs), ttl: ttlMin })
+        : tr('monitor.kv.titleDanger', { idle: fmtClock(idleMs), ttl: ttlMin });
+
+  return { visible: true, isGemini: true, state: kvState, text, title, ttlMin, remMs, idleMs };
+}
+
+function syncKvCountdownUi() {
+  const kv = computeGeminiKvState();
+
+  document.querySelectorAll('.hub-brand-svg').forEach((svg) => {
+    svg.dataset.kvState = kv.visible ? kv.state : 'safe';
+  });
+
+  const wrap = document.getElementById('kvCountdownWrap');
+  const pill = document.getElementById('kvCountdownPill');
+  const txt = document.getElementById('kvCountdownText');
+  if (wrap && pill && txt) {
+    wrap.classList.toggle('hidden', !kv.visible);
+    if (kv.visible) {
+      pill.dataset.kvState = kv.state;
+      pill.title = kv.title;
+      txt.textContent = kv.text;
+    }
+  }
+
+  const miniKvChip = document.querySelector('#titleBarMiniModules .mini-mod-chip[data-mod="kv"]');
+  if (miniKvChip) {
+    miniKvChip.dataset.available = kv.visible ? 'true' : 'false';
+    miniKvChip.dataset.kvState = kv.visible ? kv.state : 'muted';
+    miniKvChip.title = kv.title || '';
+    const valSpan = miniKvChip.querySelector('.mini-mod-val');
+    if (valSpan) valSpan.textContent = kv.text;
+    if (state.windowCollapsed) requestAnimationFrame(fitNativeTitleBar);
+  }
+}
+
+function renderCollapsedMiniModules(ctx, pct, cache, tps, followTag) {
+  const host = document.getElementById('titleBarMiniModules');
+  if (!host) return;
+  const order = getMiniBarModules();
+  const activeModel = String(ctx?.latestModel || ((Number(ctx?.totalCallsCount) || 0) > 0 ? ctx?.model : '') || '').trim();
+  const hasCalls = (Number(ctx?.totalCallsCount) || 0) > 0;
+  const kv = computeGeminiKvState();
+
+  host.innerHTML = order
+    .map((mod) => {
+      if (mod === 'context') {
+        const label = `${pct.toFixed(1)}%`;
+        return `<span class="mini-mod-chip mono-num" data-mod="context" data-available="true" title="${esc(tr('titlebar.miniSummaryTitle', { pct: pct.toFixed(1), cache: cache.toFixed(1), mode: followTag }))}">${esc(label)}</span>`;
+      }
+      if (mod === 'cache') {
+        const label = getUiLang() === 'en' ? `${cache.toFixed(0)}% Hit` : `${cache.toFixed(0)}% 缓存`;
+        return `<span class="mini-mod-chip mono-num" data-mod="cache" data-available="true" title="${esc(tr('titlebar.miniSummaryTitle', { pct: pct.toFixed(1), cache: cache.toFixed(1), mode: followTag }))}">${esc(label)}</span>`;
+      }
+      if (mod === 'kv') {
+        return `<span class="mini-mod-chip mono-num" data-mod="kv" data-available="${kv.visible ? 'true' : 'false'}" data-kv-state="${kv.visible ? kv.state : 'muted'}" title="${esc(kv.title || '')}"><span class="mini-mod-dot" aria-hidden="true"></span><span class="mini-mod-val">${esc(kv.text)}</span></span>`;
+      }
+      if (mod === 'tps') {
+        const text = hasCalls || tps > 0 ? `${tps.toFixed(1)} t/s` : '-- t/s';
+        const tone = hasCalls || tps > 0 ? (tps < 15 ? 'warn' : 'ok') : 'muted';
+        return `<span class="mini-mod-chip mono-num" data-mod="tps" data-available="true" data-tone="${tone}" title="${esc(hasCalls || tps > 0 ? tr('titlebar.tpsBadgeTitle', { tps: tps.toFixed(1), mode: followTag }) : tr('titlebar.tpsWaitingTitle', { mode: followTag }))}">${esc(text)}</span>`;
+      }
+      if (mod === 'model') {
+        const shortM = activeModel ? formatShortModel(activeModel) : '';
+        return `<span class="mini-mod-chip mono-num" data-mod="model" data-available="${activeModel ? 'true' : 'false'}" data-full-model="${esc(activeModel)}" data-short-model="${esc(shortM)}" title="${esc(activeModel ? tr('titlebar.modelBadgeTitle', { model: activeModel, mode: followTag }) : '')}">${esc(activeModel)}</span>`;
+      }
+      return '';
+    })
+    .join('');
 }
 
 function updateNativeTitleBarTelemetry(ctx, pct, cache, tps) {
@@ -782,6 +943,8 @@ function updateNativeTitleBarTelemetry(ctx, pct, cache, tps) {
     tpsEl.classList.remove('hidden');
   }
 
+  renderCollapsedMiniModules(ctx, pct, cache, tps, followTag);
+  syncKvCountdownUi();
   requestAnimationFrame(fitNativeTitleBar);
 }
 
@@ -790,8 +953,18 @@ function renderContext(animated = false) {
   if (!ctx) return;
   const lang = getUiLang();
 
-  document.getElementById('gitBranchLabel').textContent = ctx.git?.branch || 'nogit';
-  document.getElementById('gitHeadLabel').textContent = `@${ctx.git?.head || 'none'}${ctx.git?.dirty ? '*' : ''}`;
+  const gitPill = document.getElementById('gitBadgePill');
+  const gitBranchEl = document.getElementById('gitBranchLabel');
+  const gitHeadEl = document.getElementById('gitHeadLabel');
+  const gitDirtyEl = document.getElementById('gitDirtyDot');
+  const rawBranch = String(ctx.git?.branch || '').trim();
+  const rawHead = String(ctx.git?.head || '').trim();
+  const isNoGit = !rawBranch || rawBranch === 'nogit';
+  if (gitPill) gitPill.dataset.nogit = String(isNoGit);
+  if (gitBranchEl) gitBranchEl.textContent = isNoGit ? tr('monitor.header.noGit') : rawBranch;
+  if (gitHeadEl) gitHeadEl.textContent = !isNoGit && rawHead && rawHead !== 'none' ? rawHead : '';
+  if (gitDirtyEl) gitDirtyEl.classList.toggle('hidden', isNoGit || !ctx.git?.dirty);
+  syncKvCountdownUi();
   document.getElementById('tabCallsCount').textContent = String(ctx.totalCallsCount ?? 0);
 
   const alerts = ctx.alerts || [];
@@ -1503,12 +1676,24 @@ function setupNativeFramelessChrome() {
   document.getElementById('nativeResizeHandles')?.classList.remove('hidden');
   renderNativePinButton();
 
+  let miniWidthSaveDebounce = null;
+  let lastSavedMiniWidth = null;
+  const getTargetCollapsedLogicalWidth = () => {
+    const preset = state.config?.popout?.miniBarPreset || 'standard';
+    if (preset === 'custom' && Number(state.config?.popout?.miniBarCustomWidth) >= 220) {
+      return Number(state.config.popout.miniBarCustomWidth);
+    }
+    return MINI_BAR_PRESET_WIDTHS[preset] || MINI_BAR_PRESET_WIDTHS.standard;
+  };
+
   const toggleNativeCollapse = () => {
     state.windowCollapsed = !state.windowCollapsed;
     document.body.classList.toggle('window-collapsed', state.windowCollapsed);
-    const collapsePx = Math.ceil(40 * (window.devicePixelRatio || 1));
-    postHostWindowMsg(state.windowCollapsed ? `collapse:1:${collapsePx}` : 'collapse:0');
-    document.getElementById('titleBarMiniSummary')?.classList.toggle('hidden', !state.windowCollapsed);
+    const dpr = window.devicePixelRatio || 1;
+    const collapsePx = Math.ceil(40 * dpr);
+    const targetW = Math.ceil(getTargetCollapsedLogicalWidth() * dpr);
+    postHostWindowMsg(state.windowCollapsed ? `collapse:1:${collapsePx}:${targetW}` : 'collapse:0');
+    document.getElementById('titleBarMiniModules')?.classList.toggle('hidden', !state.windowCollapsed);
     const minSvg = document.getElementById('winMinSvg');
     if (minSvg) {
       minSvg.innerHTML = state.windowCollapsed
@@ -1520,11 +1705,25 @@ function setupNativeFramelessChrome() {
 
   const titleBar = document.getElementById('nativeTitleBar');
   if (titleBar) {
+    const onTitleBarResize = () => {
+      fitNativeTitleBar();
+      if (!state.windowCollapsed) return;
+      const w = Math.max(220, Math.min(1200, Math.round(window.innerWidth || 0)));
+      const expectedPresetW = getTargetCollapsedLogicalWidth();
+      if (Math.abs(w - expectedPresetW) <= 6 || w === lastSavedMiniWidth) return;
+      clearTimeout(miniWidthSaveDebounce);
+      miniWidthSaveDebounce = setTimeout(() => {
+        if (!state.windowCollapsed) return;
+        const curW = Math.max(220, Math.min(1200, Math.round(window.innerWidth || 0)));
+        lastSavedMiniWidth = curW;
+        void persistConfigPatch({ popout: { miniBarPreset: 'custom', miniBarCustomWidth: curW } }).catch(() => {});
+      }, 650);
+    };
     if (typeof ResizeObserver === 'function') {
-      const ro = new ResizeObserver(() => fitNativeTitleBar());
+      const ro = new ResizeObserver(onTitleBarResize);
       ro.observe(titleBar);
     } else {
-      window.addEventListener('resize', fitNativeTitleBar);
+      window.addEventListener('resize', onTitleBarResize);
     }
     titleBar.addEventListener('mousedown', (e) => {
       if (e.button !== 0 || e.detail >= 2) return;
@@ -1595,6 +1794,338 @@ function setupNativeFramelessChrome() {
   });
 }
 
+let miniBarSelectedMod = null;
+
+function getMiniBarModuleMeta(mod) {
+  const map = {
+    context: { label: tr('settings.miniBar.modContext'), sample: '5.3%' },
+    cache: { label: tr('settings.miniBar.modCache'), sample: '96%' },
+    kv: { label: tr('settings.miniBar.modKv'), sample: '12:40' },
+    tps: { label: tr('settings.miniBar.modTps'), sample: '48.2' },
+    model: { label: tr('settings.miniBar.modModel'), sample: 'Neon' },
+  };
+  return map[mod] || { label: mod, sample: '' };
+}
+
+function applyMiniBarOrderWithFlip(nextOrder, selectedMod = miniBarSelectedMod) {
+  const track = document.getElementById('miniBarPreviewTrack');
+  const firstRects = new Map();
+  if (track) {
+    track.querySelectorAll('.minibar-slot-chip').forEach((el) => {
+      firstRects.set(el.dataset.mod, el.getBoundingClientRect());
+    });
+  }
+
+  miniBarSelectedMod = selectedMod;
+  if (!state.config.popout) state.config.popout = {};
+  state.config.popout.miniBarModules = [...nextOrder];
+  renderMiniBarStudio();
+
+  if (track && firstRects.size > 0) {
+    track.querySelectorAll('.minibar-slot-chip').forEach((el) => {
+      const prev = firstRects.get(el.dataset.mod);
+      if (!prev) return;
+      const cur = el.getBoundingClientRect();
+      const dx = prev.left - cur.left;
+      const dy = prev.top - cur.top;
+      if (Math.abs(dx) < 1 && Math.abs(dy) < 1) return;
+      el.style.transition = 'none';
+      el.style.transform = `translate(${dx}px, ${dy}px)`;
+      requestAnimationFrame(() => {
+        el.style.transition = 'transform 220ms ease-out';
+        el.style.transform = '';
+      });
+    });
+  }
+
+  if (state.contextData) {
+    const pct = Number(state.contextData.usedPercent) || 0;
+    const cache = Number(state.contextData.latestCacheHitRate) || 0;
+    const tps = Number(state.contextData.avgTps) || 0;
+    updateNativeTitleBarTelemetry(state.contextData, pct, cache, tps);
+  }
+  void persistConfigPatch({ popout: { miniBarModules: [...nextOrder] } }).catch(() => {});
+}
+
+function renderMiniBarStudio() {
+  const preset = state.config?.popout?.miniBarPreset || 'standard';
+  const customW = state.config?.popout?.miniBarCustomWidth || null;
+  const order = getMiniBarModules();
+  const visibleCount = MINI_BAR_PRESET_COUNTS[preset] || 3;
+
+  document.querySelectorAll('#miniBarPresetRow .minibar-preset-btn').forEach((btn) => {
+    btn.dataset.active = String(btn.dataset.preset === preset);
+  });
+
+  const customBadge = document.getElementById('miniBarCustomBadge');
+  if (customBadge) {
+    if (preset === 'custom' && customW) {
+      customBadge.textContent = tr('settings.miniBar.customBadge', { w: customW });
+      customBadge.classList.remove('hidden');
+    } else {
+      customBadge.classList.add('hidden');
+    }
+  }
+
+  const shell = document.getElementById('miniBarPreviewShell');
+  if (shell) shell.dataset.preset = preset;
+
+  const track = document.getElementById('miniBarPreviewTrack');
+  if (!track) return;
+
+  const pieces = [];
+  order.forEach((mod, idx) => {
+    if (idx === visibleCount && visibleCount < order.length) {
+      pieces.push('<span class="minibar-divider" aria-hidden="true"></span>');
+    }
+    const meta = getMiniBarModuleMeta(mod);
+    const isVisible = idx < visibleCount;
+    const isSelected = miniBarSelectedMod === mod;
+    const nudgeHtml = isSelected
+      ? `<span class="minibar-slot-nudge">
+          <button type="button" class="minibar-nudge-btn" data-nudge="left" data-mod="${esc(mod)}" ${idx === 0 ? 'disabled' : ''} aria-label="向左移动">←</button>
+          <button type="button" class="minibar-nudge-btn" data-nudge="right" data-mod="${esc(mod)}" ${idx === order.length - 1 ? 'disabled' : ''} aria-label="向右移动">→</button>
+        </span>`
+      : '';
+    pieces.push(
+      `<div class="minibar-slot-chip" data-mod="${esc(mod)}" data-idx="${idx}" data-visible="${isVisible}" data-selected="${isSelected}" tabindex="0">
+        <span class="minibar-slot-idx mono-num">${idx + 1}</span>
+        <span>${esc(meta.label)}</span>
+        ${nudgeHtml}
+      </div>`
+    );
+  });
+  track.innerHTML = pieces.join('');
+
+  track.querySelectorAll('.minibar-nudge-btn').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const mod = btn.dataset.mod;
+      const dir = btn.dataset.nudge === 'left' ? -1 : 1;
+      const cur = getMiniBarModules();
+      const from = cur.indexOf(mod);
+      const to = from + dir;
+      if (from < 0 || to < 0 || to >= cur.length) return;
+      [cur[from], cur[to]] = [cur[to], cur[from]];
+      applyMiniBarOrderWithFlip(cur, mod);
+    });
+  });
+
+  track.querySelectorAll('.minibar-slot-chip').forEach((chip) => {
+    chip.addEventListener('keydown', (e) => {
+      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+      e.preventDefault();
+      const mod = chip.dataset.mod;
+      const cur = getMiniBarModules();
+      const from = cur.indexOf(mod);
+      const to = from + (e.key === 'ArrowLeft' ? -1 : 1);
+      if (from < 0 || to < 0 || to >= cur.length) return;
+      [cur[from], cur[to]] = [cur[to], cur[from]];
+      applyMiniBarOrderWithFlip(cur, mod);
+    });
+
+    chip.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0 || e.target.closest('.minibar-nudge-btn')) return;
+      e.preventDefault();
+      const draggedMod = chip.dataset.mod;
+      const startX = e.clientX;
+      const startY = e.clientY;
+      let isDragging = false;
+      let ghostEl = null;
+      let offsetX = 0;
+      let offsetY = 0;
+      let curOrder = getMiniBarModules();
+      let orderChanged = false;
+      let lastSwapAt = 0;
+      let lastPointerX = startX;
+      let lastPointerY = startY;
+      const visibleCount = MINI_BAR_PRESET_COUNTS[state.config?.popout?.miniBarPreset || 'standard'] || 3;
+
+      const updateSlotBadgesAndDivider = () => {
+        const oldDiv = track.querySelector('.minibar-divider');
+        if (oldDiv) oldDiv.remove();
+        const items = [...track.querySelectorAll('.minibar-slot-chip')];
+        items.forEach((el, idx) => {
+          el.dataset.idx = String(idx);
+          const isVis = idx < visibleCount;
+          el.dataset.visible = String(isVis);
+          const idxBadge = el.querySelector('.minibar-slot-idx');
+          if (idxBadge) idxBadge.textContent = String(idx + 1);
+          if (idx === visibleCount && visibleCount < items.length) {
+            const div = document.createElement('span');
+            div.className = 'minibar-divider';
+            div.setAttribute('aria-hidden', 'true');
+            track.insertBefore(div, el);
+          }
+        });
+      };
+
+      const reorderLiveWithFlip = (nextOrder) => {
+        const siblings = [...track.querySelectorAll('.minibar-slot-chip')];
+        const firstRects = new Map();
+        siblings.forEach((el) => firstRects.set(el.dataset.mod, el.getBoundingClientRect()));
+
+        const byMod = new Map(siblings.map((el) => [el.dataset.mod, el]));
+        const oldDiv = track.querySelector('.minibar-divider');
+        if (oldDiv) oldDiv.remove();
+        nextOrder.forEach((m) => {
+          const el = byMod.get(m);
+          if (el) track.appendChild(el);
+        });
+        updateSlotBadgesAndDivider();
+
+        siblings.forEach((el) => {
+          if (el === chip) return;
+          const prev = firstRects.get(el.dataset.mod);
+          if (!prev) return;
+          const cur = el.getBoundingClientRect();
+          const dx = prev.left - cur.left;
+          const dy = prev.top - cur.top;
+          if (Math.abs(dx) < 1 && Math.abs(dy) < 1) return;
+          el.style.transition = 'none';
+          el.style.transform = `translate(${dx}px, ${dy}px)`;
+          requestAnimationFrame(() => {
+            el.style.transition = 'transform 200ms cubic-bezier(0.22, 1, 0.36, 1)';
+            el.style.transform = '';
+          });
+        });
+      };
+
+      const onMove = (ev) => {
+        if (!isDragging && Math.hypot(ev.clientX - startX, ev.clientY - startY) < 4) return;
+        if (!isDragging) {
+          isDragging = true;
+          const rect = chip.getBoundingClientRect();
+          offsetX = startX - rect.left;
+          offsetY = startY - rect.top;
+
+          ghostEl = chip.cloneNode(true);
+          ghostEl.querySelector('.minibar-slot-nudge')?.remove();
+          ghostEl.classList.remove('is-placeholder');
+          ghostEl.classList.add('minibar-drag-ghost');
+          ghostEl.style.width = `${Math.ceil(rect.width)}px`;
+          ghostEl.style.height = `${Math.ceil(rect.height)}px`;
+          ghostEl.style.transform = `translate3d(${rect.left}px, ${rect.top}px, 0) scale(1.04)`;
+          document.body.appendChild(ghostEl);
+
+          chip.classList.add('is-placeholder');
+          try {
+            chip.setPointerCapture(e.pointerId);
+          } catch {}
+        }
+
+        const gx = ev.clientX - offsetX;
+        const gy = ev.clientY - offsetY;
+        if (ghostEl) {
+          ghostEl.style.transform = `translate3d(${gx}px, ${gy}px, 0) scale(1.04)`;
+        }
+
+        const now = performance.now();
+        const moveDist = Math.hypot(ev.clientX - lastPointerX, ev.clientY - lastPointerY);
+        // Cooldown prevents reading mid-FLIP animated rects and eliminates multi-row ping-pong jitter
+        if (now - lastSwapAt < 190 || moveDist < 2) return;
+        lastPointerX = ev.clientX;
+        lastPointerY = ev.clientY;
+
+        // 2D hit-test against resting card rectangles (works cleanly on both single-row and wrapped multi-row layouts)
+        const chips = [...track.querySelectorAll('.minibar-slot-chip')];
+        const fromIdx = curOrder.indexOf(draggedMod);
+        if (fromIdx < 0) return;
+
+        let targetIdx = -1;
+        for (let i = 0; i < chips.length; i++) {
+          const el = chips[i];
+          if (el === chip) continue;
+          const r = el.getBoundingClientRect();
+          // Strict interior hit with 4px hysteresis padding
+          if (
+            ev.clientX >= r.left + 4 &&
+            ev.clientX <= r.right - 4 &&
+            ev.clientY >= r.top + 2 &&
+            ev.clientY <= r.bottom - 2
+          ) {
+            targetIdx = i;
+            break;
+          }
+        }
+
+        if (targetIdx >= 0 && targetIdx !== fromIdx) {
+          const next = [...curOrder];
+          const [moved] = next.splice(fromIdx, 1);
+          next.splice(targetIdx, 0, moved);
+          curOrder = next;
+          orderChanged = true;
+          lastSwapAt = now;
+          reorderLiveWithFlip(next);
+          const ghostIdx = ghostEl?.querySelector('.minibar-slot-idx');
+          if (ghostIdx) ghostIdx.textContent = String(targetIdx + 1);
+        }
+      };
+
+      const onUp = () => {
+        window.removeEventListener('pointermove', onMove);
+        window.removeEventListener('pointerup', onUp);
+        window.removeEventListener('pointercancel', onUp);
+
+        if (isDragging) {
+          const finalizeDrop = () => {
+            if (ghostEl) {
+              ghostEl.remove();
+              ghostEl = null;
+            }
+            chip.classList.remove('is-placeholder');
+            if (orderChanged) {
+              miniBarSelectedMod = draggedMod;
+              if (!state.config.popout) state.config.popout = {};
+              state.config.popout.miniBarModules = [...curOrder];
+              renderMiniBarStudio();
+              if (state.contextData) {
+                const pct = Number(state.contextData.usedPercent) || 0;
+                const cache = Number(state.contextData.latestCacheHitRate) || 0;
+                const tps = Number(state.contextData.avgTps) || 0;
+                updateNativeTitleBarTelemetry(state.contextData, pct, cache, tps);
+              }
+              void persistConfigPatch({ popout: { miniBarModules: [...curOrder] } }).catch(() => {});
+            }
+          };
+
+          if (ghostEl) {
+            const dest = chip.getBoundingClientRect();
+            ghostEl.style.transition = 'transform 160ms cubic-bezier(0.22, 1, 0.36, 1), box-shadow 160ms ease-out';
+            ghostEl.style.transform = `translate3d(${dest.left}px, ${dest.top}px, 0) scale(1)`;
+            ghostEl.style.boxShadow = '0 2px 6px rgba(0, 0, 0, 0.08)';
+            setTimeout(finalizeDrop, 165);
+          } else {
+            finalizeDrop();
+          }
+          return;
+        }
+
+        // Click interaction: select first module, click second to swap smoothly
+        if (!miniBarSelectedMod) {
+          miniBarSelectedMod = draggedMod;
+          renderMiniBarStudio();
+        } else if (miniBarSelectedMod === draggedMod) {
+          miniBarSelectedMod = null;
+          renderMiniBarStudio();
+        } else {
+          const cur = getMiniBarModules();
+          const a = cur.indexOf(miniBarSelectedMod);
+          const b = cur.indexOf(draggedMod);
+          if (a >= 0 && b >= 0) {
+            [cur[a], cur[b]] = [cur[b], cur[a]];
+            applyMiniBarOrderWithFlip(cur, null);
+          }
+        }
+      };
+
+      window.addEventListener('pointermove', onMove);
+      window.addEventListener('pointerup', onUp);
+      window.addEventListener('pointercancel', onUp);
+    });
+  });
+}
+
 function renderSettings() {
   const cfg = state.config || {};
   const uiLang = getUiLang();
@@ -1604,10 +2135,26 @@ function renderSettings() {
   if (enBtn) enBtn.dataset.active = String(uiLang === 'en');
 
   document.getElementById('auxAutoSwitch').dataset.on = String(Boolean(cfg.auxAutoOpen));
+  const startupAutoEl = document.getElementById('startupAutoPopoutSwitch');
+  if (startupAutoEl) {
+    startupAutoEl.dataset.on = String(cfg.popout?.autoLaunchOnStartup !== false);
+  }
   const sidebarAutoEl = document.getElementById('sidebarAutoPopoutSwitch');
   if (sidebarAutoEl) {
     sidebarAutoEl.dataset.on = String(cfg.popout?.autoLaunchFromSidebar !== false);
   }
+  const kvSwitchEl = document.getElementById('kvCacheSwitch');
+  const kvOn = cfg.kvCache?.enabled !== false;
+  if (kvSwitchEl) kvSwitchEl.dataset.on = String(kvOn);
+  const kvControlsEl = document.getElementById('kvCacheControls');
+  if (kvControlsEl) kvControlsEl.style.opacity = kvOn ? '1' : '0.45';
+  const kvTtl = Math.max(3, Math.min(60, Math.round(Number(cfg.kvCache?.ttlMinutes) || 15)));
+  const kvInputEl = document.getElementById('cfgKvTtlInput');
+  if (kvInputEl) kvInputEl.value = kvTtl;
+  document.querySelectorAll('#kvPresetGroup .kv-preset-btn').forEach((btn) => {
+    btn.dataset.active = String(Number(btn.dataset.kvMin) === kvTtl);
+  });
+  renderMiniBarStudio();
   const topMostEl = document.getElementById('popoutTopMostSwitch');
   if (topMostEl) {
     topMostEl.dataset.on = String(cfg.popout?.alwaysOnTop !== false);
@@ -2495,6 +3042,93 @@ function bindEvents() {
       });
   });
 
+  document.getElementById('startupAutoPopoutSwitch')?.addEventListener('click', () => {
+    const next = state.config.popout?.autoLaunchOnStartup === false;
+    void persistConfigPatch({ popout: { autoLaunchOnStartup: next } })
+      .then(() => {
+        showToast(next ? tr('toast.startupPopoutOn') : tr('toast.startupPopoutOff'));
+      })
+      .catch((err) => {
+        renderSettings();
+        showToast(tr('toast.syncFailed', { error: err?.message || String(err) }), 'error');
+      });
+  });
+
+  document.getElementById('miniBarPresetRow')?.addEventListener('click', (e) => {
+    const btn = e.target.closest('.minibar-preset-btn');
+    if (!btn) return;
+    const preset = btn.dataset.preset;
+    if (!preset) return;
+    if (!state.config.popout) state.config.popout = {};
+    state.config.popout.miniBarPreset = preset;
+    state.config.popout.miniBarCustomWidth = null;
+    renderMiniBarStudio();
+    if (isNativePopout && state.windowCollapsed) {
+      const targetW = MINI_BAR_PRESET_WIDTHS[preset] || MINI_BAR_PRESET_WIDTHS.standard;
+      const dpr = window.devicePixelRatio || 1;
+      postHostWindowMsg(`setwidth:${Math.ceil(targetW * dpr)}`);
+      requestAnimationFrame(fitNativeTitleBar);
+    }
+    void persistConfigPatch({ popout: { miniBarPreset: preset, miniBarCustomWidth: null } }).catch(() => {});
+  });
+
+  document.getElementById('miniBarResetOrderBtn')?.addEventListener('click', () => {
+    applyMiniBarOrderWithFlip([...MINI_BAR_DEFAULT_ORDER], null);
+  });
+
+  document.getElementById('kvCacheSwitch')?.addEventListener('click', () => {
+    const next = state.config.kvCache?.enabled === false;
+    void persistConfigPatch({ kvCache: { enabled: next } })
+      .then(() => {
+        syncKvCountdownUi();
+      })
+      .catch((err) => {
+        renderSettings();
+        showToast(tr('toast.syncFailed', { error: err?.message || String(err) }), 'error');
+      });
+  });
+
+  const updateKvTtl = (minutes) => {
+    const clamped = Math.max(3, Math.min(60, Math.round(Number(minutes) || 15)));
+    void persistConfigPatch({ kvCache: { ttlMinutes: clamped } })
+      .then(() => {
+        syncKvCountdownUi();
+      })
+      .catch((err) => {
+        renderSettings();
+        showToast(tr('toast.syncFailed', { error: err?.message || String(err) }), 'error');
+      });
+  };
+
+  document.getElementById('kvPresetGroup')?.addEventListener('click', (e) => {
+    const btn = e.target.closest('.kv-preset-btn');
+    if (!btn) return;
+    updateKvTtl(Number(btn.dataset.kvMin));
+  });
+
+  document.getElementById('cfgKvTtlInput')?.addEventListener('change', (e) => {
+    updateKvTtl(Number(e.target.value));
+  });
+
+  const bindHelpPopover = (btnId, popId) => {
+    const btn = document.getElementById(btnId);
+    const pop = document.getElementById(popId);
+    if (!btn || !pop) return;
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const willOpen = pop.classList.contains('hidden');
+      document.querySelectorAll('.kv-help-popover').forEach((p) => p.classList.add('hidden'));
+      pop.classList.toggle('hidden', !willOpen);
+    });
+  };
+  bindHelpPopover('kvHelpBtn', 'kvHelpPopover');
+  bindHelpPopover('settingsKvHelpBtn', 'settingsKvHelpPopover');
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('.kv-pill-wrap, .kv-help-inline-wrap')) {
+      document.querySelectorAll('.kv-help-popover').forEach((p) => p.classList.add('hidden'));
+    }
+  });
+
   document.getElementById('sidebarAutoPopoutSwitch')?.addEventListener('click', () => {
     const next = state.config.popout?.autoLaunchFromSidebar === false;
     void persistConfigPatch({ popout: { autoLaunchFromSidebar: next } })
@@ -2608,7 +3242,16 @@ function bindEvents() {
           uiBanner: { enabled: true },
           sessionStartBudgetTokens: 450,
           alerts: { contextWarningPct: 75, cacheDropThresholdPct: 50 },
-          popout: { autoLaunchFromSidebar: true, alwaysOnTop: true, size: '460x720' },
+          kvCache: { enabled: true, ttlMinutes: 15 },
+          popout: {
+            autoLaunchOnStartup: true,
+            autoLaunchFromSidebar: true,
+            alwaysOnTop: true,
+            size: '460x720',
+            miniBarPreset: 'standard',
+            miniBarModules: [...MINI_BAR_DEFAULT_ORDER],
+            miniBarCustomWidth: null,
+          },
         });
         applyUiLanguage(state.config?.uiLanguage || DEFAULT_UI_LANG);
         restartPollTimer();
@@ -2880,6 +3523,10 @@ async function init() {
   void i18nModule?.loadStatus(false);
   void governanceModule?.loadOverview(false);
   restartPollTimer();
+  syncKvCountdownUi();
+  setInterval(() => {
+    if (document.visibilityState === 'visible') syncKvCountdownUi();
+  }, 1000);
   requestAnimationFrame(() => {
     positionIndicator('mainSegNav', 'mainSegIndicator');
     positionIndicator('callsModeNav', 'callsModeIndicator');

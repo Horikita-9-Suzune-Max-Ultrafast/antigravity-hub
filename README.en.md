@@ -47,7 +47,10 @@
 - Auto-redacts secrets (Bearer tokens, API keys, JWTs, PEM private keys) before writing to disk; injects a `< 500 tokens` brief at `SessionStart` with `HEAD` staleness indicators.
 - **Fixed-Height Dual-View Handoff Capsule**: Toggle between human-readable cards (with live per-decision checkboxes updating the token budget) and the compact `[CTX-CAPSULE]` agent payload, with optional `updateModelContext` attachment in Aux Pane.
 
-### 5. Native Frameless Floating Host, Responsive Bilingual Shell & Settings (Upgraded in v1.5.2)
+### 5. Native Frameless Floating Host, Mini Bar Studio, Gemini KV Timer & Settings (Upgraded in v1.5.3)
+- **Auto-launch on Antigravity Startup**: Automatically opens the frameless floating window once per Antigravity lifecycle (deduplicated by host `language_server.exe` PID, auto-closes on exit, toggleable in Settings).
+- **Mini Floating Bar Presets & Follow-Cursor Reordering**: Eliminates narrow-width glyph clipping with whole-chip visibility, adds 5 length presets (`Mini 1` to `Full 5`) while preserving custom drag-resizing, and introduces a live Settings preview bar with follow-cursor FLIP drag-and-drop and click-to-swap ordering.
+- **Gemini KV Cache Freshness Countdown & Three-State Brand Icon**: Zero-token local 1-second countdown after each Gemini turn (15m default reference window, customizable) that smoothly tints the Hub icon **Blue → Amber → Red**, paired with a concise `?` explainer and a unified Git status pill (`No Git` for non-repo workspaces).
 - **Responsive Modular Console Shell & Instant Bilingual Switch**: Displays a `56px` left icon rail on wide viewports (`> 680px`) and collapses into a compact top module bar in narrow side panes (`<= 680px`), with zero horizontal overflow. Ships a zero-dep `zh-CN` / `en` UI dictionary (`src/ui/i18n-ui.mjs`) switchable live in Settings without reload, fully localizing Monitor Mounted Assets and all controls.
 - **Monitor Safe Restart & 4-Section Settings**: Adds a confirmation-guarded **Restart Antigravity** button in both the Monitor toolbar and Settings Maintenance (detached breakaway restart that never touches `app.asar`). Settings are cleanly organized into General & Language, Monitor & Alerts, Floating Window, and Maintenance & Actions (Doctor, Rebuild Index, Export Backup, Restart Antigravity, Reset Defaults).
 - **Native Windows Frameless WebView2 Floating Window** (`global`: `Antigravity Hub`): Launches a native rounded borderless OS window over a `127.0.0.1` ephemeral port with one-time token auth (falling back to Edge/Chrome `--app` on other platforms). Supports Always-on-Top pinning, **quick-collapse mini bar (with Context %, TPS & Model badges + horizontal resize)**, **independent minimize & foreground restore**, high-DPI scaling, 8-edge resize, and **auto-port release on close**.
@@ -101,16 +104,16 @@
 
 ### Option A: Prebuilt Release Bundle (Recommended, No `npm install`)
 
-1. Download `context-cache-v1.5.2-plugin.zip` from [Releases](https://github.com/Horikita-9-Suzune-Max-Ultrafast/antigravity-hub/releases) (plain readable `.mjs` source + pre-bundled single-file UI, zero `node_modules`).
+1. Download `context-cache-v1.5.3-plugin.zip` from [Releases](https://github.com/Horikita-9-Suzune-Max-Ultrafast/antigravity-hub/releases) (plain readable `.mjs` source + pre-bundled single-file UI, zero `node_modules`).
 2. Extract into `~/.gemini/config/plugins/` so `plugin.json` lives at `~/.gemini/config/plugins/context-cache/plugin.json`:
    - **Windows PowerShell**:
      ```powershell
-     Expand-Archive -Path .\context-cache-v1.5.2-plugin.zip -DestinationPath "$env:USERPROFILE\.gemini\config\plugins" -Force
+     Expand-Archive -Path .\context-cache-v1.5.3-plugin.zip -DestinationPath "$env:USERPROFILE\.gemini\config\plugins" -Force
      ```
    - **macOS / Linux**:
      ```bash
      mkdir -p ~/.gemini/config/plugins
-     unzip -o context-cache-v1.5.2-plugin.zip -d ~/.gemini/config/plugins
+     unzip -o context-cache-v1.5.3-plugin.zip -d ~/.gemini/config/plugins
      ```
 3. Antigravity discovers and loads the plugin automatically (no restart required).
 

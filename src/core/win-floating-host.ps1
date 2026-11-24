@@ -217,6 +217,7 @@ namespace ContextCacheHost {
         private readonly int _initPosY;
         private float _dpiScale = 1.0f;
         private int _expandedHeight = 720;
+        private int _expandedWidth = 460;
         private bool _collapsed = false;
         private Timer _interactTimer;
         private int _interactMode = 0; // 0=none, 1=drag, 10..17=resize hitTest
@@ -268,15 +269,17 @@ namespace ContextCacheHost {
                 } catch {}
             }
             _dpiScale = scale;
-            MinimumSize = new Size((int)Math.Round(340 * scale), (int)Math.Round(38 * scale));
+            MinimumSize = new Size((int)Math.Round(220 * scale), (int)Math.Round(38 * scale));
             Width = (int)Math.Round(_logicalW * scale);
             Height = (int)Math.Round(_logicalH * scale);
+            _expandedWidth = Width;
             _expandedHeight = Height;
 
             // Strictly guarantee 100% of the window starts inside the visible working area
             var wa = Screen.PrimaryScreen != null ? Screen.PrimaryScreen.WorkingArea : new Rectangle(0, 0, 1440, 900);
             if (Width > wa.Width - 32) Width = Math.Max(360, wa.Width - 32);
             if (Height > wa.Height - 48) Height = Math.Max(460, wa.Height - 48);
+            _expandedWidth = Width;
             _expandedHeight = Height;
 
             int minX = wa.Left + 24;
@@ -327,7 +330,7 @@ namespace ContextCacheHost {
             }
 
             if (_interactMode >= 10 && _interactMode <= 17) {
-                int minW = MinimumSize.Width;
+                int minW = _collapsed ? (int)Math.Round(220 * _dpiScale) : (int)Math.Round(340 * _dpiScale);
                 int left = _startBounds.Left;
                 int top = _startBounds.Top;
                 int right = _startBounds.Right;
@@ -364,6 +367,7 @@ namespace ContextCacheHost {
 
                 int fullW = Math.Max(minW, right - left);
                 int fullH = Math.Max(minH, bottom - top);
+                _expandedWidth = fullW;
                 _expandedHeight = fullH;
                 SetWindowPos(Handle, IntPtr.Zero, left, top, fullW, fullH, 0x0004 | 0x0010); // SWP_NOZORDER | SWP_NOACTIVATE
                 SyncBounds();
@@ -553,6 +557,7 @@ namespace ContextCacheHost {
             base.OnResize(e);
             int collapsedPx = (int)Math.Round(44 * _dpiScale);
             if (!_collapsed && WindowState == FormWindowState.Normal && Height > collapsedPx) {
+                _expandedWidth = Width;
                 _expandedHeight = Height;
             }
             SyncBounds();
@@ -712,24 +717,46 @@ namespace ContextCacheHost {
             } else if (msg == "collapse:1" || msg.StartsWith("collapse:1:")) {
                 int defaultBarH = (int)Math.Round(40 * _dpiScale);
                 int barH = defaultBarH;
+                int targetW = -1;
                 if (msg.Length > 11) {
+                    string[] parts = msg.Substring(11).Split(':');
                     int customH;
-                    if (int.TryParse(msg.Substring(11), out customH)) {
+                    if (parts.Length >= 1 && int.TryParse(parts[0], out customH)) {
                         barH = Math.Max(defaultBarH, Math.Min((int)Math.Round(120 * _dpiScale), customH));
+                    }
+                    int customW;
+                    if (parts.Length >= 2 && int.TryParse(parts[1], out customW) && customW > 0) {
+                        int minBarW = (int)Math.Round(220 * _dpiScale);
+                        int maxBarW = Math.Max(minBarW, Screen.FromControl(this).WorkingArea.Width - 40);
+                        targetW = Math.Max(minBarW, Math.Min(maxBarW, customW));
                     }
                 }
                 if (!_collapsed) {
-                    if (Height > barH + 20) _expandedHeight = Height;
+                    if (Height > barH + 20) {
+                        _expandedWidth = Width;
+                        _expandedHeight = Height;
+                    }
                     _collapsed = true;
                     Height = barH;
+                    if (targetW > 0) Width = targetW;
                     SyncBounds();
-                } else if (Height != barH) {
-                    Height = barH;
+                } else {
+                    if (Height != barH) Height = barH;
+                    if (targetW > 0 && Width != targetW) Width = targetW;
+                    SyncBounds();
+                }
+            } else if (msg.StartsWith("setwidth:")) {
+                int customW;
+                if (_collapsed && int.TryParse(msg.Substring(9), out customW) && customW > 0) {
+                    int minBarW = (int)Math.Round(220 * _dpiScale);
+                    int maxBarW = Math.Max(minBarW, Screen.FromControl(this).WorkingArea.Width - 40);
+                    Width = Math.Max(minBarW, Math.Min(maxBarW, customW));
                     SyncBounds();
                 }
             } else if (msg == "collapse:0") {
                 if (_collapsed) {
                     _collapsed = false;
+                    Width = Math.Max((int)Math.Round(340 * _dpiScale), _expandedWidth);
                     Height = Math.Max((int)Math.Round(460 * _dpiScale), _expandedHeight);
                     SyncBounds();
                 }
@@ -738,6 +765,7 @@ namespace ContextCacheHost {
             } else if (msg == "max") {
                 if (_collapsed) {
                     _collapsed = false;
+                    Width = Math.Max((int)Math.Round(340 * _dpiScale), _expandedWidth);
                     Height = Math.Max((int)Math.Round(460 * _dpiScale), _expandedHeight);
                 } else {
                     WindowState = WindowState == FormWindowState.Maximized ? FormWindowState.Normal : FormWindowState.Maximized;
