@@ -25,6 +25,7 @@ import { handleI18nAction } from '../core/i18n/index.mjs';
 import { handleGovernanceAction } from '../core/governance/index.mjs';
 import { handleAppearanceAction } from '../core/appearance/index.mjs';
 import { restartAntigravity } from '../core/client-restart.mjs';
+import { checkForUpdate, applySelfUpdate } from '../core/self-update.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -235,11 +236,12 @@ export const TOOL_DEFINITIONS = [
       type: 'object',
       required: ['action'],
       properties: {
-        action: { type: 'string', enum: ['get', 'update', 'open_popout', 'close_popout', 'set_active_session', 'restart_antigravity'] },
+        action: { type: 'string', enum: ['get', 'update', 'open_popout', 'close_popout', 'set_active_session', 'restart_antigravity', 'check_update', 'apply_update'] },
         patch: { type: 'object' },
         conversationId: { type: 'string' },
         projectDir: { type: 'string' },
         forceNew: { type: 'boolean' },
+        force: { type: 'boolean' },
         theme: { type: 'string', enum: ['light', 'dark'] },
         dryRun: { type: 'boolean' },
         installDir: { type: 'string' },
@@ -845,6 +847,22 @@ export function createMcpDispatcher(options = {}) {
             }
             const res = restartAntigravity(restartOpts);
             return toolOk(res.message, res);
+          }
+          if (args.action === 'check_update') {
+            const res = await checkForUpdate(options);
+            return toolOk(res.ok ? 'checked' : (res.message || 'check_failed'), res);
+          }
+          if (args.action === 'apply_update') {
+            try {
+              await popout.stop();
+            } catch {
+              // best-effort release of floating window before directory swap
+            }
+            const res = await applySelfUpdate({
+              ...options,
+              force: Boolean(args.force),
+            });
+            return toolOk(res.message || res.status || 'done', res);
           }
           return toolErr(`Unsupported config action: ${args.action}`);
         }

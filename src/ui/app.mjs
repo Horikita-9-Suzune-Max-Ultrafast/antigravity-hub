@@ -3265,6 +3265,163 @@ function bindEvents() {
   };
   document.getElementById('restartIdeBtn')?.addEventListener('click', openRestartIdeModal);
   document.getElementById('settingsRestartIdeBtn')?.addEventListener('click', openRestartIdeModal);
+
+  // Settings: Check & Apply Self-Update (SHA-256 verified)
+  let updateCheckBusy = false;
+  let updateApplyBusy = false;
+  let lastUpdateReleaseUrl = 'https://github.com/Horikita-9-Suzune-Max-Ultrafast/antigravity-hub/releases';
+
+  const openExternalUrl = async (url) => {
+    if (!url || !/^https:\/\//i.test(String(url))) return;
+    if (mcpApp && typeof mcpApp.openLink === 'function') {
+      try {
+        await mcpApp.openLink({ url });
+        return;
+      } catch {
+        // fallback to window.open
+      }
+    }
+    window.open(url, '_blank', 'noopener,noreferrer');
+  };
+
+  document.getElementById('settingsOpenReleaseBtn')?.addEventListener('click', () => {
+    void openExternalUrl(lastUpdateReleaseUrl);
+  });
+
+  document.getElementById('settingsCheckUpdateBtn')?.addEventListener('click', () => {
+    if (updateCheckBusy || updateApplyBusy) return;
+    updateCheckBusy = true;
+    const btn = document.getElementById('settingsCheckUpdateBtn');
+    const statusEl = document.getElementById('settingsUpdateStatus');
+    const boxEl = document.getElementById('settingsUpdateBox');
+    const metaEl = document.getElementById('settingsUpdateMeta');
+    const badgeEl = document.getElementById('settingsUpdateBadge');
+    const notesEl = document.getElementById('settingsUpdateNotes');
+    const applyBtn = document.getElementById('settingsApplyUpdateBtn');
+
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = tr('settings.update.checking');
+    }
+
+    void (async () => {
+      try {
+        const res = await callAppTool('app_config_manage', { action: 'check_update' });
+        if (res?.releaseUrl) lastUpdateReleaseUrl = res.releaseUrl;
+        if (!res || res.ok === false) {
+          const msg = res?.message || res?.error || 'network_error';
+          if (statusEl) {
+            statusEl.className = 'mono-num text-warning';
+            statusEl.textContent = tr('settings.update.checkFailed', { error: msg });
+          }
+          if (boxEl) boxEl.classList.remove('hidden');
+          if (metaEl) metaEl.textContent = msg;
+          if (badgeEl) badgeEl.textContent = tr('settings.update.manualOnly');
+          if (notesEl) notesEl.classList.add('hidden');
+          if (applyBtn) applyBtn.classList.add('hidden');
+          showToast(tr('settings.update.checkFailed', { error: msg }), 'error');
+          return;
+        }
+
+        if (!res.hasUpdate) {
+          if (statusEl) {
+            statusEl.className = 'mono-num text-success';
+            statusEl.textContent = tr('settings.update.upToDate', { version: res.currentVersion || APP_VERSION });
+          }
+          if (boxEl) boxEl.classList.add('hidden');
+          showToast(tr('settings.update.upToDate', { version: res.currentVersion || APP_VERSION }), 'success');
+          return;
+        }
+
+        if (statusEl) {
+          statusEl.className = 'mono-num text-primary font-medium';
+          statusEl.textContent = tr('settings.update.available', { version: res.latestVersion });
+        }
+        if (boxEl) boxEl.classList.remove('hidden');
+        if (metaEl) {
+          metaEl.textContent = tr('settings.update.meta', {
+            current: res.currentVersion || APP_VERSION,
+            latest: res.latestVersion,
+          });
+        }
+        if (badgeEl) {
+          badgeEl.textContent = res.canAutoUpdate ? tr('settings.update.shaReady') : tr('settings.update.manualOnly');
+        }
+        if (notesEl) {
+          if (res.notes) {
+            notesEl.textContent = res.notes;
+            notesEl.classList.remove('hidden');
+          } else {
+            notesEl.classList.add('hidden');
+          }
+        }
+        if (applyBtn) {
+          applyBtn.classList.toggle('hidden', !res.canAutoUpdate);
+        }
+      } catch (err) {
+        const msg = err?.message || String(err);
+        if (statusEl) {
+          statusEl.className = 'mono-num text-warning';
+          statusEl.textContent = tr('settings.update.checkFailed', { error: msg });
+        }
+        showToast(tr('settings.update.checkFailed', { error: msg }), 'error');
+      } finally {
+        updateCheckBusy = false;
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = tr('settings.update.checkBtn');
+        }
+      }
+    })();
+  });
+
+  document.getElementById('settingsApplyUpdateBtn')?.addEventListener('click', () => {
+    if (updateApplyBusy) return;
+    updateApplyBusy = true;
+    const applyBtn = document.getElementById('settingsApplyUpdateBtn');
+    const statusEl = document.getElementById('settingsUpdateStatus');
+
+    if (applyBtn) {
+      applyBtn.disabled = true;
+      applyBtn.textContent = tr('settings.update.applying');
+    }
+
+    void (async () => {
+      try {
+        const res = await callAppTool('app_config_manage', { action: 'apply_update' });
+        if (res?.releaseUrl) lastUpdateReleaseUrl = res.releaseUrl;
+        if (!res || res.ok === false) {
+          const msg = res?.message || res?.error || 'update_failed';
+          if (statusEl) {
+            statusEl.className = 'mono-num text-error';
+            statusEl.textContent = tr('settings.update.applyFailed', { error: msg });
+          }
+          showToast(tr('settings.update.applyFailed', { error: msg }), 'error');
+          return;
+        }
+
+        const updatedVer = res.updatedVersion || res.latestVersion || APP_VERSION;
+        if (statusEl) {
+          statusEl.className = 'mono-num text-success font-medium';
+          statusEl.textContent = tr('settings.update.updated', { version: updatedVer });
+        }
+        if (applyBtn) applyBtn.classList.add('hidden');
+        showToast(tr('settings.update.updated', { version: updatedVer }), 'success');
+        if (res.requiresRestart) {
+          openRestartIdeModal();
+        }
+      } catch (err) {
+        const msg = err?.message || String(err);
+        showToast(tr('settings.update.applyFailed', { error: msg }), 'error');
+      } finally {
+        updateApplyBusy = false;
+        if (applyBtn) {
+          applyBtn.disabled = false;
+          applyBtn.textContent = tr('settings.update.applyBtn');
+        }
+      }
+    })();
+  });
   document.getElementById('restartIdeConfirmBtn')?.addEventListener('click', () => {
     if (restartIdeBusy) return;
     restartIdeBusy = true;

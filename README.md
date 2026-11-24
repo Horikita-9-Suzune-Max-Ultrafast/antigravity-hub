@@ -93,7 +93,7 @@ cd antigravity-hub
 # 2. 安装开发期 UI 打包依赖（仅 devDependencies，绝不进入部署产物）
 npm install
 
-# 3. 运行全套 14 个自动化测试文件（36 项用例，完全隔离临时目录，零真实数据污染）
+# 3. 运行全套 15 个自动化测试文件（41 项用例，完全隔离临时目录，零真实数据污染）
 npm test
 
 # 4. 构建单文件 MCP App UI 并幂等部署至 ~/.gemini/config/plugins/context-cache
@@ -137,7 +137,7 @@ npm run pack:release
   - 内置「极简 1 / 紧凑 2 / 标准 3 / 加宽 4 / 完整 5」5 级快捷长度并保留自由拖宽；设置页提供等比预览条，支持跟手拖拽实时让位（FLIP 动画）与点击互换排序。
 - **Gemini KV Cache 保鲜倒计时与三态图标**：对话结束后本地 1 秒倒计时（默认 15 分钟参考窗口可自定义，0 模型 Token），悬浮窗与侧栏 Hub 图标随空闲风险平滑切换 **蓝 → 琥珀黄 → 警示红**，配套 `?` 原理提示。
 - **Windows 原生无框 WebView2 悬浮窗**：基于 `127.0.0.1` 一次性令牌鉴权拉起原生圆角无框窗口（非 Windows 自动降级至 Edge/Chrome `--app`），支持 Always-on-Top 置顶、收缩迷你条、独立最小化与一键还原、8 方向缩放与高 DPI 位置记忆，关闭即释放端口。
-- **顶栏一键安全重启与 4 分区设置**：监控顶栏与设置维护区均提供确认保护的「重启 Antigravity」（脱离进程重启，绝不触碰 `app.asar`）；设置页清晰划分为常规与语言、监控与告警、独立悬浮窗、维护与快捷操作。
+- **顶栏一键安全重启、检查更新与 4 分区设置**：监控顶栏与设置维护区均提供确认保护的「重启 Antigravity」（脱离进程重启，绝不触碰 `app.asar`）；设置维护区支持手动**检查更新与 SHA-256 强校验一键更新**（仅限官方 GitHub Release 白名单、防 Zip-Slip、原子目录切换与失败自动回滚，绝不触碰用户数据）；设置页清晰划分为常规与语言、监控与告警、独立悬浮窗、维护与快捷操作。
 
 ### 6. 生态治理与场景预设（Ecosystem & Harness Governance）
 - **Effective Harness 全景生效栈与离线三合一体检**：按 `P1 工作区 > P2 全局 > P3 插件 > P4 内置` 扫描全部 Rules、Skills、Hooks 与 MCP Server，纯离线检测 MCP 断路径/过重 Schema、Skill 覆盖冲突/断链（过滤代码块与占位符防误报）以及规则/配置中的明文密钥风险（自动脱敏）。
@@ -225,7 +225,8 @@ node --no-warnings bin/ctx.mjs i18n restore
 ## 升级、卸载与一键还原
 
 ### 平滑升级到最新版
-- **Release 包用户**：直接下载新版 `context-cache-v1.5.4-plugin.zip` 并覆盖解压到 `~/.gemini/config/plugins` 即可。你的记忆库、壁纸库、汉化词典、治理偏好与配置快照全部存放在 `%USERPROFILE%\.context-cache`，**升级零数据丢失**。
+- **插件内一键更新（v1.5.4+ 推荐）**：进入 **「插件设置 → 维护与操作」** 点击 **「检查更新」**，发现新版后点击 **「一键更新（SHA-256 校验）」** 即可完成强校验下载、原子目录切换与安全重启引导（如遇网络超时或文件占用自动回滚并可跳转 Release 手动下载）。
+- **Release 包手动覆盖**：也可直接下载新版 `context-cache-v1.5.4-plugin.zip` 并覆盖解压到 `~/.gemini/config/plugins`。你的记忆库、壁纸库、汉化词典、治理偏好与配置快照全部存放在 `%USERPROFILE%\.context-cache`，**升级零数据丢失**。
 - **源码用户**：在仓库目录执行 `git pull && npm run deploy`。
 
 ### 完整卸载与无损还原
@@ -292,6 +293,7 @@ context-cache/
 │   │   ├── popout-server.mjs            # 127.0.0.1 令牌鉴权悬浮小窗服务、握手与自动降级
 │   │   ├── win-floating-host.ps1        # Windows 原生无框 WebView2 置顶/迷你条/最小化悬浮窗宿主
 │   │   ├── client-restart.mjs           # 脱离进程安全重启 Antigravity（不触碰 app.asar）
+│   │   ├── self-update.mjs              # GitHub Release 检查更新、SHA-256 强校验与原子目录切换
 │   │   ├── doctor.mjs                   # 体检、漂移报告、备份导出与自愈
 │   │   ├── governance/                  # 生态治理（全景扫描/多信号分类器/场景预设/离线体检修复闭环/护栏快照）
 │   │   ├── appearance/                  # 本地壁纸引擎（外置库/只读扫描/轮播池/旧配置静默回退/热加载）
@@ -310,7 +312,7 @@ context-cache/
 │       └── modules/                     # appearance-module / governance-module / i18n-module
 ├── plugin/                              # Antigravity 插件清单、Hooks、Rules、Skills 与图标
 ├── scripts/                             # deploy.mjs、pack-release.mjs 与 doctor.mjs
-├── tests/                               # 14 个自动化测试文件（36 项端到端 / 单元 / 韧性用例）
+├── tests/                               # 15 个自动化测试文件（41 项端到端 / 单元 / 韧性用例）
 ├── LICENSE                              # MIT License
 ├── README.md                            # 简体中文文档
 ├── README.en.md                         # English documentation

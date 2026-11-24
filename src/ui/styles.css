@@ -3484,3 +3484,18 @@ body.window-collapsed #titleBarModelBadge {
   background: var(--border);
   margin: 0 2px;
 }
+
+.settings-update-notes {
+  margin: 0;
+  padding: 10px 12px;
+  max-height: 148px;
+  overflow-y: auto;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--card);
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}

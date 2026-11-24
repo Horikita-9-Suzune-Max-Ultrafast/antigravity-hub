@@ -1407,7 +1407,23 @@
               <span class="text-muted" data-i18n="settings.doctor.deploy">部署运行包</span>
               <span id="docDeployVal" class="mono-num">v1.5.4 / 0 node_modules</span>
             </div>
+            <div class="px-5 py-3 flex items-center justify-between gap-2">
+              <span class="text-muted" data-i18n="settings.update.label">插件版本更新</span>
+              <span id="settingsUpdateStatus" class="mono-num text-muted" data-i18n="settings.update.idle">未检查</span>
+            </div>
+            <div id="settingsUpdateBox" class="px-5 py-3 space-y-2.5 hidden" style="background: var(--background);">
+              <div class="flex items-center justify-between gap-2">
+                <span id="settingsUpdateMeta" class="font-medium text-foreground"></span>
+                <span id="settingsUpdateBadge" class="agy-pill"></span>
+              </div>
+              <pre id="settingsUpdateNotes" class="settings-update-notes hidden"></pre>
+              <div class="flex flex-wrap items-center gap-2">
+                <button id="settingsApplyUpdateBtn" type="button" class="agy-btn agy-btn-primary agy-btn-sm hidden" data-i18n="settings.update.applyBtn">一键更新（SHA-256 校验）</button>
+                <button id="settingsOpenReleaseBtn" type="button" class="agy-btn agy-btn-secondary agy-btn-sm" data-i18n="settings.update.openReleaseBtn">前往 Release</button>
+              </div>
+            </div>
             <div class="px-5 py-3.5 settings-action-row" style="background: var(--background);">
+              <button id="settingsCheckUpdateBtn" type="button" class="agy-btn agy-btn-secondary" data-i18n="settings.update.checkBtn">检查更新</button>
               <button id="docRunBtn" type="button" class="agy-btn agy-btn-secondary" data-i18n="settings.doctor.runBtn">立即体检</button>
               <button id="docRebuildBtn" type="button" class="agy-btn agy-btn-secondary" data-i18n="settings.doctor.rebuildBtn">重建索引</button>
               <button id="docExportBtn" type="button" class="agy-btn agy-btn-secondary" data-i18n="settings.doctor.exportBtn">导出备份</button>

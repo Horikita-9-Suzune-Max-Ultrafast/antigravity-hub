@@ -91,7 +91,7 @@ cd antigravity-hub
 # 2. Install dev-only UI build tools (never copied into deployed bundle)
 npm install
 
-# 3. Run full 14-file automated test suite (36 test cases, isolated temp dirs)
+# 3. Run full 15-file automated test suite (41 test cases, isolated temp dirs)
 npm test
 
 # 4. Build single-file MCP App UI and deploy to ~/.gemini/config/plugins/context-cache
@@ -135,7 +135,7 @@ npm run pack:release
   - 5 quick length presets (`Mini 1` to `Full 5`) plus free horizontal drag-resizing; Settings includes a live preview bar with follow-cursor FLIP drag-and-drop and click-to-swap ordering.
 - **Gemini KV Cache Freshness Countdown & Three-State Icon**: Zero-token local 1-second countdown after each turn (15m default reference window, customizable) tinting the Hub icon **Blue → Amber → Red**.
 - **Native Windows Frameless WebView2 Floating Window**: Launches over an ephemeral `127.0.0.1` port with one-time token auth (falling back to Edge/Chrome `--app` on other platforms), supporting Always-on-Top, quick-collapse mini bar, independent minimize/restore, high-DPI scaling, 8-edge resize, and port release on close.
-- **Monitor Safe Restart & 4-Section Settings**: Confirmation-guarded detached **Restart Antigravity** (never touches `app.asar`) plus Settings grouped into General & Language, Monitor & Alerts, Floating Window, and Maintenance & Actions.
+- **Monitor Safe Restart, Self-Update & 4-Section Settings**: Confirmation-guarded detached **Restart Antigravity** (never touches `app.asar`), manual **Check Updates & SHA-256 Verified One-Click Update** (strict official GitHub Release allowlist, Zip-Slip protection, atomic directory swap with automatic rollback, zero user data touched), plus Settings grouped into General & Language, Monitor & Alerts, Floating Window, and Maintenance & Actions.
 
 ### 6. Ecosystem & Harness Governance
 - **Effective Harness Stack & Offline 3-in-1 Linter**: Scans Rules, Skills, Hooks, and MCP servers across `P1 Workspace > P2 Global > P3 Plugin > P4 Built-in`, detecting broken MCP targets, shadowed/broken skills (filtering code blocks and placeholder links), and plaintext secrets (auto-redacted) offline.
@@ -223,7 +223,8 @@ node --no-warnings bin/ctx.mjs i18n restore
 ## Upgrading, Uninstalling & Rollback
 
 ### Smooth Upgrade
-- **Prebuilt Bundle Users**: Download the latest `context-cache-v1.5.4-plugin.zip` and extract over `~/.gemini/config/plugins`. All vault memories, wallpapers, custom dictionaries, governance preferences, and snapshots live in `%USERPROFILE%\.context-cache` with **zero data loss**.
+- **In-App One-Click Update (v1.5.4+ Recommended)**: Open **Settings → Maintenance & Actions**, click **Check Updates**, then click **Update Now (SHA-256)** to verify checksums, atomically swap the plugin directory (auto-rollback on lock/error), and safely restart Antigravity.
+- **Prebuilt Bundle Manual Extract**: Download the latest `context-cache-v1.5.4-plugin.zip` and extract over `~/.gemini/config/plugins`. All vault memories, wallpapers, custom dictionaries, governance preferences, and snapshots live in `%USERPROFILE%\.context-cache` with **zero data loss**.
 - **Source Users**: Run `git pull && npm run deploy`.
 
 ### Clean Uninstall & Lossless Rollback
@@ -284,6 +285,7 @@ context-cache/
 │   │   ├── popout-server.mjs            # 127.0.0.1 token-authenticated floating host server
 │   │   ├── win-floating-host.ps1        # Windows native frameless WebView2 floating window host
 │   │   ├── client-restart.mjs           # Detached safe Antigravity restart (never touches app.asar)
+│   │   ├── self-update.mjs              # GitHub Release update check, SHA-256 verification & atomic swap
 │   │   ├── doctor.mjs                   # Diagnostics, schema-drift report, backup export & self-healing
 │   │   ├── governance/                  # Ecosystem governance (scanner, classifier, profiles, linter, snapshots)
 │   │   ├── appearance/                  # Local wallpaper engine (library, read-only scan, rotation, fallback)
@@ -299,7 +301,7 @@ context-cache/
 │       └── modules/                     # appearance-module / governance-module / i18n-module
 ├── plugin/                              # Antigravity plugin manifest, hooks, rules, skills & logo
 ├── scripts/                             # deploy.mjs, pack-release.mjs & doctor.mjs
-├── tests/                               # 14 automated test suites (36 E2E / unit / resilience test cases)
+├── tests/                               # 15 automated test suites (41 E2E / unit / resilience test cases)
 ├── LICENSE                              # MIT License
 ├── README.md                            # Simplified Chinese documentation
 ├── README.en.md                         # English documentation
