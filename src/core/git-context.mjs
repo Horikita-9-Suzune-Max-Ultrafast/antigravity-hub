@@ -93,3 +93,87 @@ export function getCommitsAhead(repoRoot, recordedHead) {
   const n = Number(aheadStr);
   return Number.isFinite(n) ? n : -1;
 }
+
+function normalizePorcelainStatus(xy) {
+  const code = String(xy || '');
+  if (code === '??') return '?';
+  if (code.includes('A')) return 'A';
+  if (code.includes('D')) return 'D';
+  if (code.includes('R')) return 'R';
+  return 'M';
+}
+
+function unquoteGitPath(rawPath) {
+  let p = String(rawPath || '').trim();
+  if (p.includes(' -> ')) {
+    p = p.split(' -> ').pop().trim();
+  }
+  if (p.startsWith('"') && p.endsWith('"')) {
+    p = p.slice(1, -1).replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+  }
+  return p.replace(/\\/g, '/');
+}
+
+/**
+ * Strictly read-only Git working tree summary:
+ * - uncommitted changed files (`M`/`A`/`?`/`D`/`R`)
+ * - recent N commit subjects (default 2)
+ */
+export function getGitWorkingSummary(targetDir, { commitLimit = 2, fileLimit = 30 } = {}) {
+  const resolved = targetDir ? path.resolve(targetDir) : process.cwd();
+  const repoRoot = runGitReadOnly(['rev-parse', '--show-toplevel'], resolved);
+  if (!repoRoot) {
+    return { isGitRepo: false, repoRoot: resolved, changedFiles: [], recentCommits: [] };
+  }
+
+  const changedFiles = [];
+  try {
+    const rawStatus = execFileSync('git', ['status', '--porcelain'], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      timeout: 2500,
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    const seen = new Set();
+    for (const line of String(rawStatus || '').split(/\r?\n/)) {
+      if (!line || line.length < 4) continue;
+      const xy = line.slice(0, 2);
+      const rel = unquoteGitPath(line.slice(3));
+      if (!rel || seen.has(rel)) continue;
+      seen.add(rel);
+      changedFiles.push({
+        path: rel,
+        status: normalizePorcelainStatus(xy),
+      });
+      if (changedFiles.length >= fileLimit) break;
+    }
+  } catch {
+    // fail open
+  }
+
+  const recentCommits = [];
+  const limit = Math.max(0, Math.min(10, Number(commitLimit) || 2));
+  if (limit > 0) {
+    const rawLog = runGitReadOnly(['log', `-n`, String(limit), '--pretty=format:%h%x09%s'], repoRoot);
+    if (rawLog) {
+      for (const line of rawLog.split(/\r?\n/)) {
+        if (!line.trim()) continue;
+        const tabIdx = line.indexOf('\t');
+        if (tabIdx === -1) continue;
+        const sha = line.slice(0, tabIdx).trim();
+        const subject = line.slice(tabIdx + 1).trim();
+        if (sha && subject) {
+          recentCommits.push({ sha, subject });
+        }
+      }
+    }
+  }
+
+  return {
+    isGitRepo: true,
+    repoRoot: path.resolve(repoRoot),
+    changedFiles,
+    recentCommits,
+  };
+}

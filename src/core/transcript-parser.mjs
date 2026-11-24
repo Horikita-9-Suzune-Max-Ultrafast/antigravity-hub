@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { getCandidateAppDataDirs, findTranscriptPath } from './paths.mjs';
+import { getCandidateAppDataDirs, findTranscriptPath, formatDisplayPath } from './paths.mjs';
 
 const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
 
@@ -380,4 +380,174 @@ export function listConversations(options = {}) {
   }
 
   return results;
+}
+
+const FILE_MUTATION_TOOLS = new Set([
+  'write_file',
+  'edit_file',
+  'replace_file_content',
+  'multi_replace_file_content',
+  'write_to_file',
+  'create_file',
+]);
+
+function safeRealpath(p) {
+  const abs = path.resolve(p);
+  try {
+    if (fs.existsSync(abs)) {
+      return typeof fs.realpathSync.native === 'function' ? fs.realpathSync.native(abs) : fs.realpathSync(abs);
+    }
+  } catch {
+    // ignore
+  }
+  return abs;
+}
+
+function normalizeWorkspaceRelPath(rawPath, projectDir) {
+  const cleaned = String(rawPath || '').trim().replace(/^"|"$/g, '');
+  if (!cleaned) return '';
+  if (projectDir) {
+    try {
+      const absTarget = safeRealpath(cleaned);
+      const absRoot = safeRealpath(projectDir);
+      let rel = path.relative(absRoot, absTarget);
+      if (rel && !rel.startsWith('..') && !path.isAbsolute(rel)) {
+        return rel.replace(/\\/g, '/');
+      }
+      // Fallback for non-existent target file whose parent dir exists (e.g., deleted/virtual file on Windows 8.3 path)
+      const parentReal = safeRealpath(path.dirname(cleaned));
+      rel = path.relative(absRoot, path.join(parentReal, path.basename(cleaned)));
+      if (rel && !rel.startsWith('..') && !path.isAbsolute(rel)) {
+        return rel.replace(/\\/g, '/');
+      }
+    } catch {
+      // fall through
+    }
+  }
+  return cleaned.replace(/\\/g, '/');
+}
+
+function isArtifactPath(rawPath, brainDir) {
+  const norm = String(rawPath || '').replace(/\\/g, '/').toLowerCase();
+  if (!norm) return false;
+  if (norm.includes('/.system_generated/')) return false;
+  if (brainDir) {
+    const normBrain = path.resolve(brainDir).replace(/\\/g, '/').toLowerCase();
+    if (norm === normBrain || norm.startsWith(`${normBrain}/`)) {
+      return true;
+    }
+  }
+  return /\/brain\/[0-9a-f-]{8,}\/[^/]+\.md$/i.test(norm);
+}
+
+function resolveBrainDirFromTranscript(transcriptPath) {
+  if (!transcriptPath) return '';
+  const abs = path.resolve(transcriptPath);
+  const parent = path.dirname(abs);
+  if (path.basename(parent).toLowerCase() === 'logs' && path.basename(path.dirname(parent)).toLowerCase() === '.system_generated') {
+    return path.dirname(path.dirname(parent));
+  }
+  if (path.basename(path.dirname(parent)).toLowerCase() === 'brain') {
+    return parent;
+  }
+  return '';
+}
+
+/**
+ * Extract 0-token handoff context from a conversation's transcript.jsonl:
+ * - recent user requests summary
+ * - edited / created project files
+ * - produced Artifact paths
+ */
+export function extractTranscriptHandoffContext(filePath, { projectDir = '', maxRequests = 3, maxFiles = 30, maxArtifacts = 16 } = {}) {
+  const empty = {
+    latestUserRequest: '',
+    recentUserRequests: [],
+    editedFiles: [],
+    artifacts: [],
+  };
+  if (!filePath || !fs.existsSync(filePath)) return empty;
+
+  const brainDir = resolveBrainDirFromTranscript(filePath);
+  let steps = [];
+  try {
+    steps = parseTranscriptFull(filePath);
+  } catch {
+    return empty;
+  }
+
+  const userRequests = [];
+  const editedSet = new Set();
+  const editedFiles = [];
+  const artifactMap = new Map();
+
+  const addArtifact = (absPath) => {
+    const cleaned = String(absPath || '').trim().replace(/^"|"$/g, '');
+    if (!cleaned) return;
+    const resolved = path.resolve(cleaned);
+    const key = resolved.toLowerCase();
+    if (artifactMap.has(key) || artifactMap.size >= maxArtifacts) return;
+    artifactMap.set(key, {
+      path: resolved,
+      displayPath: formatDisplayPath(resolved),
+      name: path.basename(resolved),
+    });
+  };
+
+  for (const s of steps) {
+    if (s.type === 'USER_INPUT' && s.content) {
+      let cleaned = String(s.content)
+        .replace(/<SYSTEM_MESSAGE>[\s\S]*?<\/SYSTEM_MESSAGE>/gi, ' ')
+        .replace(/<\/?USER_REQUEST>/gi, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+      if (cleaned) {
+        if (cleaned.length > 180) cleaned = cleaned.slice(0, 180) + '…';
+        userRequests.push(cleaned);
+      }
+    }
+    if (s.type === 'PLANNER_RESPONSE' && Array.isArray(s.toolCalls)) {
+      for (const tc of s.toolCalls) {
+        const toolName = String(tc?.name || tc?.tool || '').toLowerCase().replace(/^default_api:/, '');
+        if (!FILE_MUTATION_TOOLS.has(toolName)) continue;
+        const args = tc?.args && typeof tc.args === 'object' ? tc.args : {};
+        const targetPath = args.Path || args.path || args.TargetFile || args.filePath || args.file_path;
+        if (!targetPath) continue;
+        const hasArtifactMeta = Boolean(args.ArtifactMetadata || args.artifactMetadata);
+        if (hasArtifactMeta || isArtifactPath(targetPath, brainDir)) {
+          addArtifact(targetPath);
+        } else {
+          const rel = normalizeWorkspaceRelPath(targetPath, projectDir);
+          const key = rel.toLowerCase();
+          if (rel && !editedSet.has(key) && editedFiles.length < maxFiles) {
+            editedSet.add(key);
+            editedFiles.push(rel);
+          }
+        }
+      }
+    }
+  }
+
+  // Also discover top-level markdown artifacts inside brain/<convId>/ (e.g. implementation_plan.md, walkthrough.md)
+  if (brainDir && fs.existsSync(brainDir)) {
+    try {
+      const entries = fs.readdirSync(brainDir, { withFileTypes: true });
+      for (const e of entries) {
+        if (!e.isFile() || !e.name.toLowerCase().endsWith('.md')) continue;
+        addArtifact(path.join(brainDir, e.name));
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  const recentUserRequests = userRequests.slice(-maxRequests);
+  const latestUserRequest = recentUserRequests[recentUserRequests.length - 1] || '';
+
+  return {
+    latestUserRequest,
+    recentUserRequests,
+    editedFiles,
+    artifacts: [...artifactMap.values()],
+  };
 }

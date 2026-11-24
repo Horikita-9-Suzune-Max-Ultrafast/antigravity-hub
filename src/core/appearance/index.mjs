@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { getDataPaths } from '../paths.mjs';
 import { getI18nStatus } from '../i18n/index.mjs';
-import { WALLPAPER_PRESETS, getPresetById } from './presets.mjs';
+import { WALLPAPER_PRESETS, isLegacyPresetId } from './presets.mjs';
 import {
   MAX_WALLPAPER_BYTES,
   listLibraryWallpapers,
@@ -28,8 +28,8 @@ export {
 export const DEFAULT_APPEARANCE_STATE = {
   version: 1,
   enabled: false,
-  mode: 'preset', // 'preset' | 'image'
-  presetId: 'aurora-mist',
+  mode: 'image', // 'image' only (legacy 'preset' auto-falls back on load/compile)
+  presetId: '',
   activeWallpaperPath: '',
   separateThemeWallpapers: false,
   darkWallpaperPath: '',
@@ -77,9 +77,61 @@ function writeAtomicJson(filePath, obj) {
   fs.renameSync(tmp, filePath);
 }
 
+function hasLegacyPresetRef(raw) {
+  if (!raw || typeof raw !== 'object') return false;
+  if (raw.mode === 'preset') return true;
+  if (typeof raw.presetId === 'string' && raw.presetId.trim() && raw.mode !== 'image') return true;
+  if (isLegacyPresetId(raw.activeWallpaperPath) || isLegacyPresetId(raw.activeWallpaper)) return true;
+  if (isLegacyPresetId(raw.darkWallpaperPath) || isLegacyPresetId(raw.lightWallpaperPath)) return true;
+  return false;
+}
+
+function applyLegacyPresetFallback(normalized, raw, options = {}) {
+  if (!hasLegacyPresetRef(raw)) return normalized;
+  const next = { ...normalized };
+  let firstLibPath;
+  const getFirstLib = () => {
+    if (firstLibPath === undefined) {
+      const lib = listLibraryWallpapers(options);
+      firstLibPath = lib.length > 0 ? lib[0].filePath : '';
+    }
+    return firstLibPath;
+  };
+
+  const legacyDark = isLegacyPresetId(raw?.darkWallpaperPath);
+  const legacyLight = isLegacyPresetId(raw?.lightWallpaperPath);
+  const legacyActive =
+    raw?.mode === 'preset' ||
+    (typeof raw?.presetId === 'string' && raw.presetId.trim() && raw.mode !== 'image') ||
+    isLegacyPresetId(raw?.activeWallpaperPath) ||
+    isLegacyPresetId(raw?.activeWallpaper);
+
+  if (raw?.separateThemeWallpapers && (legacyDark || legacyLight)) {
+    if (legacyDark && !next.darkWallpaperPath) {
+      next.darkWallpaperPath = getFirstLib();
+    }
+    if (legacyLight && !next.lightWallpaperPath) {
+      next.lightWallpaperPath = getFirstLib();
+    }
+    next.separateThemeWallpapers = Boolean(next.darkWallpaperPath || next.lightWallpaperPath);
+  }
+
+  if (legacyActive || (raw?.separateThemeWallpapers && !next.separateThemeWallpapers)) {
+    if (!next.activeWallpaperPath) {
+      const fallbackPath = getFirstLib();
+      if (fallbackPath) {
+        next.activeWallpaperPath = fallbackPath;
+      } else if (next.enabled && !next.separateThemeWallpapers) {
+        next.enabled = false;
+      }
+    }
+  }
+
+  return next;
+}
+
 export function normalizeAppearanceState(raw = {}) {
   const src = raw && typeof raw === 'object' ? raw : {};
-  const mode = src.mode === 'image' ? 'image' : 'preset';
   const fit = ['cover', 'contain', 'center'].includes(src.fit) ? src.fit : 'cover';
   const rotationMode = ['off', 'startup', 'interval'].includes(src.rotationMode) ? src.rotationMode : 'off';
   const rotationSource = ['all', 'library', 'folder'].includes(src.rotationSource) ? src.rotationSource : 'all';
@@ -92,17 +144,29 @@ export function normalizeAppearanceState(raw = {}) {
         )
       )
     : null;
-  const preset = getPresetById(src.presetId);
+  const rawActive =
+    typeof src.activeWallpaperPath === 'string'
+      ? src.activeWallpaperPath.trim()
+      : typeof src.activeWallpaper === 'string'
+        ? src.activeWallpaper.trim()
+        : '';
+  const activeWallpaperPath = isLegacyPresetId(rawActive) ? '' : rawActive;
+  const rawDark = typeof src.darkWallpaperPath === 'string' ? src.darkWallpaperPath.trim() : '';
+  const darkWallpaperPath = isLegacyPresetId(rawDark) ? '' : rawDark;
+  const rawLight = typeof src.lightWallpaperPath === 'string' ? src.lightWallpaperPath.trim() : '';
+  const lightWallpaperPath = isLegacyPresetId(rawLight) ? '' : rawLight;
+  const separateThemeWallpapers =
+    Boolean(src.separateThemeWallpapers) && Boolean(darkWallpaperPath || lightWallpaperPath);
 
   return {
     version: 1,
     enabled: Boolean(src.enabled),
-    mode,
-    presetId: preset.id,
-    activeWallpaperPath: typeof src.activeWallpaperPath === 'string' ? src.activeWallpaperPath.trim() : '',
-    separateThemeWallpapers: Boolean(src.separateThemeWallpapers),
-    darkWallpaperPath: typeof src.darkWallpaperPath === 'string' ? src.darkWallpaperPath.trim() : '',
-    lightWallpaperPath: typeof src.lightWallpaperPath === 'string' ? src.lightWallpaperPath.trim() : '',
+    mode: 'image',
+    presetId: '',
+    activeWallpaperPath,
+    separateThemeWallpapers,
+    darkWallpaperPath,
+    lightWallpaperPath,
     opacity: Number(clamp(src.opacity, 0.05, 0.85, DEFAULT_APPEARANCE_STATE.opacity).toFixed(2)),
     blurPx: Math.round(clamp(src.blurPx, 0, 24, DEFAULT_APPEARANCE_STATE.blurPx)),
     scrimOpacity: Number(clamp(src.scrimOpacity, 0, 0.85, DEFAULT_APPEARANCE_STATE.scrimOpacity).toFixed(2)),
@@ -125,7 +189,8 @@ export function loadAppearanceState(options = {}) {
     if (!fs.existsSync(appearanceStateFile)) return normalizeAppearanceState(DEFAULT_APPEARANCE_STATE);
     const raw = fs.readFileSync(appearanceStateFile, 'utf8');
     if (!raw.trim()) return normalizeAppearanceState(DEFAULT_APPEARANCE_STATE);
-    return normalizeAppearanceState(JSON.parse(raw));
+    const parsed = JSON.parse(raw);
+    return applyLegacyPresetFallback(normalizeAppearanceState(parsed), parsed, options);
   } catch {
     return normalizeAppearanceState(DEFAULT_APPEARANCE_STATE);
   }
@@ -133,11 +198,12 @@ export function loadAppearanceState(options = {}) {
 
 export function saveAppearanceState(patch = {}, options = {}) {
   const current = loadAppearanceState(options);
-  const next = normalizeAppearanceState({
+  const merged = {
     ...current,
     ...patch,
     updatedAt: new Date().toISOString(),
-  });
+  };
+  const next = applyLegacyPresetFallback(normalizeAppearanceState(merged), merged, options);
   const { appearanceStateFile } = getDataPaths(options);
   writeAtomicJson(appearanceStateFile, next);
   const patchKeys = Object.keys(patch || {});
@@ -190,9 +256,10 @@ function readCachedPoolPaths(runtimeFile) {
  * Compile runtime-appearance.json consumed hot by the preload Fail-Open engine.
  */
 export function compileRuntimeAppearance(options = {}, stateOverride = null, compileOpts = {}) {
-  const state = stateOverride || loadAppearanceState(options);
+  const state = stateOverride
+    ? applyLegacyPresetFallback(normalizeAppearanceState(stateOverride), stateOverride, options)
+    : loadAppearanceState(options);
   const { appearanceRuntimeFile } = getDataPaths(options);
-  const preset = getPresetById(state.presetId);
   let poolPaths = compileOpts.skipPoolScan ? readCachedPoolPaths(appearanceRuntimeFile) : null;
   if (!poolPaths) {
     const { pool } = getWallpaperPool(state, options);
@@ -203,12 +270,8 @@ export function compileRuntimeAppearance(options = {}, stateOverride = null, com
     version: 1,
     compiledAt: new Date().toISOString(),
     enabled: state.enabled,
-    mode: state.mode,
-    preset: {
-      id: preset.id,
-      darkCss: preset.darkCss,
-      lightCss: preset.lightCss,
-    },
+    mode: 'image',
+    preset: null,
     activeWallpaperPath: state.activeWallpaperPath,
     separateThemeWallpapers: state.separateThemeWallpapers,
     darkWallpaperPath: state.darkWallpaperPath,
@@ -341,8 +404,19 @@ export function handleAppearanceAction(args = {}, options = {}) {
       const cur = loadAppearanceState(options);
       const cleanupPatch = {};
       if (cur.activeWallpaperPath && path.basename(cur.activeWallpaperPath) === del.deleted) {
-        cleanupPatch.activeWallpaperPath = '';
-        cleanupPatch.mode = 'preset';
+        const remaining = listLibraryWallpapers(options);
+        if (remaining.length > 0) {
+          cleanupPatch.activeWallpaperPath = remaining[0].filePath;
+        } else {
+          cleanupPatch.activeWallpaperPath = '';
+          const willHaveTheme =
+            cur.separateThemeWallpapers &&
+            ((cur.darkWallpaperPath && path.basename(cur.darkWallpaperPath) !== del.deleted) ||
+              (cur.lightWallpaperPath && path.basename(cur.lightWallpaperPath) !== del.deleted));
+          if (!willHaveTheme && cur.rotationMode === 'off') {
+            cleanupPatch.enabled = false;
+          }
+        }
       }
       if (cur.darkWallpaperPath && path.basename(cur.darkWallpaperPath) === del.deleted) {
         cleanupPatch.darkWallpaperPath = '';

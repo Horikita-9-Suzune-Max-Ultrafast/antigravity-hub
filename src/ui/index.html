@@ -311,7 +311,7 @@
           <div class="agy-group p-3.5 mb-1 space-y-2">
             <div class="flex items-center justify-between text-xs">
               <span class="font-semibold text-warning" data-i18n="monitor.header.alertsTitle">异常预警</span>
-              <button id="alertsCloseBtn" type="button" class="text-muted cursor-pointer bg-transparent border-0 text-xs" data-i18n="monitor.header.alertsCollapse">收起</button>
+              <button id="alertsCloseBtn" type="button" class="agy-btn agy-btn-secondary agy-btn-sm text-xs" data-i18n="monitor.header.alertsCollapse">收起</button>
             </div>
             <div id="alertsList" class="divide-y"></div>
           </div>
@@ -407,11 +407,11 @@
               <span id="ctxAttribution" class="text-muted" data-i18n="monitor.ctx.attributionLoading">正在加载会话数据...</span>
             </div>
           </div>
-          <button id="jumpCallsBtn" type="button" class="agy-link-btn shrink-0" data-i18n="monitor.ctx.viewCalls">查看调用明细 →</button>
+          <button id="jumpCallsBtn" type="button" class="agy-btn agy-btn-secondary agy-btn-sm text-xs shrink-0" data-i18n="monitor.ctx.viewCalls">查看调用明细 →</button>
         </div>
 
         <div class="split-5">
-          <div class="agy-group p-5 space-y-3">
+          <div id="ctxBreakdownCard" class="agy-group p-5 space-y-3">
             <div class="flex items-center justify-between pb-2 border-b">
               <span class="text-sm font-semibold" data-i18n="monitor.ctx.breakdownTitle">已激活上下文构成</span>
               <span class="text-xs mono-num text-muted">Tokens / %</span>
@@ -424,7 +424,7 @@
             </div>
           </div>
 
-          <div class="agy-group overflow-hidden flex flex-col">
+          <div id="inventoryCard" class="agy-group overflow-hidden flex flex-col">
             <div class="px-5 py-3.5 border-b flex items-center justify-between">
               <span class="text-sm font-semibold" data-i18n="monitor.ctx.mountedAssetsTitle">已挂载资产</span>
             </div>
@@ -642,10 +642,15 @@
               <div id="govLintFindingsList" class="divide-y"></div>
             </div>
 
-            <div id="govIgnoredSection" class="agy-group overflow-hidden hidden">
-              <button id="govIgnoredToggleBtn" type="button" class="w-full px-5 py-3 flex items-center justify-between gap-2 text-left hover:opacity-90">
-                <span class="text-xs font-medium text-muted"><span data-i18n="gov.overview.ignored">已忽略项</span>（<span id="govIgnoredCount" class="mono-num">0</span>）</span>
-                <span id="govIgnoredChevron" class="text-xs text-muted" data-i18n="common.expand">展开</span>
+            <div id="govIgnoredSection" class="agy-group gov-ignored-card overflow-hidden hidden">
+              <button id="govIgnoredToggleBtn" type="button" class="acc-trigger gov-ignored-trigger" data-open="false" aria-expanded="false">
+                <span class="acc-title-wrap">
+                  <svg class="acc-chevron" width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8">
+                    <path d="M6 3.5L10.5 8L6 12.5" stroke-linecap="round" stroke-linejoin="round"/>
+                  </svg>
+                  <span class="acc-title text-xs font-medium text-muted"><span data-i18n="gov.overview.ignored">已忽略项</span> (<span id="govIgnoredCount" class="mono-num">0</span>)</span>
+                </span>
+                <span id="govIgnoredChevron" class="acc-count text-xs text-muted" data-i18n="common.expand">展开</span>
               </button>
               <div id="govIgnoredList" class="divide-y border-t hidden"></div>
             </div>
@@ -761,7 +766,7 @@
           <div class="pt-0.5">
             <div class="seg-nav seg-nav-full" id="appSegNav" role="tablist">
               <div class="seg-indicator" id="appSegIndicator"></div>
-              <button type="button" class="seg-tab" role="tab" data-app-tab="gallery" data-active="true" data-i18n="app.tab.gallery">壁纸与预设</button>
+              <button type="button" class="seg-tab" role="tab" data-app-tab="gallery" data-active="true" data-i18n="app.tab.gallery">壁纸库</button>
               <button type="button" class="seg-tab" role="tab" data-app-tab="tuning" data-active="false" data-i18n="app.tab.tuning">质感与护眼</button>
               <button type="button" class="seg-tab" role="tab" data-app-tab="rotation" data-active="false" data-i18n="app.tab.rotation">轮播与急救</button>
             </div>
@@ -776,15 +781,8 @@
             <button id="appGoPatchBtn" type="button" class="agy-btn agy-btn-primary agy-btn-sm shrink-0" data-i18n="app.goPatchBtn">前往注入</button>
           </div>
 
-          <!-- 子页 1：壁纸与预设 -->
+          <!-- 子页 1：本地壁纸库 -->
           <section id="app-panel-gallery" class="space-y-5 panel-enter">
-            <div class="agy-group p-5 space-y-3">
-              <div class="flex flex-wrap items-center justify-between gap-2">
-                <span class="text-sm font-semibold" data-i18n="app.gallery.presetsTitle">氛围渐变预设</span>
-              </div>
-              <div id="appPresetsGrid" class="wp-presets-grid"></div>
-            </div>
-
             <div class="agy-group overflow-hidden">
               <div class="px-5 py-3.5 border-b flex flex-wrap items-center justify-between gap-2">
                 <div class="min-w-0">
@@ -1178,7 +1176,7 @@
             <button id="exitSettingsBtn" type="button" class="agy-btn agy-btn-secondary" style="height: 30px; padding: 0 10px;" data-i18n="settings.back">← 返回</button>
             <span class="text-base font-semibold" data-i18n="settings.title">插件设置</span>
           </div>
-          <span id="settingsVersionLabel" class="agy-pill mono-num text-xs">Antigravity Hub v1.5.2</span>
+          <span id="settingsVersionLabel" class="agy-pill mono-num text-xs">Antigravity Hub v1.5.4</span>
         </div>
 
         <!-- 1. 通用与语言 -->
@@ -1407,7 +1405,7 @@
             </div>
             <div class="px-5 py-3 flex items-center justify-between gap-2">
               <span class="text-muted" data-i18n="settings.doctor.deploy">部署运行包</span>
-              <span id="docDeployVal" class="mono-num">v1.5.2 / 0 node_modules</span>
+              <span id="docDeployVal" class="mono-num">v1.5.4 / 0 node_modules</span>
             </div>
             <div class="px-5 py-3.5 settings-action-row" style="background: var(--background);">
               <button id="docRunBtn" type="button" class="agy-btn agy-btn-secondary" data-i18n="settings.doctor.runBtn">立即体检</button>
@@ -1433,22 +1431,34 @@
       </div>
 
       <div class="flex flex-wrap items-center justify-between gap-2">
-        <div class="seg-nav" id="capsuleModeNav">
-          <div class="seg-indicator" id="capsuleModeIndicator"></div>
-          <button type="button" class="seg-tab" data-cmode="human" data-active="true" data-i18n="monitor.capsule.tabHuman">易读视图</button>
-          <button type="button" class="seg-tab" data-cmode="agent" data-active="false" data-i18n="monitor.capsule.tabAgent">Agent 原文</button>
+        <div class="flex flex-wrap items-center gap-2">
+          <div class="seg-nav" id="capsuleModeNav">
+            <div class="seg-indicator" id="capsuleModeIndicator"></div>
+            <button type="button" class="seg-tab" data-cmode="human" data-active="true" data-i18n="monitor.capsule.tabHuman">易读视图</button>
+            <button type="button" class="seg-tab" data-cmode="agent" data-active="false" data-i18n="monitor.capsule.tabAgent">Agent 原文</button>
+          </div>
+          <div class="capsule-budget-seg" id="capsuleBudgetNav" role="radiogroup" aria-label="预算档位">
+            <button type="button" class="capsule-budget-btn mono-num" data-cap-budget="compact" data-active="false" data-i18n="monitor.capsule.budgetCompact">紧凑 500t</button>
+            <button type="button" class="capsule-budget-btn mono-num" data-cap-budget="standard" data-active="true" data-i18n="monitor.capsule.budgetStandard">标准 1200t</button>
+            <button type="button" class="capsule-budget-btn mono-num" data-cap-budget="full" data-active="false" data-i18n="monitor.capsule.budgetFull">完整 2500t</button>
+          </div>
         </div>
-        <span id="capsuleTokenBadge" class="agy-pill mono-num text-success">0 / 450 tokens</span>
+        <span id="capsuleTokenBadge" class="agy-pill mono-num text-success">0 / 1200 tokens</span>
       </div>
 
       <div class="capsule-stage">
         <div id="capsuleHumanView" class="h-full overflow-y-auto scroll-thin pr-1 space-y-3 panel-enter">
-          <div class="agy-subtle p-3.5 space-y-1">
+          <div class="agy-subtle p-3.5 space-y-1.5">
             <div class="flex items-center justify-between gap-2">
-              <span class="text-xs text-muted" data-i18n="monitor.capsule.goal">当前目标</span>
+              <label for="capsuleGoalInput" class="text-xs text-muted" data-i18n="monitor.capsule.goal">当前目标</label>
               <span id="capsuleGitMeta" class="mono-num text-xs text-muted">—</span>
             </div>
-            <div id="capsuleGoalText" class="text-sm font-medium text-fg">—</div>
+            <input id="capsuleGoalInput" type="text" class="agy-input w-full text-xs" placeholder="输入或编辑当前目标..." data-i18n-placeholder="monitor.capsule.goalPlaceholder" />
+          </div>
+
+          <div class="agy-subtle p-3.5 space-y-1.5">
+            <label for="capsuleNextActionInput" class="text-xs text-muted block" data-i18n="monitor.capsule.nextAction">下一步行动</label>
+            <textarea id="capsuleNextActionInput" rows="2" class="agy-textarea w-full text-xs" placeholder="输入或编辑下一步行动..." data-i18n-placeholder="monitor.capsule.nextActionPlaceholder"></textarea>
           </div>
 
           <div class="agy-subtle p-3.5 space-y-2">
@@ -1459,22 +1469,27 @@
             <div id="capsuleDecisionsList" class="space-y-1.5"></div>
           </div>
 
-          <div class="grid-2">
-            <div class="agy-subtle p-3 space-y-1.5">
-              <div class="text-xs text-muted" data-i18n="monitor.capsule.files">涉及文件</div>
-              <div id="capsuleFilesList" class="flex flex-wrap gap-1.5"></div>
+          <div class="agy-subtle p-3.5 space-y-2">
+            <div class="flex items-center justify-between">
+              <span class="text-xs text-muted" data-i18n="monitor.capsule.files">涉及文件</span>
+              <span id="capsuleFilesCount" class="mono-num text-xs text-muted">0</span>
             </div>
-            <div class="agy-subtle p-3 space-y-1">
-              <div class="text-xs text-muted" data-i18n="monitor.capsule.nextAction">下一步行动</div>
-              <div id="capsuleNextAction" class="text-xs text-fg leading-relaxed">—</div>
+            <div id="capsuleFilesList" class="flex flex-wrap gap-1.5"></div>
+          </div>
+
+          <div id="capsuleArtifactsSection" class="agy-subtle p-3.5 space-y-2 hidden">
+            <div class="flex items-center justify-between">
+              <span class="text-xs text-muted" data-i18n="monitor.capsule.artifacts">产物与文档链接</span>
+              <span id="capsuleArtifactsCount" class="mono-num text-xs text-muted">0</span>
             </div>
+            <div id="capsuleArtifactsList" class="space-y-1.5"></div>
           </div>
         </div>
 
         <div id="capsuleAgentView" class="hidden h-full flex flex-col gap-2 panel-enter">
           <div class="flex items-center justify-between text-xs text-muted shrink-0">
             <span data-i18n="monitor.capsule.agentHint">附着给 Agent 的紧凑格式</span>
-            <button id="copyCapsuleBtn" type="button" class="agy-link-btn" data-i18n="monitor.capsule.copyRaw">复制原文</button>
+            <button id="copyCapsuleBtn" type="button" class="agy-btn agy-btn-secondary agy-btn-sm text-xs" data-i18n="monitor.capsule.copyRaw">复制原文</button>
           </div>
           <pre id="capsuleRawPre" class="capsule-pre agy-subtle mono-num scroll-thin"></pre>
         </div>
@@ -1482,6 +1497,7 @@
 
       <div class="flex flex-wrap justify-end gap-2 pt-1">
         <button type="button" data-close-modal="capsuleModal" class="agy-btn agy-btn-secondary" data-i18n="common.cancel">取消</button>
+        <button id="copyCapsuleFooterBtn" type="button" class="agy-btn agy-btn-secondary" data-i18n="monitor.capsule.copyRaw">复制原文</button>
         <button id="saveCapsuleOnlyBtn" type="button" class="agy-btn agy-btn-secondary" data-i18n="monitor.capsule.saveOnly">仅存入记忆库</button>
         <button id="attachCapsuleBtn" type="button" class="agy-btn agy-btn-primary" data-i18n="monitor.capsule.attachNext">存入并附着到下条消息</button>
       </div>
@@ -1758,6 +1774,50 @@
       <div class="flex justify-end gap-2 pt-1">
         <button type="button" data-close-modal="restartIdeModal" class="agy-btn agy-btn-secondary" data-i18n="monitor.restart.cancel">取消</button>
         <button id="restartIdeConfirmBtn" type="button" class="agy-btn agy-btn-warning" data-i18n="monitor.restart.confirm">确认重启</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 模态框 11：已挂载资产检视弹窗（Asset Inspector Modal） -->
+  <div id="assetInspectorModal" class="modal-backdrop" data-open="false">
+    <div class="modal-card wide p-5 space-y-4">
+      <div class="flex items-start justify-between gap-2">
+        <div class="min-w-0 space-y-1">
+          <div class="flex flex-wrap items-center gap-1.5">
+            <span id="assetInspectorTitle" class="text-base font-semibold truncate">资产检视</span>
+            <span id="assetInspectorSourcePill" class="agy-pill text-xs hidden"></span>
+            <span id="assetInspectorSizePill" class="agy-pill mono-num text-xs hidden"></span>
+          </div>
+          <div id="assetInspectorSubMeta" class="text-xs text-muted mono-num truncate"></div>
+        </div>
+        <button type="button" data-close-modal="assetInspectorModal" class="agy-btn agy-btn-secondary agy-icon-btn shrink-0">✕</button>
+      </div>
+
+      <!-- 规则 / 技能 / 子代理 只读脱敏原文视图 -->
+      <div id="assetFileView" class="space-y-3 hidden">
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <span id="assetFileShareLabel" class="text-xs text-muted mono-num"></span>
+          <div class="flex items-center gap-1.5">
+            <button id="assetCopyPathBtn" type="button" class="agy-btn agy-btn-secondary agy-btn-sm text-xs" data-i18n="monitor.asset.copyPath">复制路径</button>
+            <button id="assetOpenFileBtn" type="button" class="agy-btn agy-btn-primary agy-btn-sm text-xs" data-i18n="monitor.asset.openFile">打开文件</button>
+          </div>
+        </div>
+        <pre id="assetFileContent" class="gov-preview-pre scroll-thin"></pre>
+      </div>
+
+      <!-- MCP 服务工具明细视图 -->
+      <div id="assetMcpView" class="space-y-3 hidden">
+        <div id="assetMcpSummary" class="agy-subtle px-3.5 py-2.5 flex flex-wrap items-center justify-between gap-2 text-xs"></div>
+        <div class="agy-group overflow-hidden">
+          <div class="px-3.5 py-2 border-b flex items-center justify-between text-xs text-muted">
+            <span data-i18n="monitor.asset.mcpToolsTitle">工具明细与 Token 占比</span>
+            <span id="assetMcpToolCount" class="mono-num">0</span>
+          </div>
+          <div id="assetMcpToolsList" class="divide-y scroll-thin" style="max-height: 44vh; overflow-y: auto;"></div>
+        </div>
+        <div class="flex justify-end pt-1">
+          <button id="assetGoGovBtn" type="button" class="agy-btn agy-btn-primary" data-i18n="monitor.asset.goGovernance">前往治理页管理</button>
+        </div>
       </div>
     </div>
   </div>

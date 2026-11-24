@@ -90,6 +90,7 @@ test('MCP App Stdio Server serves ui:// single-file HTML, exposes 5 model + 8 ap
       clientInfo: { name: 'test-harness', version: '1.0.0' },
     });
     assert.equal(initResp.result.serverInfo.name, 'context-cache-server');
+    assert.equal(initResp.result.serverInfo.version, '1.5.4');
     assert.ok(initResp.result.capabilities.tools);
     assert.ok(initResp.result.capabilities.resources);
     client.notify('notifications/initialized', {});
@@ -167,6 +168,26 @@ test('MCP App Stdio Server serves ui:// single-file HTML, exposes 5 model + 8 ap
     assert.ok(!aCtx.result.isError);
     assert.ok(Array.isArray(aCtx.result.structuredContent.breakdown));
 
+    // v1.5.4: read-only redacted asset preview via app_get_context_breakdown(action='preview_asset')
+    const wsRulePath = path.join(workspaceDir, 'AGENTS.md');
+    fs.writeFileSync(wsRulePath, '# Workspace Rule\nToken: sk-proj-1234567890abcdefghijklmnop\n');
+    const aPreviewOk = await client.request('tools/call', {
+      name: 'app_get_context_breakdown',
+      arguments: { action: 'preview_asset', filePath: wsRulePath, projectDir: workspaceDir },
+    });
+    assert.ok(!aPreviewOk.result.isError);
+    assert.equal(aPreviewOk.result.structuredContent.redacted, true);
+    assert.ok(!aPreviewOk.result.structuredContent.content.includes('sk-proj-1234567890abcdefghijklmnop'));
+    assert.match(aPreviewOk.result.structuredContent.content, /\[REDACTED/);
+
+    const outsidePath = path.join(root, 'outside.md');
+    fs.writeFileSync(outsidePath, 'forbidden');
+    const aPreviewDeny = await client.request('tools/call', {
+      name: 'app_get_context_breakdown',
+      arguments: { action: 'preview_asset', filePath: outsidePath, projectDir: workspaceDir },
+    });
+    assert.equal(aPreviewDeny.result.isError, true);
+
     const aCalls = await client.request('tools/call', { name: 'app_get_calls', arguments: {} });
     assert.ok(!aCalls.result.isError);
     assert.ok(Array.isArray(aCalls.result.structuredContent.calls));
@@ -182,9 +203,21 @@ test('MCP App Stdio Server serves ui:// single-file HTML, exposes 5 model + 8 ap
     assert.ok(!aCal.result.isError);
     assert.equal(aCal.result.structuredContent.groups.find((g) => g.id === 'gemini').weeklyPct, 82);
 
-    const aVaultCap = await client.request('tools/call', { name: 'app_vault_manage', arguments: { action: 'capsule' } });
+    const aVaultCap = await client.request('tools/call', {
+      name: 'app_vault_manage',
+      arguments: {
+        action: 'capsule',
+        budgetPreset: 'standard',
+        activeGoal: 'Test Goal',
+        nextAction: 'Test Next',
+      },
+    });
     assert.ok(!aVaultCap.result.isError);
     assert.match(aVaultCap.result.structuredContent.agentPayload, /\[CTX-CAPSULE\]/);
+    assert.equal(aVaultCap.result.structuredContent.budgetPreset, 'standard');
+    assert.equal(aVaultCap.result.structuredContent.budgetTokens, 1200);
+    assert.equal(aVaultCap.result.structuredContent.activeGoal, 'Test Goal');
+    assert.equal(aVaultCap.result.structuredContent.nextAction, 'Test Next');
 
     const aVaultArch = await client.request('tools/call', { name: 'app_vault_manage', arguments: { action: 'archive', id: savedId } });
     assert.ok(!aVaultArch.result.isError);

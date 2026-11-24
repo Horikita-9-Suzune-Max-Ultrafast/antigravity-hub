@@ -21,7 +21,7 @@ const FEATURE_FLAGS = {
   showQuotaUi: false,
 };
 
-const APP_VERSION = '1.5.3';
+const APP_VERSION = '1.5.4';
 const MINI_BAR_DEFAULT_ORDER = ['context', 'cache', 'kv', 'tps', 'model'];
 const MINI_BAR_PRESET_COUNTS = { minimal: 1, compact: 2, standard: 3, wide: 4, full: 5, custom: 5 };
 const MINI_BAR_PRESET_WIDTHS = { minimal: 255, compact: 340, standard: 440, wide: 540, full: 650 };
@@ -74,6 +74,8 @@ const state = {
   calGroup: 'gemini',
   newMemKind: 'decision',
   capsuleMode: 'human',
+  capsuleBudgetPreset: 'standard',
+  inspectedAsset: null,
   inSettings: false,
   openSelectId: null,
   openAccIdx: 0,
@@ -982,14 +984,17 @@ function renderContext(animated = false) {
   } else {
     alertsList.innerHTML = alerts
       .map(
-        (a) => `
-      <div class="py-2 flex items-start gap-2.5 text-xs">
-        <span class="dot-sm mt-1.5" style="background: var(--${a.level === 'error' ? 'error' : 'warning'})"></span>
-        <div class="space-y-0.5">
-          <div class="font-medium text-fg">${esc(a.title)}</div>
-          <div class="text-muted">${esc(a.detail)}</div>
-        </div>
-      </div>
+        (a, idx) => `
+      <button type="button" class="alert-row-btn text-xs" data-alert-idx="${idx}">
+        <span class="flex items-start gap-2.5 min-w-0 flex-1">
+          <span class="dot-sm mt-1.5" style="background: var(--${a.level === 'error' ? 'error' : 'warning'})"></span>
+          <span class="space-y-0.5 min-w-0 flex-1">
+            <span class="block font-medium text-fg">${esc(a.title)}</span>
+            <span class="block text-muted">${esc(a.detail)}</span>
+          </span>
+        </span>
+        <span class="alert-row-chevron" aria-hidden="true">›</span>
+      </button>
     `
       )
       .join('');
@@ -1118,27 +1123,30 @@ function renderContext(animated = false) {
       const itemsHtml = inv.items?.length
         ? inv.items
             .map(
-              (it) => `
-          <div class="agy-subtle px-3 py-2 flex items-center justify-between gap-2 text-xs">
-            <div class="min-w-0">
-              <div class="mono-num font-medium truncate">${esc(it.name)}</div>
-              <div class="text-muted">${esc(it.meta)}</div>
-            </div>
-            <span class="mono-num shrink-0 text-muted font-medium">${esc(it.size)}</span>
-          </div>`
+              (it, itemIdx) => `
+          <button type="button" class="inv-item-btn text-xs" data-inv-group="${idx}" data-inv-item="${itemIdx}">
+            <span class="min-w-0 flex-1">
+              <span class="block mono-num font-medium truncate">${esc(it.name)}</span>
+              <span class="block text-muted truncate">${esc(it.meta)}</span>
+            </span>
+            <span class="flex items-center gap-1.5 shrink-0">
+              <span class="mono-num text-muted font-medium">${esc(it.size)}</span>
+              <span class="inv-item-chevron" aria-hidden="true">›</span>
+            </span>
+          </button>`
             )
             .join('')
         : `<div class="text-xs text-muted py-1">${esc(tr('monitor.ctx.emptyItems'))}</div>`;
       return `
       <div>
         <button type="button" class="acc-trigger" data-acc-idx="${idx}" data-open="${open}">
-          <span class="flex items-center gap-2">
+          <span class="acc-title-wrap">
             <svg class="acc-chevron" width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8">
               <path d="M6 3.5L10.5 8L6 12.5" stroke-linecap="round" stroke-linejoin="round"/>
             </svg>
-            <span>${esc(inv.title)}</span>
+            <span class="acc-title" title="${esc(inv.title)}">${esc(inv.title)}</span>
           </span>
-          <span class="mono-num text-muted">${esc(inv.count)}</span>
+          <span class="acc-count mono-num text-muted">${esc(inv.count)}</span>
         </button>
         <div class="acc-body inv-acc-body" data-open="${open}">
           <div class="acc-inner">
@@ -1196,7 +1204,7 @@ function renderCalls() {
         const thinkRatio = Math.round((c.thinkingTokensEst / totalOut) * 100);
 
         const shortModel = formatShortModel(c.model);
-        const sourceText = c.sourceLabel || `${c.agentTag} / ${String(c.conversationId || '').slice(0, 8)}`;
+        const sourceText = String(c.sourceLabel || `${c.agentTag} / ${String(c.conversationId || '').slice(0, 8)}`).replace(/\s*\u00B7\s*/g, ' / ');
 
         return `
         <tr class="call-row ${c.callUid === state.freshCallId ? 'row-fresh' : ''}" data-call-id="${esc(c.callUid)}" data-expanded="${isExp}">
@@ -1489,7 +1497,7 @@ function renderVault() {
           ${(it.tags || []).map((t) => `<span>#${esc(t)}</span>`).join('')}
         </div>
       </div>
-      <button type="button" data-archive-mem="${esc(it.id)}" class="text-xs text-muted bg-transparent border-0 cursor-pointer shrink-0 pt-0.5">${esc(tr('monitor.vault.archive'))}</button>
+      <button type="button" data-archive-mem="${esc(it.id)}" class="agy-btn agy-btn-secondary agy-btn-sm text-xs shrink-0">${esc(tr('monitor.vault.archive'))}</button>
     </div>`
     )
     .join('');
@@ -2218,17 +2226,39 @@ function renderSettings() {
 function renderCapsuleModal() {
   const cap = state.capsuleData;
   if (!cap) return;
-  document.getElementById('capsuleGitMeta').textContent = `${cap.project} / ${cap.branch}@${cap.head}`;
-  document.getElementById('capsuleGoalText').textContent = cap.activeGoal;
-  document.getElementById('capsuleNextAction').textContent = cap.nextAction;
-  document.getElementById('capsuleTokenBadge').textContent = `${cap.tokens} / ${cap.budgetTokens} tokens`;
+  const preset = cap.budgetPreset || state.capsuleBudgetPreset || 'standard';
+  state.capsuleBudgetPreset = preset;
 
-  const selectedCount = (cap.decisions || []).filter((d) => d.checked).length;
-  document.getElementById('capsuleDecCount').textContent = `${selectedCount} / ${(cap.decisions || []).length}`;
+  document.querySelectorAll('#capsuleBudgetNav .capsule-budget-btn').forEach((b) => {
+    b.dataset.active = String(b.dataset.capBudget === preset);
+  });
+
+  document.getElementById('capsuleGitMeta').textContent = `${cap.project} / ${cap.branch}@${cap.head}`;
+
+  const goalInput = document.getElementById('capsuleGoalInput');
+  if (goalInput && document.activeElement !== goalInput) {
+    goalInput.value = cap.activeGoal || '';
+  }
+  const nextInput = document.getElementById('capsuleNextActionInput');
+  if (nextInput && document.activeElement !== nextInput) {
+    nextInput.value = cap.nextAction || '';
+  }
+
+  const badge = document.getElementById('capsuleTokenBadge');
+  if (badge) {
+    badge.textContent = `${cap.tokens} / ${cap.budgetTokens} tokens`;
+    const over = Number(cap.tokens) > Number(cap.budgetTokens);
+    badge.classList.toggle('text-warning', over);
+    badge.classList.toggle('text-success', !over);
+  }
+
+  const decisions = cap.decisions || [];
+  const selectedCount = decisions.filter((d) => d.checked).length;
+  document.getElementById('capsuleDecCount').textContent = `${selectedCount} / ${decisions.length}`;
 
   const decHost = document.getElementById('capsuleDecisionsList');
-  decHost.innerHTML = (cap.decisions || []).length
-    ? cap.decisions
+  decHost.innerHTML = decisions.length
+    ? decisions
         .map(
           (d, i) => `
       <label class="capsule-check-item" data-checked="${d.checked}">
@@ -2240,12 +2270,54 @@ function renderCapsuleModal() {
         .join('')
     : `<div class="text-xs text-muted py-1">${esc(tr('monitor.capsule.noDecisions'))}</div>`;
 
+  const fileItems = Array.isArray(cap.fileItems) && cap.fileItems.length
+    ? cap.fileItems
+    : (cap.touchedFiles || []).map((p) => ({ path: p, status: '', checked: true }));
+  const checkedFiles = fileItems.filter((f) => f.checked !== false).length;
+  const filesCountEl = document.getElementById('capsuleFilesCount');
+  if (filesCountEl) filesCountEl.textContent = `${checkedFiles} / ${fileItems.length}`;
+
   const filesHost = document.getElementById('capsuleFilesList');
-  filesHost.innerHTML = (cap.touchedFiles || []).length
-    ? cap.touchedFiles
-        .map((f) => `<span class="mono-num text-xs px-2 py-0.5 rounded-md" style="background:var(--card);border:1px solid var(--border);">${esc(f)}</span>`)
+  filesHost.innerHTML = fileItems.length
+    ? fileItems
+        .map((f) => {
+          const checked = f.checked !== false;
+          const st = f.status && f.status !== 'manual' ? `<span class="text-muted">${esc(f.status)}</span>` : '';
+          return `
+        <label class="capsule-file-chip mono-num" data-checked="${checked}" title="${esc(f.path)}">
+          <input type="checkbox" ${checked ? 'checked' : ''} data-cap-file="${esc(f.path)}" style="accent-color: var(--primary); cursor: pointer;" />
+          ${st}
+          <span class="truncate">${esc(f.path)}</span>
+        </label>`;
+        })
         .join('')
     : `<span class="text-xs text-muted">${esc(tr('monitor.capsule.autoTrack'))}</span>`;
+
+  const artifactItems = Array.isArray(cap.artifactItems) ? cap.artifactItems : [];
+  const artSection = document.getElementById('capsuleArtifactsSection');
+  const artHost = document.getElementById('capsuleArtifactsList');
+  const artCountEl = document.getElementById('capsuleArtifactsCount');
+  if (artSection && artHost) {
+    artSection.classList.toggle('hidden', artifactItems.length === 0);
+    if (artCountEl) {
+      const checkedArt = artifactItems.filter((a) => a.checked !== false).length;
+      artCountEl.textContent = `${checkedArt} / ${artifactItems.length}`;
+    }
+    artHost.innerHTML = artifactItems
+      .map((a) => {
+        const checked = a.checked !== false;
+        return `
+      <label class="capsule-check-item" data-checked="${checked}">
+        <input type="checkbox" ${checked ? 'checked' : ''} data-cap-artifact="${esc(a.path)}" style="margin-top:2px; accent-color: var(--primary); cursor: pointer;" />
+        <span class="min-w-0 flex-1">
+          <span class="block text-xs font-medium text-fg truncate">${esc(a.name || a.displayPath || a.path)}</span>
+          <span class="block text-xs text-muted mono-num truncate">${esc(a.displayPath || a.path)}</span>
+        </span>
+        ${a.tokens ? `<span class="mono-num text-xs text-muted shrink-0">+${a.tokens}t</span>` : ''}
+      </label>`;
+      })
+      .join('');
+  }
 
   document.getElementById('capsuleRawPre').textContent = cap.agentPayload || '';
 
@@ -2546,6 +2618,149 @@ function exitSettingsView() {
   });
 }
 
+function pulseTargetEl(el) {
+  if (!el) return;
+  el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  el.classList.remove('jump-highlight-pulse');
+  void el.offsetWidth;
+  el.classList.add('jump-highlight-pulse');
+  setTimeout(() => el.classList.remove('jump-highlight-pulse'), 1600);
+}
+
+async function handleAlertJump(alertIdx) {
+  const alerts = state.contextData?.alerts || [];
+  const alert = alerts[Number(alertIdx)];
+  if (!alert) return;
+
+  // 1. Collapse alerts drawer immediately
+  const acc = document.getElementById('alertsAcc');
+  if (acc) acc.dataset.open = 'false';
+
+  const code = String(alert.code || '').toLowerCase();
+  const titleStr = String(alert.title || '');
+  const detailStr = String(alert.detail || '');
+  const combined = `${titleStr} ${detailStr}`;
+
+  // 2. Context threshold warning -> Context tab -> scroll to breakdown card
+  if (code === 'context_high') {
+    switchTab('context');
+    requestAnimationFrame(() => {
+      pulseTargetEl(document.getElementById('ctxBreakdownCard') || document.getElementById('ctxBreakdownList'));
+    });
+    return;
+  }
+
+  // 3. Heavy MCP warning -> locate MCP assets accordion or Governance extensions
+  if (code.includes('mcp') || /\bmcp\b/i.test(titleStr)) {
+    const invs = state.contextData?.inventories || [];
+    const mcpIdx = invs.findIndex((g) => g.id === 'mcp_servers');
+    if (mcpIdx >= 0 && (invs[mcpIdx].items?.length || 0) > 0) {
+      switchTab('context');
+      state.openAccIdx = mcpIdx;
+      document.querySelectorAll('#inventoryList .acc-trigger').forEach((b, i) => {
+        b.dataset.open = String(i === state.openAccIdx);
+      });
+      document.querySelectorAll('#inventoryList .inv-acc-body').forEach((body, i) => {
+        body.dataset.open = String(i === state.openAccIdx);
+      });
+      requestAnimationFrame(() => {
+        pulseTargetEl(document.getElementById('inventoryCard') || document.getElementById('inventoryList'));
+      });
+    } else {
+      switchModule('governance', 'extensions');
+    }
+    return;
+  }
+
+  // 4. Call-level anomalies (cache_drop, low_tps_streak, subagent_burst, long_ctx_media_cache_risk, micro_step_streak, etc.)
+  switchTab('calls');
+  if (state.callsMode !== 'step') {
+    state.callsMode = 'step';
+    document.querySelectorAll('#callsModeNav .seg-tab').forEach((b) => {
+      b.dataset.active = String(b.dataset.mode === 'step');
+    });
+    positionIndicator('callsModeNav', 'callsModeIndicator');
+    document.getElementById('callsStepWrap')?.classList.remove('hidden');
+    document.getElementById('callsSummaryWrap')?.classList.add('hidden');
+  }
+
+  const stepMatch = combined.match(/#(\d+)/);
+  const tagMatch = combined.match(/\[([^\]]+)\]/);
+  const targetStep = alert.stepIndex != null ? Number(alert.stepIndex) : stepMatch ? Number(stepMatch[1]) : null;
+  const targetTag = alert.agentTag || (tagMatch ? tagMatch[1] : null);
+  const targetCallUid = alert.callUid || null;
+
+  const findMatchingCall = (calls) => {
+    if (!Array.isArray(calls) || !calls.length) return null;
+    if (targetCallUid) {
+      const exact = calls.find((c) => c.callUid === targetCallUid);
+      if (exact) return exact;
+    }
+    if (targetStep != null) {
+      if (targetTag) {
+        const both = calls.find((c) => Number(c.stepIndex) === targetStep && c.agentTag === targetTag);
+        if (both) return both;
+      }
+      const byStep = calls.find((c) => Number(c.stepIndex) === targetStep);
+      if (byStep) return byStep;
+    }
+    if (code === 'subagent_burst') {
+      const subs = targetTag ? calls.filter((c) => c.agentTag === targetTag) : calls.filter((c) => c.agentType === 'sub');
+      if (subs.length) {
+        return [...subs].sort((a, b) => (b.contextTokens || 0) - (a.contextTokens || 0))[0];
+      }
+    }
+    if (code === 'low_tps_streak') {
+      const lowThresh = state.config?.alerts?.lowTpsThreshold || 15;
+      const slow = calls.find((c) => c.effectiveTps > 0 && c.effectiveTps < lowThresh);
+      if (slow) return slow;
+    }
+    if (code === 'cache_drop') {
+      const drop = calls.find((c) => c.cacheDrop);
+      if (drop) return drop;
+    }
+    return calls[0];
+  };
+
+  let matched = findMatchingCall(state.callsData?.calls);
+  if (!matched) {
+    const hadFilters = state.agentFilter !== 'all' || state.modelFilter !== 'all' || state.onlyDrop;
+    if (hadFilters) {
+      state.agentFilter = 'all';
+      state.modelFilter = 'all';
+      state.onlyDrop = false;
+      const dropBtn = document.getElementById('onlyDropBtn');
+      const dropDot = document.getElementById('onlyDropDot');
+      if (dropBtn) {
+        dropBtn.style.borderColor = 'var(--border)';
+        dropBtn.style.color = 'var(--foreground)';
+      }
+      if (dropDot) dropDot.style.background = 'var(--border)';
+    }
+    await loadCalls(false).catch(() => {});
+    matched = findMatchingCall(state.callsData?.calls);
+  }
+
+  if (matched) {
+    state.expandedCallId = matched.callUid;
+    renderCalls();
+    requestAnimationFrame(() => {
+      const rows = document.querySelectorAll('#callsTbody tr.call-row[data-call-id]');
+      const row = [...rows].find((r) => r.dataset.callId === matched.callUid);
+      if (row) {
+        pulseTargetEl(row);
+        const anatomy = row.nextElementSibling;
+        if (anatomy && anatomy.classList.contains('call-anatomy-row')) {
+          anatomy.classList.remove('jump-highlight-pulse');
+          void anatomy.offsetWidth;
+          anatomy.classList.add('jump-highlight-pulse');
+          setTimeout(() => anatomy.classList.remove('jump-highlight-pulse'), 1600);
+        }
+      }
+    });
+  }
+}
+
 function openModal(id) {
   document.getElementById(id).dataset.open = 'true';
 }
@@ -2554,11 +2769,205 @@ function closeModal(id) {
   document.getElementById(id).dataset.open = 'false';
 }
 
+function formatSourceLayerLabel(layer) {
+  const map = {
+    workspace: 'monitor.asset.layerWorkspace',
+    global: 'monitor.asset.layerGlobal',
+    plugin: 'monitor.asset.layerPlugin',
+    builtin: 'monitor.asset.layerBuiltin',
+    vault: 'monitor.asset.layerVault',
+  };
+  const key = map[String(layer || '').toLowerCase()];
+  return key ? tr(key) : layer ? String(layer) : '';
+}
+
+async function openAssetInspector(groupIdx, itemIdx) {
+  const rawGroup = state.contextData?.inventories?.[Number(groupIdx)];
+  if (!rawGroup) return;
+  const rawItem = rawGroup.items?.[Number(itemIdx)];
+  if (!rawItem) return;
+
+  const locGroup = localizeInventoryGroup(rawGroup, getUiLang());
+  const locItem = locGroup.items?.[Number(itemIdx)] || rawItem;
+  const item = { ...rawItem, name: locItem.name || rawItem.name, meta: locItem.meta || rawItem.meta };
+  state.inspectedAsset = item;
+
+  const titleEl = document.getElementById('assetInspectorTitle');
+  const sourcePill = document.getElementById('assetInspectorSourcePill');
+  const sizePill = document.getElementById('assetInspectorSizePill');
+  const subMetaEl = document.getElementById('assetInspectorSubMeta');
+  const fileView = document.getElementById('assetFileView');
+  const mcpView = document.getElementById('assetMcpView');
+
+  if (titleEl) titleEl.textContent = item.name || tr('monitor.asset.title');
+  const layerLabel = formatSourceLayerLabel(item.sourceLayer);
+  if (sourcePill) {
+    sourcePill.textContent = layerLabel;
+    sourcePill.classList.toggle('hidden', !layerLabel);
+  }
+  if (sizePill) {
+    sizePill.textContent = item.size || (item.tokens ? fmtK(item.tokens) : '');
+    sizePill.classList.toggle('hidden', !sizePill.textContent);
+  }
+  if (subMetaEl) {
+    subMetaEl.textContent = item.displayPath || item.filePath || item.meta || '';
+  }
+
+  const isMcp = item.kind === 'mcp_server' || rawGroup.id === 'mcp_servers';
+  if (isMcp) {
+    fileView?.classList.add('hidden');
+    mcpView?.classList.remove('hidden');
+
+    const tools = Array.isArray(item.tools) ? item.tools : [];
+    const totalTokens = Number(item.tokens) || tools.reduce((s, t) => s + (Number(t.tokens) || 0), 0);
+    const eagerCnt = item.eagerCount != null ? Number(item.eagerCount) : tools.filter((t) => !t.deferred).length;
+    const deferredCnt = item.deferredCount != null ? Number(item.deferredCount) : tools.filter((t) => t.deferred).length;
+
+    const sumEl = document.getElementById('assetMcpSummary');
+    if (sumEl) {
+      sumEl.innerHTML = `
+        <span class="font-medium text-fg mono-num">${esc(fmtK(totalTokens))} tokens</span>
+        <span class="flex items-center gap-1.5">
+          <span class="agy-pill mono-num text-xs">${esc(tr('monitor.asset.mcpDeferred'))} ${deferredCnt}</span>
+          <span class="agy-pill mono-num text-xs">${esc(tr('monitor.asset.mcpEager'))} ${eagerCnt}</span>
+        </span>`;
+    }
+
+    const cntEl = document.getElementById('assetMcpToolCount');
+    if (cntEl) cntEl.textContent = String(tools.length || item.toolCount || 0);
+
+    const listEl = document.getElementById('assetMcpToolsList');
+    if (listEl) {
+      if (!tools.length) {
+        listEl.innerHTML = `<div class="px-4 py-5 text-center text-xs text-muted">${esc(tr('monitor.asset.mcpNoTools'))}</div>`;
+      } else {
+        const denom = Math.max(1, totalTokens);
+        listEl.innerHTML = tools
+          .map((tool) => {
+            const tok = Number(tool.tokens) || 0;
+            const pct = Math.min(100, Math.max(0, (tok / denom) * 100));
+            const modeLbl = tool.deferred ? tr('monitor.asset.mcpDeferred') : tr('monitor.asset.mcpEager');
+            return `
+            <div class="asset-mcp-tool-row text-xs">
+              <div class="flex items-center justify-between gap-2">
+                <span class="mono-num font-medium text-fg truncate" title="${esc(tool.name)}">${esc(tool.name)}</span>
+                <span class="flex items-center gap-1.5 shrink-0">
+                  <span class="agy-pill text-xs">${esc(modeLbl)}</span>
+                  <span class="mono-num text-muted">${esc(tool.size || fmtK(tok))} (${pct.toFixed(0)}%)</span>
+                </span>
+              </div>
+              <div class="asset-mcp-bar-track">
+                <div class="asset-mcp-bar-fill" data-deferred="${Boolean(tool.deferred)}" style="width: ${Math.max(2, pct).toFixed(1)}%;"></div>
+              </div>
+            </div>`;
+          })
+          .join('');
+      }
+    }
+
+    openModal('assetInspectorModal');
+    return;
+  }
+
+  // Rule / Skill / Subagent / Brief read-only redacted preview
+  mcpView?.classList.add('hidden');
+  fileView?.classList.remove('hidden');
+
+  const usedBase = Number(state.contextData?.usedTokens) || Number(state.contextData?.limitTokens) || 1;
+  const itemTokens = Number(item.tokens) || 0;
+  const pctShare = ((itemTokens / usedBase) * 100).toFixed(2);
+  const shareEl = document.getElementById('assetFileShareLabel');
+  if (shareEl) {
+    shareEl.textContent = itemTokens > 0 ? tr('monitor.asset.share', { pct: pctShare, tokens: fmtK(itemTokens) }) : '';
+  }
+
+  const hasPath = Boolean(item.filePath);
+  document.getElementById('assetCopyPathBtn')?.classList.toggle('hidden', !hasPath);
+  document.getElementById('assetOpenFileBtn')?.classList.toggle('hidden', !hasPath);
+
+  const contentEl = document.getElementById('assetFileContent');
+  if (hasPath) {
+    if (contentEl) contentEl.textContent = tr('common.loading');
+    openModal('assetInspectorModal');
+    try {
+      const res = await callAppTool('app_get_context_breakdown', {
+        action: 'preview_asset',
+        filePath: item.filePath,
+        conversationId: state.activeConversationId || undefined,
+        followActive: state.followMode === 'auto',
+        projectDir: state.activeProjectDir || undefined,
+      });
+      if (state.inspectedAsset !== item) return;
+      if (subMetaEl) {
+        const metaPath = res.displayPath || item.displayPath || item.filePath;
+        const linesSuffix = res.lines != null ? ` (${res.lines}L${res.truncated ? ', truncated' : ''})` : '';
+        subMetaEl.textContent = `${metaPath}${linesSuffix}`;
+      }
+      if (contentEl) contentEl.textContent = res.content || '(empty)';
+    } catch (err) {
+      if (state.inspectedAsset !== item) return;
+      if (contentEl) contentEl.textContent = err?.message || String(err);
+    }
+  } else {
+    if (contentEl) {
+      contentEl.textContent = item.previewText || tr('monitor.asset.noFileContent');
+    }
+    openModal('assetInspectorModal');
+  }
+}
+
+async function reloadCapsule(overrides = {}) {
+  const cap = state.capsuleData || {};
+  const budgetPreset = overrides.budgetPreset || state.capsuleBudgetPreset || 'standard';
+  state.capsuleBudgetPreset = budgetPreset;
+
+  const goalInput = document.getElementById('capsuleGoalInput');
+  const nextInput = document.getElementById('capsuleNextActionInput');
+  const activeGoal = overrides.activeGoal !== undefined ? overrides.activeGoal : goalInput ? goalInput.value : undefined;
+  const nextAction = overrides.nextAction !== undefined ? overrides.nextAction : nextInput ? nextInput.value : undefined;
+
+  const selectedDecisionIds =
+    overrides.selectedDecisionIds !== undefined
+      ? overrides.selectedDecisionIds
+      : Array.isArray(cap.decisions)
+        ? cap.decisions.filter((d) => d.checked).map((d) => d.id)
+        : undefined;
+
+  const selectedFiles =
+    overrides.selectedFiles !== undefined
+      ? overrides.selectedFiles
+      : Array.isArray(cap.fileItems)
+        ? cap.fileItems.filter((f) => f.checked !== false).map((f) => f.path)
+        : undefined;
+
+  const selectedArtifacts =
+    overrides.selectedArtifacts !== undefined
+      ? overrides.selectedArtifacts
+      : Array.isArray(cap.artifactItems)
+        ? cap.artifactItems.filter((a) => a.checked !== false).map((a) => a.path)
+        : undefined;
+
+  state.capsuleData = await callAppTool('app_vault_manage', {
+    action: 'capsule',
+    conversationId: state.activeConversationId || undefined,
+    projectDir: state.activeProjectDir || undefined,
+    budgetPreset,
+    activeGoal: activeGoal !== undefined && activeGoal.trim() ? activeGoal.trim() : undefined,
+    nextAction: nextAction !== undefined && nextAction.trim() ? nextAction.trim() : undefined,
+    selectedDecisionIds,
+    selectedFiles,
+    selectedArtifacts,
+  });
+  renderCapsuleModal();
+}
+
 async function openCapsuleModal() {
+  state.capsuleBudgetPreset = state.capsuleBudgetPreset || 'standard';
   const cap = await callAppTool('app_vault_manage', {
     action: 'capsule',
     conversationId: state.activeConversationId || undefined,
     projectDir: state.activeProjectDir || undefined,
+    budgetPreset: state.capsuleBudgetPreset,
   });
   state.capsuleData = cap;
   renderCapsuleModal();
@@ -2626,6 +3035,18 @@ function bindEvents() {
       return;
     }
 
+    const alertRowBtn = e.target.closest('[data-alert-idx]');
+    if (alertRowBtn) {
+      void handleAlertJump(Number(alertRowBtn.dataset.alertIdx));
+      return;
+    }
+
+    const invItemBtn = e.target.closest('[data-inv-group][data-inv-item]');
+    if (invItemBtn) {
+      void openAssetInspector(Number(invItemBtn.dataset.invGroup), Number(invItemBtn.dataset.invItem));
+      return;
+    }
+
     const accBtn = e.target.closest('[data-acc-idx]');
     if (accBtn) {
       const idx = Number(accBtn.dataset.accIdx);
@@ -2676,7 +3097,7 @@ function bindEvents() {
         state.openSelectId = null;
         renderSelects();
       }
-      ['capsuleModal', 'quotaModal', 'addMemModal', 'i18nPatchConfirmModal', 'i18nEntryModal', 'i18nImportModal', 'appRotationPoolModal', 'restartIdeModal'].forEach(closeModal);
+      ['capsuleModal', 'quotaModal', 'addMemModal', 'i18nPatchConfirmModal', 'i18nEntryModal', 'i18nImportModal', 'appRotationPoolModal', 'restartIdeModal', 'assetInspectorModal'].forEach(closeModal);
       document.getElementById('govLintFixModal')?.classList.add('hidden');
     }
   });
@@ -2902,58 +3323,133 @@ function bindEvents() {
     vaultTimer = setTimeout(() => void loadVault(), 180);
   });
 
+  // Asset Inspector Modal actions
+  document.getElementById('assetCopyPathBtn')?.addEventListener('click', () => {
+    const p = state.inspectedAsset?.filePath;
+    if (!p) return;
+    if (navigator.clipboard) navigator.clipboard.writeText(p).catch(() => {});
+    showToast(tr('monitor.asset.pathCopied'));
+  });
+
+  document.getElementById('assetOpenFileBtn')?.addEventListener('click', () => {
+    const p = state.inspectedAsset?.filePath;
+    if (!p) return;
+    void (async () => {
+      const fileUrl = 'file:///' + String(p).replace(/\\/g, '/').replace(/^\/+/, '');
+      if (mcpApp && typeof mcpApp.openLink === 'function') {
+        try {
+          await mcpApp.openLink({ url: fileUrl });
+          showToast(tr('monitor.asset.openRequested'));
+          return;
+        } catch {
+          // fallback below
+        }
+      }
+      if (navigator.clipboard) navigator.clipboard.writeText(p).catch(() => {});
+      showToast(tr('monitor.asset.openFallback'));
+    })();
+  });
+
+  document.getElementById('assetGoGovBtn')?.addEventListener('click', () => {
+    const srvName = state.inspectedAsset?.name || '';
+    closeModal('assetInspectorModal');
+    switchModule('governance', 'extensions');
+    if (srvName) {
+      requestAnimationFrame(() => {
+        const searchEl = document.getElementById('govExtSearch');
+        if (searchEl) {
+          searchEl.value = srvName;
+          searchEl.dispatchEvent(new Event('input', { bubbles: true }));
+        }
+      });
+    }
+  });
+
+  // Capsule 3-tier budget switcher
+  document.getElementById('capsuleBudgetNav')?.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-cap-budget]');
+    if (!btn) return;
+    const nextPreset = btn.dataset.capBudget;
+    if (!nextPreset || nextPreset === state.capsuleBudgetPreset) return;
+    void reloadCapsule({ budgetPreset: nextPreset });
+  });
+
+  // Capsule editable goal & nextAction (debounced live recalculation)
+  let capsuleEditTimer = null;
+  const scheduleCapsuleEdit = () => {
+    clearTimeout(capsuleEditTimer);
+    capsuleEditTimer = setTimeout(() => {
+      void reloadCapsule();
+    }, 260);
+  };
+  document.getElementById('capsuleGoalInput')?.addEventListener('input', scheduleCapsuleEdit);
+  document.getElementById('capsuleNextActionInput')?.addEventListener('input', scheduleCapsuleEdit);
+
   // Capsule decision toggle (recalculates payload & token budget live)
   document.getElementById('capsuleDecisionsList').addEventListener('change', (e) => {
     const cb = e.target.closest('[data-cap-dec]');
     if (!cb || !state.capsuleData) return;
-    const dec = state.capsuleData.decisions.find((d) => d.id === cb.dataset.capDec);
+    const dec = (state.capsuleData.decisions || []).find((d) => d.id === cb.dataset.capDec);
     if (dec) dec.checked = cb.checked;
-    const selectedIds = state.capsuleData.decisions.filter((d) => d.checked).map((d) => d.id);
-    void (async () => {
-      state.capsuleData = await callAppTool('app_vault_manage', {
-        action: 'capsule',
-        conversationId: state.activeConversationId || undefined,
-        projectDir: state.activeProjectDir || undefined,
-        selectedDecisionIds: selectedIds,
-      });
-      renderCapsuleModal();
-    })();
+    void reloadCapsule();
   });
 
-  document.getElementById('copyCapsuleBtn').addEventListener('click', () => {
-    const txt = document.getElementById('capsuleRawPre')?.textContent || '';
-    if (navigator.clipboard) navigator.clipboard.writeText(txt).catch(() => {});
-    showToast('已复制 Agent 紧凑交接原文');
+  // Capsule touched files toggle
+  document.getElementById('capsuleFilesList')?.addEventListener('change', (e) => {
+    const cb = e.target.closest('[data-cap-file]');
+    if (!cb || !state.capsuleData) return;
+    const item = (state.capsuleData.fileItems || []).find((f) => f.path === cb.dataset.capFile);
+    if (item) item.checked = cb.checked;
+    void reloadCapsule();
   });
+
+  // Capsule artifacts toggle
+  document.getElementById('capsuleArtifactsList')?.addEventListener('change', (e) => {
+    const cb = e.target.closest('[data-cap-artifact]');
+    if (!cb || !state.capsuleData) return;
+    const item = (state.capsuleData.artifactItems || []).find((a) => a.path === cb.dataset.capArtifact);
+    if (item) item.checked = cb.checked;
+    void reloadCapsule();
+  });
+
+  const handleCopyCapsule = () => {
+    const txt = state.capsuleData?.agentPayload || document.getElementById('capsuleRawPre')?.textContent || '';
+    if (navigator.clipboard) navigator.clipboard.writeText(txt).catch(() => {});
+    showToast(tr('toast.capsuleCopied'));
+  };
+  document.getElementById('copyCapsuleBtn').addEventListener('click', handleCopyCapsule);
+  document.getElementById('copyCapsuleFooterBtn')?.addEventListener('click', handleCopyCapsule);
 
   document.getElementById('saveCapsuleOnlyBtn').addEventListener('click', () => {
     void (async () => {
       if (state.capsuleData) {
+        const goalTxt = (document.getElementById('capsuleGoalInput')?.value || state.capsuleData.activeGoal || '').trim();
         await callAppTool('app_vault_manage', {
           action: 'save',
           conversationId: state.activeConversationId || undefined,
           projectDir: state.activeProjectDir || undefined,
           kind: 'checkpoint',
-          title: `交接胶囊：${state.capsuleData.activeGoal.slice(0, 64)}`,
+          title: `交接胶囊：${goalTxt.slice(0, 64)}`,
           summary: state.capsuleData.agentPayload,
           tags: ['handoff-capsule'],
         });
         await loadVault();
       }
       closeModal('capsuleModal');
-      showToast('已存入跨会话记忆库');
+      showToast(tr('toast.capsuleSaved'));
     })();
   });
 
   document.getElementById('attachCapsuleBtn').addEventListener('click', () => {
     void (async () => {
       if (!state.capsuleData) return;
+      const goalTxt = (document.getElementById('capsuleGoalInput')?.value || state.capsuleData.activeGoal || '').trim();
       await callAppTool('app_vault_manage', {
         action: 'save',
         conversationId: state.activeConversationId || undefined,
         projectDir: state.activeProjectDir || undefined,
         kind: 'checkpoint',
-        title: `交接胶囊：${state.capsuleData.activeGoal.slice(0, 64)}`,
+        title: `交接胶囊：${goalTxt.slice(0, 64)}`,
         summary: state.capsuleData.agentPayload,
         tags: ['handoff-capsule'],
       });
@@ -2964,7 +3460,7 @@ function bindEvents() {
       }
       await loadVault();
       closeModal('capsuleModal');
-      showToast('已按 Agent 紧凑格式保存并附着到下条消息');
+      showToast(tr('toast.capsuleAttached'));
     })();
   });
 

@@ -285,12 +285,18 @@ export function createGovernanceModule({
     const ignoredSec = byId('govIgnoredSection');
     const ignoredCountEl = byId('govIgnoredCount');
     const ignoredListEl = byId('govIgnoredList');
+    const ignoredToggleBtn = byId('govIgnoredToggleBtn');
     const ignoredChevron = byId('govIgnoredChevron');
     if (ignoredSec && ignoredCountEl && ignoredListEl) {
       ignoredSec.classList.toggle('hidden', ignoredList.length === 0);
       ignoredCountEl.textContent = String(ignoredList.length);
-      ignoredListEl.classList.toggle('hidden', !state.showIgnored || ignoredList.length === 0);
-      if (ignoredChevron) ignoredChevron.textContent = state.showIgnored ? '收起' : '展开';
+      const isOpen = Boolean(state.showIgnored && ignoredList.length > 0);
+      ignoredListEl.classList.toggle('hidden', !isOpen);
+      if (ignoredToggleBtn) {
+        ignoredToggleBtn.dataset.open = String(isOpen);
+        ignoredToggleBtn.setAttribute('aria-expanded', String(isOpen));
+      }
+      if (ignoredChevron) ignoredChevron.textContent = isOpen ? '收起' : '展开';
       if (ignoredList.length > 0) {
         ignoredListEl.innerHTML = ignoredList
           .map(

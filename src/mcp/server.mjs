@@ -14,7 +14,7 @@ import {
   buildCompactBrief,
   buildHandoffCapsule,
 } from '../core/vault.mjs';
-import { inspectContext } from '../core/context-inspector.mjs';
+import { inspectContext, previewContextAsset } from '../core/context-inspector.mjs';
 import { getTelemetryReport } from '../core/telemetry.mjs';
 import { getQuotaSnapshot, calibrateQuotaGroup } from '../core/quota.mjs';
 import { runDoctor, exportBackup, resetCircuitBreaker, repairLocalState } from '../core/doctor.mjs';
@@ -34,7 +34,7 @@ export const APP_RESOURCE_URI = 'ui://context-cache/dashboard.html';
 export const APP_RESOURCE_MIME = 'text/html;profile=mcp-app';
 export const SERVER_INFO = {
   name: 'context-cache-server',
-  version: '1.5.3',
+  version: '1.5.4',
 };
 
 const APP_ONLY_META = { ui: { visibility: ['app'] } };
@@ -135,10 +135,12 @@ export const TOOL_DEFINITIONS = [
   {
     name: 'app_get_context_breakdown',
     title: 'App: Get Context Breakdown',
-    description: 'Private UI tool returning active context breakdown, deferred MCP tools, inventories, and bloat attribution.',
+    description: 'Private UI tool returning active context breakdown, deferred MCP tools, inventories, bloat attribution, and safe read-only redacted asset preview.',
     inputSchema: {
       type: 'object',
       properties: {
+        action: { type: 'string', enum: ['breakdown', 'preview_asset'] },
+        filePath: { type: 'string' },
         conversationId: { type: 'string' },
         followActive: { type: 'boolean' },
         projectDir: { type: 'string' },
@@ -212,8 +214,13 @@ export const TOOL_DEFINITIONS = [
         summary: { type: 'string' },
         tags: { type: 'array', items: { type: 'string' } },
         selectedDecisionIds: { type: 'array', items: { type: 'string' } },
+        selectedFiles: { type: 'array', items: { type: 'string' } },
+        selectedArtifacts: { type: 'array', items: { type: 'string' } },
+        budgetPreset: { type: 'string', enum: ['compact', 'standard', 'full'] },
+        budgetTokens: { type: 'number' },
         activeGoal: { type: 'string' },
         touchedFiles: { type: 'array', items: { type: 'string' } },
+        artifacts: { type: 'array', items: { type: 'string' } },
         nextAction: { type: 'string' },
       },
       additionalProperties: false,
@@ -618,6 +625,32 @@ export function createMcpDispatcher(options = {}) {
         }
 
         case 'app_get_context_breakdown': {
+          if (args.action === 'preview_asset') {
+            let previewProjectDir = args.projectDir || '';
+            if (!previewProjectDir) {
+              if (args.conversationId) {
+                previewProjectDir = getSessionProjectDir(args.conversationId, defaultWorkspace, options);
+              } else {
+                const target = resolveTargetSession(
+                  {
+                    followActive: args.followActive !== false,
+                    sessions: listConversations({ ...options, limit: 1 }),
+                    fallbackProjectDir: defaultWorkspace,
+                  },
+                  options
+                );
+                previewProjectDir = target.projectDir || defaultWorkspace;
+              }
+            }
+            const preview = previewContextAsset(
+              {
+                filePath: args.filePath,
+                projectDir: previewProjectDir,
+              },
+              options
+            );
+            return toolOk('ok', preview);
+          }
           const followActive = args.followActive !== false && !args.conversationId;
           const ctx = inspectContext(
             {
@@ -673,9 +706,13 @@ export function createMcpDispatcher(options = {}) {
         case 'app_vault_manage': {
           const paths = getDataPaths(options);
           let vaultProjectDir = args.projectDir || '';
-          if (!vaultProjectDir) {
+          let resolvedConvId = args.conversationId || null;
+          let resolvedTranscriptPath = '';
+          if (!vaultProjectDir || args.action === 'capsule') {
             if (args.conversationId) {
-              vaultProjectDir = getSessionProjectDir(args.conversationId, defaultWorkspace, options);
+              if (!vaultProjectDir) {
+                vaultProjectDir = getSessionProjectDir(args.conversationId, defaultWorkspace, options);
+              }
             } else {
               const target = resolveTargetSession(
                 {
@@ -685,7 +722,15 @@ export function createMcpDispatcher(options = {}) {
                 },
                 options
               );
-              vaultProjectDir = target.projectDir || defaultWorkspace;
+              if (!vaultProjectDir) {
+                vaultProjectDir = target.projectDir || defaultWorkspace;
+              }
+              if (!resolvedConvId && target.conversationId) {
+                resolvedConvId = target.conversationId;
+              }
+              if (target.transcriptPath) {
+                resolvedTranscriptPath = target.transcriptPath;
+              }
             }
           }
           const git = getGitContext(vaultProjectDir);
@@ -725,9 +770,16 @@ export function createMcpDispatcher(options = {}) {
             const capsule = buildHandoffCapsule(
               {
                 projectDir: vaultProjectDir,
+                conversationId: resolvedConvId || undefined,
+                transcriptPath: resolvedTranscriptPath || undefined,
+                budgetPreset: args.budgetPreset,
+                budgetTokens: args.budgetTokens,
                 selectedDecisionIds: args.selectedDecisionIds,
+                selectedFiles: args.selectedFiles,
+                selectedArtifacts: args.selectedArtifacts,
                 activeGoal: args.activeGoal,
                 touchedFiles: args.touchedFiles,
+                artifacts: args.artifacts,
                 nextAction: args.nextAction,
               },
               options

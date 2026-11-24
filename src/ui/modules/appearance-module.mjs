@@ -234,11 +234,7 @@ export function createAppearanceModule({
     if (pill) {
       let label = '已关闭';
       if (s.enabled) {
-        if (s.mode === 'image') {
-          label = s.separateThemeWallpapers ? '深浅独立' : '图片壁纸';
-        } else {
-          label = '渐变预设';
-        }
+        label = s.separateThemeWallpapers ? '深浅独立' : '图片壁纸';
       }
       pill.textContent = label;
       pill.dataset.tone = s.enabled ? 'success' : 'neutral';
@@ -254,30 +250,6 @@ export function createAppearanceModule({
     if (patchNotice) {
       patchNotice.classList.toggle('hidden', Boolean(d.runtimePatched));
     }
-  }
-
-  function renderPresets() {
-    const d = state.data;
-    if (!d) return;
-    const s = d.state;
-    const presetGrid = byId('appPresetsGrid');
-    if (!presetGrid) return;
-
-    presetGrid.innerHTML = (d.presets || [])
-      .map((p) => {
-        const active = s.enabled && s.mode === 'preset' && s.presetId === p.id;
-        return `
-        <button type="button" class="wp-preset-card" data-active="${active ? 'true' : 'false'}" data-app-preset="${esc(p.id)}">
-          <span class="wp-preset-swatch" style="background: ${p.darkCss};">
-            ${active ? `<span class="wp-active-tag" style="position:absolute;top:8px;right:8px;">当前生效</span>` : ''}
-          </span>
-          <span class="wp-preset-meta">
-            <span class="text-xs font-semibold text-fg">${esc(p.name)}</span>
-            <span class="text-2xs text-muted leading-snug">${esc(p.desc)}</span>
-          </span>
-        </button>`;
-      })
-      .join('');
   }
 
   function renderLibrary() {
@@ -516,7 +488,7 @@ export function createAppearanceModule({
     const grid = byId('appPoolLibraryGrid');
     if (grid) {
       if (!lib.length) {
-        grid.innerHTML = `<div class="wp-lib-empty" style="grid-column:1/-1;padding:16px 12px;">壁纸库暂无图片，请先在「壁纸与预设」中导入。</div>`;
+        grid.innerHTML = `<div class="wp-lib-empty" style="grid-column:1/-1;padding:16px 12px;">壁纸库暂无图片，请先在「本地壁纸库」中导入。</div>`;
       } else {
         grid.innerHTML = lib
           .map((item) => {
@@ -634,7 +606,6 @@ export function createAppearanceModule({
   function renderAll() {
     if (!state.data) return;
     renderHeader();
-    renderPresets();
     renderLibrary();
     renderTuning();
     renderRotation();
@@ -678,10 +649,28 @@ export function createAppearanceModule({
     byId('appGoPatchBtn')?.addEventListener('click', () => onGoI18nPatch?.());
 
     byId('appMasterSwitch')?.addEventListener('click', () => {
-      const cur = Boolean(state.data?.state?.enabled);
+      const s = state.data?.state || {};
+      const cur = Boolean(s.enabled);
+      if (!cur) {
+        const hasTarget =
+          Boolean(s.activeWallpaperPath) ||
+          (Boolean(s.separateThemeWallpapers) && Boolean(s.darkWallpaperPath || s.lightWallpaperPath));
+        const firstLib = state.data?.library?.[0]?.filePath || '';
+        const hasPool = (state.data?.poolCount || 0) > 0;
+        if (!hasTarget && !firstLib && !hasPool) {
+          showToast('请先导入本地图片或绑定只读壁纸文件夹', 'error');
+          return;
+        }
+        const patch = { enabled: true, mode: 'image' };
+        if (!hasTarget && firstLib) {
+          patch.activeWallpaperPath = firstLib;
+        }
+        void patchConfig(patch, { light: true, rerender: 'all', toastText: '已启用外观壁纸' });
+        return;
+      }
       void patchConfig(
-        { enabled: !cur },
-        { light: true, rerender: 'all', toastText: !cur ? '已启用外观壁纸' : '已关闭外观壁纸' }
+        { enabled: false },
+        { light: true, rerender: 'all', toastText: '已关闭外观壁纸' }
       );
     });
 
@@ -887,18 +876,10 @@ export function createAppearanceModule({
       }
     });
 
-    // Delegated preset / library clicks
+    // Delegated library clicks
     byId('module-appearance')?.addEventListener('click', (e) => {
       const btn = e.target.closest('button');
       if (!btn) return;
-
-      if (btn.dataset.appPreset) {
-        void patchConfig(
-          { enabled: true, mode: 'preset', presetId: btn.dataset.appPreset },
-          { light: true, rerender: 'all', toastText: '已应用氛围渐变预设' }
-        );
-        return;
-      }
 
       if (btn.dataset.appUseImg) {
         void patchConfig(

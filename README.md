@@ -9,9 +9,9 @@
 [![Zero Runtime Deps](https://img.shields.io/badge/Runtime%20Deps-0-brightgreen.svg)](#架构与设计原则)
 
 **Antigravity Hub** 是为 **Google Antigravity** 打造的模块化原生控制中心，采用**宽屏左侧窄图标栏 / 窄屏顶部紧凑切换条**的响应式双形态外壳，支持**简体中文 / English 双语界面免刷新实时切换**，内置四大核心模块：
-1. **上下文缓存与监控（Context Cache & Monitor）**：上下文构成透视与切模型水位模拟、已挂载资产完整双语展示、主/子 Agent 实时 TPS 与缓存击穿/卫生体检、多对话自动跟随、顶栏一键安全重启 Antigravity（不触碰 `app.asar`）、右侧边栏一键呼出原生无框悬浮窗、Git 感知跨会话记忆库与交接胶囊（含新手悬停说明）。
+1. **上下文缓存与监控（Context Cache & Monitor）**：上下文构成透视与切模型水位模拟、已挂载资产完整双语展示与**点击穿透检视弹窗（规则/技能只读脱敏原文 + MCP 工具明细表）**、**异常预警一键精准跳转对应步骤展开解剖抽屉**、主/子 Agent 实时 TPS 与缓存击穿/卫生体检、多对话自动跟随、顶栏一键安全重启 Antigravity（不触碰 `app.asar`）、右侧边栏一键呼出原生无框悬浮窗（迷你条 5 模块独立 Radix 语义色框）、Git 感知跨会话记忆库与**三源自动聚合交接胶囊（紧凑/标准/完整三档预算）**。
 2. **生态治理与 Harness 体检（Ecosystem & Harness Governance）**：Effective Harness 全景生效栈（P1 工作区 → P4 内置）、三合一纯离线体检（MCP 健康/Schema 冗余、Skill 质量/冲突/断链、隐私防泄露审计盾）与**分层修复闭环（一键预览/发送预设提示词给 Agent、本地跳转处理、脱敏预览、单条忽略与实时重算评分）**、五重零事故安全护栏开关、**多信号内容分类与可勾选场景预设（支持用户自定义常驻核心、分类覆盖、Rules/Skills/MCP Token 拆分预览与一步另存）**，以及宿主配置快照时间机器（含 CLI 应急逃生舱）。
-3. **外观壁纸系统（Appearance & Wallpaper）**：复用现有 Fail-Open 客户端运行时（零新增 ASAR 侵入点）、原创纯 CSS 渐变氛围预设、外置本地壁纸库与 100% 只读文件夹扫描、**本地壁纸库轮播池子集选择与双缓冲淡入淡出**、15 MiB 体积熔断与 Blob 内存自动释放、**实时拖动热调参（不透明度/模糊/饱和度/遮罩/面板不透明度/毛玻璃）**、深浅主题独立绑定、定时/启动轮播（支持 1 分钟自定义间隔）与秒级热关闭（含 CLI 急救命令）。
+3. **外观壁纸系统（Appearance & Wallpaper）**：复用现有 Fail-Open 客户端运行时（零新增 ASAR 侵入点）、外置本地壁纸库与 100% 只读文件夹扫描（v1.5.4 移除内置渐变预设并向后兼容旧配置静默回退）、**本地壁纸库轮播池子集选择与双缓冲淡入淡出**、15 MiB 体积熔断与 Blob 内存自动释放、**实时拖动热调参（不透明度/模糊/饱和度/遮罩/面板不透明度/毛玻璃）**、深浅主题独立绑定、定时/启动轮播（支持 1 分钟自定义间隔）与秒级热关闭（含 CLI 急救命令）。
 4. **界面汉化（Antigravity Localization）**：纯 Node.js 零依赖流式 ASAR 补丁引擎、739+ 精校内置词典（含原生菜单与动态模板正则）、三层词典外置热加载、物理免疫区防误翻、品牌名自定义、官方升级覆盖自动提醒与脱离进程一键应用/无损还原。
 
 **核心目标：实时监控与控制台管理 0 模型 Token 消耗、对业务代码仓库零写入污染、Antigravity 升级改版不崩不丢数据。**
@@ -42,14 +42,14 @@
 - **当前运行汇总与子代理不丢失**：下拉列表保留近 2 小时活跃的子代理（带 `子1` 徽章与运行绿点），切回主会话后仍可随时再选；新增顶部 **「汇总 · 当前运行中的全部对话 (主+子)」** 视图，实时聚合所有并行运行的会话调用流。
 - **跨视图同步与按需锁定**：在任一监控面板切换历史对话，其他已打开的监控视图同步联动；点击下拉框旁的「跟随 / 锁定」图标即可在“自动跟随”与“钉住当前对话”间一键切换。
 
-### 4. Git 感知跨会话记忆库与双视图交接胶囊（Context Vault）
+### 4. Git 感知跨会话记忆库与三源交接胶囊（Context Vault，v1.5.4 升级）
 - 对目标业务仓库严格**只读探测** Git 指纹、分支与 `HEAD`（绝不在业务仓库写入任何缓存文件），按 `project_id + branch` 隔离存储 `working_state`、`decision`、`architecture`、`pitfall` 与 `Stop` 自动 `checkpoint`。
 - 所有记忆写入前自动脱敏（过滤 Bearer Token、API Key、JWT、PEM 私钥等），`SessionStart` 在 `< 500 tokens` 硬预算内注入极简项目索引并提示 `HEAD` 前进标脏。
-- **固定高度双视图交接胶囊**：默认展示人眼易读卡片（逐条勾选决策实时计算 Token 预算），一键切换 Agent 紧凑载荷原文（`[CTX-CAPSULE] ...`），在 Aux Pane 中支持通过 `updateModelContext` 一键附着到下一条消息。
+- **三源自动聚合与三档预算交接胶囊**：0 模型 Token 自动聚合「Vault 记忆 + 当前会话 `transcript.jsonl`（近期诉求/编辑文件/Artifact）+ 实时 Git 改动（`M`/`A`/`?`）与最近 2 条 commit」；支持 **紧凑（500t）/ 标准（1200t）/ 完整（2500t）** 三档实时重算、弹窗内直接编辑当前目标与下一步，以及逐项勾选决策/改动文件/Artifact 一键复制或通过 `updateModelContext` 附着到新对话。
 
-### 5. 原生无框悬浮窗、迷你条交互排序、Gemini KV 倒计时与专属设置（v1.5.3 升级）
+### 5. 原生无框悬浮窗、迷你条 Radix 语义色框、Gemini KV 倒计时与专属设置（v1.5.4 升级）
 - **随 Antigravity 启动自动弹出悬浮窗**：MCP Server 握手完成后自动拉起默认形态无框悬浮窗（基于宿主 `language_server.exe` PID 去重，单次运行仅弹一次，退出自动收尾，设置页可随时开关）。
-- **迷你悬浮条快捷长度档位与跟手拖拽排序**：彻底修复窄宽截断（按模块整块显隐），内置「极简 1 / 紧凑 2 / 标准 3 / 加宽 4 / 完整 5」5 级快捷长度并保留自由拖宽；设置页提供等比可视化预览条，支持跟手拖拽实时让位（FLIP 动画 + 折行防抖）与点击选中互换。
+- **迷你悬浮条 5 模块独立 Radix 语义色框与跟手拖拽排序**：按 Radix UI Colors 为上下文占比（Indigo）、TPS（Violet/低速 Amber）、KV 倒计时（Cyan→Amber→Red）、模型名（Slate 1px 描边+微底色）、缓存命中（Green）分配零撞色深浅自适应语义框；内置「极简 1 / 紧凑 2 / 标准 3 / 加宽 4 / 完整 5」5 级快捷长度并保留自由拖宽；设置页提供等比可视化预览条，支持跟手拖拽实时让位（FLIP 动画 + 折行防抖）与点击选中互换。
 - **Gemini KV Cache 保鲜倒计时与图标三态变色**：对话结束后本地 1 秒倒计时（0 模型 Token，默认 15 分钟参考窗口且可自定义），悬浮窗与侧栏 Hub 图标随空闲风险平滑切换 **蓝 → 琥珀黄 → 警示红**，配套 `?` 原理轻提示；同步统一顶栏 Git 徽章视觉与「非 Git 目录」语义展示。
 - **响应式模块化控制台外壳与双语实时切换**：宽屏（`> 680px`，左侧边栏全页或宽屏悬浮窗）展示 `56px` 固定左侧图标导航栏，窄屏（`<= 680px`，右侧边栏或紧凑悬浮窗）自动折叠为顶部紧凑模块切换条；内置零依赖中英双语词典（`src/ui/i18n-ui.mjs`），可在设置中一键切换 **简体中文 / English** 并即时生效，完整汉化监控页「已挂载资产」（MCP 服务、按需/常驻工具、记忆与规则文件、生效技能与自定义代理等）。
 - **监控顶栏安全重启与 4 分区设置中心**：监控页顶栏与设置页维护区均提供 **「重启 Antigravity」** 按钮（带确认弹窗防误触，通过脱离进程安全重启且绝不触碰 `app.asar`）；设置页按「常规与语言 / 监控与告警 / 独立悬浮窗 / 维护与快捷操作」清晰分组，集成健康体检、重建索引、导出备份与恢复默认配置。
@@ -72,7 +72,7 @@
 
 ### 8. 外观壁纸系统（Appearance & Wallpaper）
 - **零新增侵入点热加载**：复用 Fail-Open 客户端运行时实时推送样式，无需重新打包 `app.asar`；支持秒级总开关与 CLI 一键急救关闭（`ctx wallpaper off`）。
-- **多元壁纸来源与轮播池**：支持纯 CSS 渐变氛围预设、外置本地壁纸库（15 MiB 体积熔断）与只读本地文件夹扫描；支持**按来源筛选轮播池与自定义壁纸库子集**、双缓冲平滑淡入淡出及 1 分钟自定义轮播间隔。
+- **聚焦本地壁纸来源与轮播池**：专注外置本地壁纸库（15 MiB 体积熔断）与只读本地文件夹扫描（v1.5.4 移除内置渐变预设并对旧配置自动静默回退）；支持**按来源筛选轮播池与自定义壁纸库子集**、双缓冲平滑淡入淡出及 1 分钟自定义轮播间隔。
 - **实时参数调节与深浅主题绑定**：滑块拖动即时生效，支持不透明度、模糊、饱和度、全局遮罩、面板不透明度（`scrimOpacity`）与毛玻璃调节，并支持浅色/深色主题独立绑定壁纸。
 
 ---
@@ -104,16 +104,16 @@
 
 ### 方式一：下载 Release 免构建插件包（推荐，零 `npm install`）
 
-1. 前往 [Releases](https://github.com/Horikita-9-Suzune-Max-Ultrafast/antigravity-hub/releases) 下载 `context-cache-v1.5.3-plugin.zip`（内部为全明文可读 `.mjs` 源码 + 预编译单文件 UI，零 `node_modules`）。
+1. 前往 [Releases](https://github.com/Horikita-9-Suzune-Max-Ultrafast/antigravity-hub/releases) 下载 `context-cache-v1.5.4-plugin.zip`（内部为全明文可读 `.mjs` 源码 + 预编译单文件 UI，零 `node_modules`）。
 2. 解压至 Antigravity 插件目录，使目录结构为 `~/.gemini/config/plugins/context-cache/plugin.json`：
    - **Windows PowerShell**：
      ```powershell
-     Expand-Archive -Path .\context-cache-v1.5.3-plugin.zip -DestinationPath "$env:USERPROFILE\.gemini\config\plugins" -Force
+     Expand-Archive -Path .\context-cache-v1.5.4-plugin.zip -DestinationPath "$env:USERPROFILE\.gemini\config\plugins" -Force
      ```
    - **macOS / Linux**：
      ```bash
      mkdir -p ~/.gemini/config/plugins
-     unzip -o context-cache-v1.5.3-plugin.zip -d ~/.gemini/config/plugins
+     unzip -o context-cache-v1.5.4-plugin.zip -d ~/.gemini/config/plugins
      ```
 3. Antigravity 会自动发现并加载插件（无需重启）。
 

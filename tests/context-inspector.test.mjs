@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { inspectContext } from '../src/core/context-inspector.mjs';
+import { inspectContext, previewContextAsset } from '../src/core/context-inspector.mjs';
 import { getModelLimit } from '../src/core/config.mjs';
 import { saveMemory } from '../src/core/vault.mjs';
 
@@ -100,12 +100,46 @@ test('Context Inspector aligns usedTokens with transcript, scans MCP deferred/ea
     assert.equal(result.deferred[0].count, '12 tools');
     assert.ok(result.deferred[0].tokens >= 15000);
 
-    // Inventories contain MCP, Rules, Skills/Agents
+    // Inventories contain MCP, Rules, Skills/Agents with enriched v1.5.4 metadata
     assert.equal(result.inventories.length, 3);
-    assert.ok(result.inventories[0].items.some((i) => i.name === 'heavy-playwright'));
-    assert.ok(result.inventories[1].items.some((i) => i.name === 'SessionStart Compact Brief'));
-    assert.ok(result.inventories[2].items.some((i) => i.name === 'demo-skill'));
-    assert.ok(result.inventories[2].items.some((i) => i.name === 'reviewer'));
+    const heavyItem = result.inventories[0].items.find((i) => i.name === 'heavy-playwright');
+    assert.ok(heavyItem);
+    assert.equal(heavyItem.kind, 'mcp_server');
+    assert.equal(heavyItem.sourceLayer, 'global');
+    assert.equal(heavyItem.filePath, heavyMcpDir);
+    assert.equal(heavyItem.tools.length, 12);
+    assert.equal(heavyItem.tools[0].deferred, true);
+    assert.ok(heavyItem.tools[0].tokens > 0);
+
+    const ownServer = result.inventories[0].items.find((i) => i.name === 'context-cache-server');
+    assert.ok(ownServer);
+    assert.equal(ownServer.sourceLayer, 'plugin');
+    assert.equal(ownServer.tools.length, 5);
+    assert.equal(ownServer.tools[0].deferred, false);
+
+    const wsRule = result.inventories[1].items.find((i) => i.name.endsWith('AGENTS.md') && i.sourceLayer === 'workspace');
+    assert.ok(wsRule);
+    assert.equal(wsRule.kind, 'rule');
+    assert.equal(wsRule.filePath, path.join(workspaceDir, 'AGENTS.md'));
+    assert.ok(wsRule.tokens > 0 && wsRule.bytes > 0);
+
+    const briefItem = result.inventories[1].items.find((i) => i.name === 'SessionStart Compact Brief');
+    assert.ok(briefItem);
+    assert.equal(briefItem.kind, 'brief');
+    assert.equal(briefItem.sourceLayer, 'vault');
+    assert.ok(briefItem.previewText && briefItem.previewText.includes('[CTX-BRIEF]'));
+
+    const demoSkill = result.inventories[2].items.find((i) => i.name === 'demo-skill');
+    assert.ok(demoSkill);
+    assert.equal(demoSkill.kind, 'skill');
+    assert.equal(demoSkill.sourceLayer, 'plugin');
+    assert.equal(demoSkill.filePath, skillPath);
+
+    const reviewerAgent = result.inventories[2].items.find((i) => i.name === 'reviewer');
+    assert.ok(reviewerAgent);
+    assert.equal(reviewerAgent.kind, 'agent');
+    assert.equal(reviewerAgent.sourceLayer, 'plugin');
+    assert.equal(reviewerAgent.filePath, path.join(pluginDir, 'agents', 'reviewer.md'));
 
     // Bloat attribution flags >75% and heavy MCP server
     assert.match(result.attribution, /80%/);
@@ -115,6 +149,48 @@ test('Context Inspector aligns usedTokens with transcript, scans MCP deferred/ea
     // New Gemini 4 Hydrogen and generic Gemini models resolve to 1M limit (never 200K fallback)
     assert.equal(getModelLimit('gemini-4-hydrogen-medium'), 1000000);
     assert.equal(getModelLimit('gemini-future-codename'), 1000000);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('previewContextAsset enforces authorized path boundaries, blocks secret files, and redacts inline tokens', () => {
+  const root = makeTmpDir('cc-preview-');
+  const appDataDir = path.join(root, 'antigravity');
+  const configDir = path.join(root, 'config');
+  const workspaceDir = path.join(root, 'workspace');
+  const outsideFile = path.join(root, 'outside-secret.md');
+
+  try {
+    fs.mkdirSync(appDataDir, { recursive: true });
+    fs.mkdirSync(path.join(configDir, 'rules'), { recursive: true });
+    fs.mkdirSync(workspaceDir, { recursive: true });
+
+    const ruleFile = path.join(configDir, 'rules', 'AGENTS.md');
+    fs.writeFileSync(
+      ruleFile,
+      '# Rule\nNever expose sk-proj-1234567890abcdefghijklmnop or Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.abcdefgh12345678\n'
+    );
+    const envFile = path.join(workspaceDir, '.env');
+    fs.writeFileSync(envFile, 'API_KEY=sk-proj-secret1234567890abcdef\n');
+    fs.writeFileSync(outsideFile, 'Outside content should never be readable');
+
+    const opts = { appDataDir, configDir, projectDir: workspaceDir };
+
+    // Authorized rule file -> readable and redacted
+    const preview = previewContextAsset({ filePath: ruleFile, projectDir: workspaceDir }, opts);
+    assert.equal(preview.redacted, true);
+    assert.equal(preview.kind, 'rule');
+    assert.equal(preview.sourceLayer, 'global');
+    assert.ok(!preview.content.includes('sk-proj-1234567890abcdefghijklmnop'));
+    assert.ok(!preview.content.includes('eyJhbGciOiJIUzI1NiJ9'));
+    assert.match(preview.content, /\[REDACTED/);
+
+    // Out-of-bounds file -> rejected
+    assert.throws(() => previewContextAsset({ filePath: outsideFile, projectDir: workspaceDir }, opts), /拒绝读取/);
+
+    // .env inside workspace -> blocked
+    assert.throws(() => previewContextAsset({ filePath: envFile, projectDir: workspaceDir }, opts), /敏感凭据/);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

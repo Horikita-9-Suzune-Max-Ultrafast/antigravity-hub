@@ -9,9 +9,9 @@
 [![Zero Runtime Deps](https://img.shields.io/badge/Runtime%20Deps-0-brightgreen.svg)](#architecture--design-principles)
 
 **Antigravity Hub** is a modular native MCP App platform for **Google Antigravity**, featuring a responsive dual-layout shell (left icon rail on wide screens, compact top module bar in narrow side panes) and **instant zh-CN / English UI language switching** across four built-in core modules:
-1. **Context Cache & Monitor**: Context window breakdown, fully localized Mounted Assets, main/sub-agent TPS & prefix-cache drop attribution, auto-following active conversations across views, one-click safe Antigravity restart right from Monitor (never touches `app.asar`), native frameless floating monitor, Git-aware cross-session memory & dual-view handoff capsules.
+1. **Context Cache & Monitor**: Context window breakdown, fully localized Mounted Assets with **click-through Asset Inspector Modal (read-only redacted source preview for rules/skills/agents & MCP tool breakdown table)**, **one-click Alert jump-to-step & anatomy drawer**, main/sub-agent TPS & prefix-cache drop attribution, auto-following active conversations across views, one-click safe Antigravity restart right from Monitor (never touches `app.asar`), native frameless floating monitor (5 independent Radix semantic badges in Mini Bar), Git-aware cross-session memory & **3-source auto-aggregated Handoff Capsule (Compact/Standard/Full tiers)**.
 2. **Ecosystem & Harness Governance**: Effective Harness stack (`P1 Workspace` → `P4 Built-in`), offline 3-in-1 linter (MCP health, Skill conflicts/broken links, redacted secret audit) with **tiered remediation workflows (preview/send preset fix prompts to Agent, local jump-to-toggle, redacted preview, and persistent per-finding ignore with live score recalc)**, 5-layer safety guardrails, **multi-signal content classifier & interactive scenario profiles (user-pinned core plugins, manual category overrides, Rules/Skills/MCP token breakdown diff, and one-step save as custom profile)**, plus host config snapshot time machine & CLI rollback escape hatch.
-3. **Appearance & Wallpaper Engine**: Reuses the fail-open client runtime (zero new ASAR injection points), pure CSS gradient presets, external wallpaper library & 100% read-only local folder scanning, **custom rotation pool & library subset selection with dual-buffer crossfade**, 15 MiB circuit breaker, **live slider tuning (opacity, blur, saturation, scrim opacity, glass)**, independent light/dark theme bindings, and instant emergency off.
+3. **Appearance & Wallpaper Engine**: Reuses the fail-open client runtime (zero new ASAR injection points), external local wallpaper library & 100% read-only local folder scanning (built-in gradient presets removed in v1.5.4 with silent legacy config fallback), **custom rotation pool & library subset selection with dual-buffer crossfade**, 15 MiB circuit breaker, **live slider tuning (opacity, blur, saturation, scrim opacity, glass)**, independent light/dark theme bindings, and instant emergency off.
 4. **Antigravity Localization**: Pure Node.js zero-dependency streaming ASAR patcher, 739+ curated default Chinese entries (native menus + UI + dynamic regex patterns), 3-layer hot-reloaded external dictionary, physical immunity zones, brand customization, update-drift reminders, and detached apply/restore worker.
 
 **Core goals: 0 model tokens consumed by live monitoring & console UI, zero files written into target business repositories, and resilient operation across Antigravity host updates.**
@@ -42,14 +42,14 @@
 - **Active Aggregation & Persistent Sub-Agents**: Recent active sub-agents remain selectable in the session dropdown (with live dot and `子N` badges) even after switching back to the main thread; includes a dedicated **"All Running Conversations (Main + Sub)"** aggregate view.
 - **Cross-View Sync & Pin Toggle**: Picking a conversation in any open monitor syncs all other views; click the follow/pin button next to the selector anytime to pin a specific conversation locally.
 
-### 4. Git-Aware Cross-Session Vault & Dual-View Handoff Capsule
+### 4. Git-Aware Cross-Session Vault & 3-Source Handoff Capsule (Upgraded in v1.5.4)
 - Performs strictly **read-only** Git fingerprint/branch/`HEAD` detection (never writes files inside target repos) and isolates `working_state`, `decision`, `architecture`, `pitfall`, and `Stop` checkpoints by `project_id + branch`.
 - Auto-redacts secrets (Bearer tokens, API keys, JWTs, PEM private keys) before writing to disk; injects a `< 500 tokens` brief at `SessionStart` with `HEAD` staleness indicators.
-- **Fixed-Height Dual-View Handoff Capsule**: Toggle between human-readable cards (with live per-decision checkboxes updating the token budget) and the compact `[CTX-CAPSULE]` agent payload, with optional `updateModelContext` attachment in Aux Pane.
+- **3-Source Auto-Aggregated Handoff Capsule with 3 Budget Tiers**: Aggregates Vault decisions, active `transcript.jsonl` (recent user requests, edited files, produced Artifacts), and live Git changes (`M`/`A`/`?`) + last 2 commits at 0 LLM tokens; supports **Compact (500t) / Standard (1200t) / Full (2500t)** live recalculation, inline editable Active Goal & Next Action, and selectable decisions/files/artifacts with one-click copy or `updateModelContext` attachment.
 
-### 5. Native Frameless Floating Host, Mini Bar Studio, Gemini KV Timer & Settings (Upgraded in v1.5.3)
+### 5. Native Frameless Floating Host, Radix Mini Bar, Gemini KV Timer & Settings (Upgraded in v1.5.4)
 - **Auto-launch on Antigravity Startup**: Automatically opens the frameless floating window once per Antigravity lifecycle (deduplicated by host `language_server.exe` PID, auto-closes on exit, toggleable in Settings).
-- **Mini Floating Bar Presets & Follow-Cursor Reordering**: Eliminates narrow-width glyph clipping with whole-chip visibility, adds 5 length presets (`Mini 1` to `Full 5`) while preserving custom drag-resizing, and introduces a live Settings preview bar with follow-cursor FLIP drag-and-drop and click-to-swap ordering.
+- **Mini Floating Bar 5-Chip Radix Semantic Styling & Follow-Cursor Studio**: Assigns distinct light/dark-adaptive Radix UI Colors semantic chips (Context Indigo, TPS Violet/Amber, KV Cyan→Amber→Red, Model Slate with crisp 1px border, Cache Hit Green), adds 5 length presets (`Mini 1` to `Full 5`) while preserving custom drag-resizing, and provides a live Settings preview bar with follow-cursor FLIP drag-and-drop and click-to-swap ordering.
 - **Gemini KV Cache Freshness Countdown & Three-State Brand Icon**: Zero-token local 1-second countdown after each Gemini turn (15m default reference window, customizable) that smoothly tints the Hub icon **Blue → Amber → Red**, paired with a concise `?` explainer and a unified Git status pill (`No Git` for non-repo workspaces).
 - **Responsive Modular Console Shell & Instant Bilingual Switch**: Displays a `56px` left icon rail on wide viewports (`> 680px`) and collapses into a compact top module bar in narrow side panes (`<= 680px`), with zero horizontal overflow. Ships a zero-dep `zh-CN` / `en` UI dictionary (`src/ui/i18n-ui.mjs`) switchable live in Settings without reload, fully localizing Monitor Mounted Assets and all controls.
 - **Monitor Safe Restart & 4-Section Settings**: Adds a confirmation-guarded **Restart Antigravity** button in both the Monitor toolbar and Settings Maintenance (detached breakaway restart that never touches `app.asar`). Settings are cleanly organized into General & Language, Monitor & Alerts, Floating Window, and Maintenance & Actions (Doctor, Rebuild Index, Export Backup, Restart Antigravity, Reset Defaults).
@@ -72,7 +72,7 @@
 
 ### 8. Appearance & Wallpaper Engine
 - **Zero-Intrusion Hot Reload**: Pushes live visual updates through the existing fail-open client runtime without repacking `app.asar`, with instant toggle and CLI emergency disable (`ctx wallpaper off`).
-- **Flexible Sources & Rotation Pool**: Supports built-in CSS gradients, external local wallpaper library (15 MiB limit), and read-only folder scanning, with source filtering, custom library subset selection, 1-minute custom intervals, and dual-buffer crossfade.
+- **Focused Local Wallpaper Sources & Rotation Pool**: Focuses on external local wallpaper library (15 MiB limit) and read-only folder scanning (built-in gradient presets removed in v1.5.4 with silent legacy fallback), with source filtering, custom library subset selection, 1-minute custom intervals, and dual-buffer crossfade.
 - **Real-Time Tuning & Theme Bindings**: Drag sliders for live opacity, blur, saturation, global scrim, panel `scrimOpacity`, and glassmorphism, with independent light/dark theme bindings.
 
 ---
@@ -104,16 +104,16 @@
 
 ### Option A: Prebuilt Release Bundle (Recommended, No `npm install`)
 
-1. Download `context-cache-v1.5.3-plugin.zip` from [Releases](https://github.com/Horikita-9-Suzune-Max-Ultrafast/antigravity-hub/releases) (plain readable `.mjs` source + pre-bundled single-file UI, zero `node_modules`).
+1. Download `context-cache-v1.5.4-plugin.zip` from [Releases](https://github.com/Horikita-9-Suzune-Max-Ultrafast/antigravity-hub/releases) (plain readable `.mjs` source + pre-bundled single-file UI, zero `node_modules`).
 2. Extract into `~/.gemini/config/plugins/` so `plugin.json` lives at `~/.gemini/config/plugins/context-cache/plugin.json`:
    - **Windows PowerShell**:
      ```powershell
-     Expand-Archive -Path .\context-cache-v1.5.3-plugin.zip -DestinationPath "$env:USERPROFILE\.gemini\config\plugins" -Force
+     Expand-Archive -Path .\context-cache-v1.5.4-plugin.zip -DestinationPath "$env:USERPROFILE\.gemini\config\plugins" -Force
      ```
    - **macOS / Linux**:
      ```bash
      mkdir -p ~/.gemini/config/plugins
-     unzip -o context-cache-v1.5.3-plugin.zip -d ~/.gemini/config/plugins
+     unzip -o context-cache-v1.5.4-plugin.zip -d ~/.gemini/config/plugins
      ```
 3. Antigravity discovers and loads the plugin automatically (no restart required).
 

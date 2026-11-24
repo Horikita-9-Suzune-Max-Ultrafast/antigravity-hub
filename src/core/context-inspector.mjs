@@ -1,9 +1,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { getAppDataDir, getConfigRoot, findTranscriptPath } from './paths.mjs';
+import { getAppDataDir, getConfigRoot, findTranscriptPath, formatDisplayPath } from './paths.mjs';
 import { loadConfig, getModelLimit } from './config.mjs';
 import { getGitContext } from './git-context.mjs';
 import { estimateTokens, buildCompactBrief } from './vault.mjs';
+import { redactText } from './redact.mjs';
 import { parseTranscriptFull, listConversations } from './transcript-parser.mjs';
 import { getTelemetryReport, evaluateAlerts } from './telemetry.mjs';
 import { resolveTargetSession } from './session-tracker.mjs';
@@ -56,20 +57,46 @@ function scanMcpTools(options = {}) {
         files = [];
       }
       let sTokens = 0;
+      const tools = [];
       for (const f of files) {
-        const text = safeReadFile(path.join(serverPath, f));
-        sTokens += estimateTokens(text);
+        const toolFile = path.join(serverPath, f);
+        const text = safeReadFile(toolFile);
+        const tok = estimateTokens(text);
+        sTokens += tok;
+        let toolName = f.replace(/\.json$/i, '');
+        try {
+          const parsed = JSON.parse(text);
+          if (parsed && typeof parsed.name === 'string' && parsed.name.trim()) {
+            toolName = parsed.name.trim();
+          }
+        } catch {
+          // fallback to filename
+        }
+        tools.push({
+          name: toolName,
+          deferred: true,
+          tokens: tok,
+          size: fmtSizeK(tok),
+        });
       }
+      tools.sort((a, b) => b.tokens - a.tokens);
       // Lazy-loaded schemas live in <appDataDir>/mcp/<server>/*.json
       deferredTokens += sTokens;
       deferredCount += files.length;
       servers.push({
         name: serverName,
+        kind: 'mcp_server',
         mode: 'deferred',
+        sourceLayer: 'global',
+        filePath: serverPath,
+        displayPath: formatDisplayPath(serverPath),
         toolCount: files.length,
+        deferredCount: files.length,
+        eagerCount: 0,
         tokens: sTokens,
         meta: `${files.length} tools (deferred)`,
         size: fmtSizeK(sTokens),
+        tools,
       });
     }
   }
@@ -92,13 +119,27 @@ function scanMcpTools(options = {}) {
               const tok = 600;
               eagerTokens += tok;
               eagerCount += 5;
+              const ownTools = [
+                { name: 'ctx_open_monitor', deferred: false, tokens: 140, size: fmtSizeK(140) },
+                { name: 'ctx_brief', deferred: false, tokens: 110, size: fmtSizeK(110) },
+                { name: 'ctx_save', deferred: false, tokens: 130, size: fmtSizeK(130) },
+                { name: 'ctx_search', deferred: false, tokens: 110, size: fmtSizeK(110) },
+                { name: 'ctx_doctor', deferred: false, tokens: 110, size: fmtSizeK(110) },
+              ];
               servers.push({
                 name: srvKey,
+                kind: 'mcp_server',
                 mode: 'eager',
+                sourceLayer: 'plugin',
+                filePath: mcpCfgPath,
+                displayPath: formatDisplayPath(mcpCfgPath),
                 toolCount: 5,
+                deferredCount: 0,
+                eagerCount: 5,
                 tokens: tok,
-                meta: '5 model + 7 app-only',
+                meta: '5 model + 10 app-only',
                 size: fmtSizeK(tok),
+                tools: ownTools,
               });
             } else {
               const tok = 900;
@@ -106,11 +147,18 @@ function scanMcpTools(options = {}) {
               eagerCount += 4;
               servers.push({
                 name: fullKey,
+                kind: 'mcp_server',
                 mode: 'eager',
+                sourceLayer: 'plugin',
+                filePath: mcpCfgPath,
+                displayPath: formatDisplayPath(mcpCfgPath),
                 toolCount: 4,
+                deferredCount: 0,
+                eagerCount: 4,
                 tokens: tok,
                 meta: 'configured MCP server',
                 size: fmtSizeK(tok),
+                tools: [],
               });
             }
           }
@@ -142,14 +190,26 @@ function scanRulesAndMemory(workspaceDir, options = {}) {
   const files = [];
   const seen = new Set();
 
-  const addFile = (absPath, displayName, meta) => {
+  const addFile = (absPath, displayName, meta, sourceLayer) => {
     const norm = path.resolve(absPath).toLowerCase();
     if (seen.has(norm)) return;
     const text = safeReadFile(absPath);
     if (!text) return;
     seen.add(norm);
     const tokens = estimateTokens(text);
-    files.push({ name: displayName, meta, tokens, size: fmtSizeK(tokens), path: absPath });
+    const bytes = Buffer.byteLength(text, 'utf8');
+    files.push({
+      name: displayName,
+      kind: 'rule',
+      sourceLayer,
+      filePath: absPath,
+      displayPath: formatDisplayPath(absPath),
+      meta,
+      tokens,
+      size: fmtSizeK(tokens),
+      bytes,
+      path: absPath,
+    });
   };
 
   // Global plugin rules
@@ -162,7 +222,12 @@ function scanRulesAndMemory(workspaceDir, options = {}) {
         if (!fs.existsSync(rDir)) continue;
         for (const f of fs.readdirSync(rDir)) {
           if (f.endsWith('.md')) {
-            addFile(path.join(rDir, f), `${pe.name}/rules/${f}`, pe.name === 'context-cache' ? 'plugin slim rule' : 'global plugin rule');
+            addFile(
+              path.join(rDir, f),
+              `${pe.name}/rules/${f}`,
+              pe.name === 'context-cache' ? 'plugin slim rule' : 'global plugin rule',
+              'plugin'
+            );
           }
         }
       }
@@ -177,7 +242,7 @@ function scanRulesAndMemory(workspaceDir, options = {}) {
     try {
       for (const f of fs.readdirSync(globalRulesDir)) {
         if (f.endsWith('.md')) {
-          addFile(path.join(globalRulesDir, f), `global/rules/${f}`, 'global rule');
+          addFile(path.join(globalRulesDir, f), `global/rules/${f}`, 'global rule', 'global');
         }
       }
     } catch {
@@ -189,14 +254,14 @@ function scanRulesAndMemory(workspaceDir, options = {}) {
   if (workspaceDir && fs.existsSync(workspaceDir)) {
     const baseName = path.basename(workspaceDir);
     for (const fname of ['AGENTS.md', 'GEMINI.md']) {
-      addFile(path.join(workspaceDir, fname), `${baseName}/${fname}`, 'workspace rule');
+      addFile(path.join(workspaceDir, fname), `${baseName}/${fname}`, 'workspace rule', 'workspace');
     }
     const wsRulesDir = path.join(workspaceDir, '.agents', 'rules');
     if (fs.existsSync(wsRulesDir)) {
       try {
         for (const f of fs.readdirSync(wsRulesDir)) {
           if (f.endsWith('.md')) {
-            addFile(path.join(wsRulesDir, f), `${baseName}/.agents/rules/${f}`, 'workspace rule');
+            addFile(path.join(wsRulesDir, f), `${baseName}/.agents/rules/${f}`, 'workspace rule', 'workspace');
           }
         }
       } catch {
@@ -208,11 +273,18 @@ function scanRulesAndMemory(workspaceDir, options = {}) {
   // Active SessionStart Compact Brief from vault
   const brief = buildCompactBrief({ projectDir: workspaceDir }, options);
   if (brief.tokens > 0) {
+    const briefPreview = redactText(brief.text || '');
     files.push({
       name: 'SessionStart Compact Brief',
+      kind: 'brief',
+      sourceLayer: 'vault',
+      filePath: '',
+      displayPath: brief.projectStoragePath || '',
       meta: `vault (${brief.count} items)`,
       tokens: brief.tokens,
       size: fmtSizeK(brief.tokens),
+      bytes: Buffer.byteLength(briefPreview, 'utf8'),
+      previewText: briefPreview,
     });
   }
 
@@ -243,21 +315,23 @@ function scanSkillsAndAgents(steps, workspaceDir, options = {}) {
   }
 
   const skillRoots = [
-    path.join(appDir, 'builtin', 'skills'),
-    path.join(configRoot, 'skills'),
+    { dir: path.join(appDir, 'builtin', 'skills'), sourceLayer: 'builtin' },
+    { dir: path.join(configRoot, 'skills'), sourceLayer: 'global' },
   ];
   const pluginsDir = path.join(configRoot, 'plugins');
   if (fs.existsSync(pluginsDir)) {
     try {
       for (const pe of fs.readdirSync(pluginsDir, { withFileTypes: true })) {
-        if (pe.isDirectory()) skillRoots.push(path.join(pluginsDir, pe.name, 'skills'));
+        if (pe.isDirectory()) {
+          skillRoots.push({ dir: path.join(pluginsDir, pe.name, 'skills'), sourceLayer: 'plugin' });
+        }
       }
     } catch {
       // ignore
     }
   }
   if (workspaceDir) {
-    skillRoots.push(path.join(workspaceDir, '.agents', 'skills'));
+    skillRoots.push({ dir: path.join(workspaceDir, '.agents', 'skills'), sourceLayer: 'workspace' });
   }
 
   const skills = [];
@@ -266,7 +340,7 @@ function scanSkillsAndAgents(steps, workspaceDir, options = {}) {
   let loadedSkillsTokens = 0;
   let loadedSkillsCount = 0;
 
-  for (const root of skillRoots) {
+  for (const { dir: root, sourceLayer } of skillRoots) {
     if (!fs.existsSync(root)) continue;
     let entries = [];
     try {
@@ -291,30 +365,39 @@ function scanSkillsAndAgents(steps, workspaceDir, options = {}) {
         loadedSkillsCount++;
         skills.push({
           name: e.name,
+          kind: 'skill',
+          sourceLayer,
+          filePath: skillFile,
+          displayPath: formatDisplayPath(skillFile),
           meta: 'skill (loaded)',
           tokens: tok,
           size: fmtSizeK(tok),
+          bytes: Buffer.byteLength(fullText, 'utf8'),
         });
       }
     }
   }
 
   // Custom agents
-  const agentDirs = [path.join(configRoot, 'agents')];
+  const agentDirs = [{ dir: path.join(configRoot, 'agents'), sourceLayer: 'global' }];
   if (fs.existsSync(pluginsDir)) {
     try {
       for (const pe of fs.readdirSync(pluginsDir, { withFileTypes: true })) {
-        if (pe.isDirectory()) agentDirs.push(path.join(pluginsDir, pe.name, 'agents'));
+        if (pe.isDirectory()) {
+          agentDirs.push({ dir: path.join(pluginsDir, pe.name, 'agents'), sourceLayer: 'plugin' });
+        }
       }
     } catch {
       // ignore
     }
   }
-  if (workspaceDir) agentDirs.push(path.join(workspaceDir, '.agents', 'agents'));
+  if (workspaceDir) {
+    agentDirs.push({ dir: path.join(workspaceDir, '.agents', 'agents'), sourceLayer: 'workspace' });
+  }
 
   const agents = [];
   let agentTokens = 0;
-  for (const dir of agentDirs) {
+  for (const { dir, sourceLayer } of agentDirs) {
     if (!fs.existsSync(dir)) continue;
     try {
       for (const f of fs.readdirSync(dir)) {
@@ -326,9 +409,14 @@ function scanSkillsAndAgents(steps, workspaceDir, options = {}) {
         agentTokens += tok;
         agents.push({
           name: f.replace(/\.md$/i, ''),
+          kind: 'agent',
+          sourceLayer,
+          filePath: fullPath,
+          displayPath: formatDisplayPath(fullPath),
           meta: 'custom subagent',
           tokens: tok,
           size: fmtSizeK(tok),
+          bytes: Buffer.byteLength(text, 'utf8'),
         });
       }
     } catch {
@@ -496,10 +584,20 @@ export function inspectContext(params = {}, options = {}) {
       title: 'MCP servers & tools',
       stats: { deferred: mcpScan.deferredCount, eager: mcpScan.eagerCount },
       count: `${mcpScan.deferredCount} deferred / ${mcpScan.eagerCount} eager`,
-      items: mcpScan.servers.slice(0, 12).map((s) => ({
+      items: mcpScan.servers.slice(0, 50).map((s) => ({
         name: s.name,
+        kind: s.kind || 'mcp_server',
+        mode: s.mode,
+        sourceLayer: s.sourceLayer || 'global',
+        filePath: s.filePath || '',
+        displayPath: s.displayPath || '',
+        tokens: s.tokens,
+        toolCount: s.toolCount,
+        deferredCount: s.deferredCount ?? (s.mode === 'deferred' ? s.toolCount : 0),
+        eagerCount: s.eagerCount ?? (s.mode === 'eager' ? s.toolCount : 0),
         meta: s.meta,
         size: s.size,
+        tools: Array.isArray(s.tools) ? s.tools : [],
       })),
     },
     {
@@ -507,10 +605,17 @@ export function inspectContext(params = {}, options = {}) {
       title: 'Memory & Rules files',
       stats: { files: rulesScan.files.length },
       count: `${rulesScan.files.length} files`,
-      items: rulesScan.files.slice(0, 12).map((f) => ({
+      items: rulesScan.files.slice(0, 50).map((f) => ({
         name: f.name,
+        kind: f.kind || 'rule',
+        sourceLayer: f.sourceLayer || 'workspace',
+        filePath: f.filePath || '',
+        displayPath: f.displayPath || '',
+        tokens: f.tokens,
+        bytes: f.bytes || 0,
         meta: f.meta,
         size: f.size,
+        ...(f.previewText ? { previewText: f.previewText } : {}),
       })),
     },
     {
@@ -518,8 +623,14 @@ export function inspectContext(params = {}, options = {}) {
       title: 'Active Skills & Custom Agents',
       stats: { active: skillScan.loadedSkillsCount, agents: skillScan.agents.length },
       count: `${skillScan.loadedSkillsCount} active / ${skillScan.agents.length} agents`,
-      items: [...skillScan.loadedSkills, ...skillScan.agents].slice(0, 12).map((it) => ({
+      items: [...skillScan.loadedSkills, ...skillScan.agents].slice(0, 50).map((it) => ({
         name: it.name,
+        kind: it.kind || 'skill',
+        sourceLayer: it.sourceLayer || 'global',
+        filePath: it.filePath || '',
+        displayPath: it.displayPath || '',
+        tokens: it.tokens,
+        bytes: it.bytes || 0,
         meta: it.meta,
         size: it.size,
       })),
@@ -608,5 +719,128 @@ export function inspectContext(params = {}, options = {}) {
     deferred,
     inventories,
     alerts,
+  };
+}
+
+const BLOCKED_SECRET_FILE_RE = /^(?:\.env(?:\..+)?|id_(?:rsa|ed25519|ecdsa)(?:\.pub)?|.*\.(?:pem|key|p12|pfx|jks))$/i;
+
+function safeRealpath(p) {
+  const abs = path.resolve(p);
+  try {
+    if (fs.existsSync(abs)) {
+      return typeof fs.realpathSync.native === 'function' ? fs.realpathSync.native(abs) : fs.realpathSync(abs);
+    }
+  } catch {
+    // ignore
+  }
+  return abs;
+}
+
+function isPathInsideRoot(targetPath, rootPath) {
+  if (!targetPath || !rootPath) return false;
+  const normTarget = path.resolve(targetPath).toLowerCase();
+  const normRoot = path.resolve(rootPath).toLowerCase();
+  if (normTarget === normRoot || normTarget.startsWith(`${normRoot}${path.sep}`)) return true;
+  const realTarget = safeRealpath(targetPath).toLowerCase();
+  const realRoot = safeRealpath(rootPath).toLowerCase();
+  return realTarget === realRoot || realTarget.startsWith(`${realRoot}${path.sep}`);
+}
+
+function inferAssetSourceLayer(realPath, workspaceDir, options = {}) {
+  const appDir = getAppDataDir(options);
+  const configRoot = getConfigRoot(options);
+  if (isPathInsideRoot(realPath, path.join(appDir, 'builtin'))) return 'builtin';
+  if (isPathInsideRoot(realPath, path.join(configRoot, 'plugins'))) return 'plugin';
+  if (isPathInsideRoot(realPath, configRoot) || isPathInsideRoot(realPath, appDir)) return 'global';
+  if (workspaceDir && isPathInsideRoot(realPath, workspaceDir)) return 'workspace';
+  return 'workspace';
+}
+
+function inferAssetKind(realPath) {
+  const base = path.basename(realPath).toLowerCase();
+  const norm = realPath.replace(/\\/g, '/').toLowerCase();
+  if (base === 'skill.md') return 'skill';
+  if (norm.includes('/agents/') && base.endsWith('.md')) return 'agent';
+  if (base === 'agents.md' || base === 'gemini.md' || norm.includes('/rules/')) return 'rule';
+  if (base === 'mcp_config.json' || norm.includes('/mcp/')) return 'mcp_server';
+  return 'file';
+}
+
+/**
+ * Strictly read-only, boundary-checked, redacted preview for mounted context assets
+ * (rules, skills, custom agents, MCP configs) within authorized Antigravity / workspace roots.
+ */
+export function previewContextAsset(params = {}, options = {}) {
+  const rawFilePath = params.filePath;
+  if (!rawFilePath || typeof rawFilePath !== 'string' || rawFilePath.includes('\0')) {
+    throw new Error('无效的资产文件路径');
+  }
+
+  const workspaceDir = params.projectDir || options.projectDir || process.cwd();
+  const absPath = path.resolve(rawFilePath);
+
+  // Build authorized root list (both logical and realpath variants to handle OS temp symlinks & Windows 8.3 paths cleanly)
+  const toReal = (p) => (typeof fs.realpathSync.native === 'function' ? fs.realpathSync.native(p) : fs.realpathSync(p));
+  const rawRoots = [getConfigRoot(options), getAppDataDir(options), workspaceDir].filter(Boolean);
+  const allowedRoots = [];
+  for (const r of rawRoots) {
+    const resolvedRoot = path.resolve(r);
+    allowedRoots.push(resolvedRoot);
+    try {
+      if (fs.existsSync(resolvedRoot)) {
+        const realRoot = toReal(resolvedRoot);
+        if (realRoot.toLowerCase() !== resolvedRoot.toLowerCase()) {
+          allowedRoots.push(realRoot);
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  if (!allowedRoots.some((r) => isPathInsideRoot(absPath, r))) {
+    throw new Error('拒绝读取超出工作区或 Antigravity 配置边界的资产文件');
+  }
+
+  const baseName = path.basename(absPath);
+  if (BLOCKED_SECRET_FILE_RE.test(baseName)) {
+    throw new Error('拒绝直接预览敏感凭据或私钥文件');
+  }
+
+  if (!fs.existsSync(absPath)) {
+    throw new Error('目标资产文件不存在');
+  }
+  const stat = fs.statSync(absPath);
+  if (!stat.isFile()) {
+    throw new Error('目标路径不是可预览的普通文件');
+  }
+
+  const realPath = toReal(absPath);
+  if (!allowedRoots.some((r) => isPathInsideRoot(realPath, r))) {
+    throw new Error('拒绝通过符号链接越权读取外部文件');
+  }
+  if (BLOCKED_SECRET_FILE_RE.test(path.basename(realPath))) {
+    throw new Error('拒绝直接预览敏感凭据或私钥文件');
+  }
+
+  const raw = fs.readFileSync(realPath, 'utf8');
+  const MAX_CHARS = 24000;
+  const truncated = raw.length > MAX_CHARS;
+  const content = redactText(truncated ? raw.slice(0, MAX_CHARS) : raw);
+  const tokens = estimateTokens(raw);
+
+  return {
+    filePath: realPath,
+    displayPath: formatDisplayPath(realPath),
+    name: path.basename(realPath),
+    kind: inferAssetKind(realPath),
+    sourceLayer: inferAssetSourceLayer(realPath, workspaceDir, options),
+    bytes: stat.size,
+    lines: raw ? raw.split(/\r?\n/).length : 0,
+    tokens,
+    size: fmtSizeK(tokens),
+    truncated,
+    redacted: true,
+    content,
   };
 }

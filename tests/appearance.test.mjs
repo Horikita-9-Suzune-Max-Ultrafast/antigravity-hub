@@ -12,6 +12,7 @@ import {
   scanLocalFolderReadOnly,
   saveAppearanceState,
   loadAppearanceState,
+  compileRuntimeAppearance,
   pickNextWallpaper,
   emergencyDisableWallpaper,
   handleAppearanceAction,
@@ -44,7 +45,7 @@ function makeTempEnv() {
 test('Wallpaper library enforces format whitelist, 15 MiB circuit breaker, and safe deletion bounds', () => {
   const env = makeTempEnv();
   try {
-    assert.equal(WALLPAPER_PRESETS.length, 3);
+    assert.equal(WALLPAPER_PRESETS.length, 0);
 
     // Reject video/unsupported format
     assert.throws(
@@ -121,7 +122,8 @@ test('Read-only local folder scan, rotation, runtime JSON compile, and CLI emerg
 test('Extended fail-open renderer & main runtime scripts execute IPC handlers cleanly', () => {
   const env = makeTempEnv();
   try {
-    saveAppearanceState({ enabled: true, mode: 'preset', presetId: 'aurora-mist' }, env.options);
+    const imgPath = path.join(env.folderDir, 'mountain.png');
+    saveAppearanceState({ enabled: true, mode: 'image', activeWallpaperPath: imgPath }, env.options);
     const { i18nBundleFile, i18nDir } = getDataPaths(env.options);
     fs.mkdirSync(i18nDir, { recursive: true });
     fs.writeFileSync(i18nBundleFile, JSON.stringify({ version: 1, ui: { Hello: '你好' }, menu: {}, patterns: [] }));
@@ -159,9 +161,10 @@ test('Extended fail-open renderer & main runtime scripts execute IPC handlers cl
     const appRes = handlers.get('agy-hub:get-appearance')(null, -1);
     assert.equal(appRes.changed, true);
     assert.equal(appRes.config.enabled, true);
-    assert.equal(appRes.config.preset.id, 'aurora-mist');
+    assert.equal(appRes.config.mode, 'image');
+    assert.equal(appRes.config.preset, null);
+    assert.equal(appRes.config.activeWallpaperPath, imgPath);
 
-    const imgPath = path.join(env.folderDir, 'mountain.png');
     const imgRes = handlers.get('agy-hub:read-wallpaper')(null, imgPath);
     assert.equal(imgRes.ok, true);
     assert.equal(imgRes.mime, 'image/png');
@@ -290,6 +293,121 @@ test('Rotation source filtering, library subset selection, 1-min custom interval
     assert.ok(rendererSrc.includes('preloadAndDecode'), 'renderer must pre-decode image before crossfade');
     assert.ok(rendererSrc.includes('data-wp-slot'), 'renderer must manage dual A/B wallpaper slots');
     assert.doesNotThrow(() => new Function(rendererSrc));
+  } finally {
+    env.cleanup();
+  }
+});
+
+test('Legacy gradient preset configs silently fall back to first local wallpaper or disabled state', () => {
+  const env = makeTempEnv();
+  try {
+    const { appearanceStateFile } = getDataPaths(env.options);
+    fs.mkdirSync(path.dirname(appearanceStateFile), { recursive: true });
+
+    // 1. Legacy preset mode with empty library -> silently disables wallpaper
+    fs.writeFileSync(
+      appearanceStateFile,
+      JSON.stringify({
+        version: 1,
+        enabled: true,
+        mode: 'preset',
+        presetId: 'aurora-mist',
+        activeWallpaperPath: '',
+        rotationSource: 'preset',
+      }),
+      'utf8'
+    );
+    const loadedEmpty = loadAppearanceState(env.options);
+    assert.equal(loadedEmpty.enabled, false);
+    assert.equal(loadedEmpty.mode, 'image');
+    assert.equal(loadedEmpty.presetId, '');
+    assert.equal(loadedEmpty.activeWallpaperPath, '');
+    assert.equal(loadedEmpty.rotationSource, 'all');
+
+    const compiledEmpty = compileRuntimeAppearance(env.options, {
+      enabled: true,
+      mode: 'preset',
+      presetId: 'nebula-dusk',
+    });
+    assert.equal(compiledEmpty.payload.enabled, false);
+    assert.equal(compiledEmpty.payload.mode, 'image');
+    assert.equal(compiledEmpty.payload.preset, null);
+    assert.equal(compiledEmpty.payload.activeWallpaperPath, '');
+
+    // 2. Legacy activeWallpaper / theme bindings pointing to deleted preset IDs with empty library -> disabled
+    fs.writeFileSync(
+      appearanceStateFile,
+      JSON.stringify({
+        version: 1,
+        enabled: true,
+        mode: 'image',
+        activeWallpaper: 'minimal-paper',
+        separateThemeWallpapers: true,
+        darkWallpaperPath: 'aurora-mist',
+        lightWallpaperPath: 'preset:nebula-dusk',
+      }),
+      'utf8'
+    );
+    const loadedThemeEmpty = loadAppearanceState(env.options);
+    assert.equal(loadedThemeEmpty.enabled, false);
+    assert.equal(loadedThemeEmpty.separateThemeWallpapers, false);
+    assert.equal(loadedThemeEmpty.darkWallpaperPath, '');
+    assert.equal(loadedThemeEmpty.lightWallpaperPath, '');
+    assert.equal(loadedThemeEmpty.activeWallpaperPath, '');
+
+    // 3. Import local wallpapers -> legacy preset config silently falls back to first local wallpaper
+    const lib1 = importWallpaperFromBase64({ fileName: 'first.png', base64: TINY_PNG_B64 }, env.options);
+    fs.writeFileSync(
+      appearanceStateFile,
+      JSON.stringify({
+        version: 1,
+        enabled: true,
+        mode: 'preset',
+        presetId: 'aurora-mist',
+        activeWallpaperPath: '',
+      }),
+      'utf8'
+    );
+    const loadedWithLib = loadAppearanceState(env.options);
+    assert.equal(loadedWithLib.enabled, true);
+    assert.equal(loadedWithLib.mode, 'image');
+    assert.equal(loadedWithLib.presetId, '');
+    assert.equal(loadedWithLib.activeWallpaperPath, lib1.filePath);
+
+    const compiledWithLib = compileRuntimeAppearance(env.options);
+    assert.equal(compiledWithLib.payload.enabled, true);
+    assert.equal(compiledWithLib.payload.preset, null);
+    assert.equal(compiledWithLib.payload.activeWallpaperPath, lib1.filePath);
+
+    // 4. Legacy dark/light preset bindings with local library -> fall back to first local wallpaper
+    fs.writeFileSync(
+      appearanceStateFile,
+      JSON.stringify({
+        version: 1,
+        enabled: true,
+        mode: 'image',
+        separateThemeWallpapers: true,
+        darkWallpaperPath: 'aurora-mist',
+        lightWallpaperPath: 'nebula-dusk',
+      }),
+      'utf8'
+    );
+    const loadedThemeWithLib = loadAppearanceState(env.options);
+    assert.equal(loadedThemeWithLib.enabled, true);
+    assert.equal(loadedThemeWithLib.separateThemeWallpapers, true);
+    assert.equal(loadedThemeWithLib.darkWallpaperPath, lib1.filePath);
+    assert.equal(loadedThemeWithLib.lightWallpaperPath, lib1.filePath);
+
+    // 5. Status reports empty presets list, and deleting last active wallpaper disables cleanly (no preset mode)
+    saveAppearanceState({ enabled: true, mode: 'image', activeWallpaperPath: lib1.filePath, separateThemeWallpapers: false, darkWallpaperPath: '', lightWallpaperPath: '' }, env.options);
+    const st = handleAppearanceAction({ action: 'status' }, env.options);
+    assert.deepEqual(st.presets, []);
+
+    const delLast = handleAppearanceAction({ action: 'delete_wallpaper', id: lib1.id }, env.options);
+    assert.equal(delLast.ok, true);
+    assert.equal(delLast.status.state.mode, 'image');
+    assert.equal(delLast.status.state.activeWallpaperPath, '');
+    assert.equal(delLast.status.state.enabled, false);
   } finally {
     env.cleanup();
   }
