@@ -69,6 +69,8 @@ export function createGovernanceModule({
   positionIndicator,
   onOpenSettings,
   getProjectDir,
+  canSendMessage,
+  sendToAgent,
 }) {
   const state = {
     activeSubTab: 'overview', // 'overview' | 'extensions' | 'harness' | 'profiles'
@@ -78,6 +80,7 @@ export function createGovernanceModule({
     extQuery: '',
     harnessFilter: 'all', // 'all' | 'rules' | 'skills' | 'hooks'
     pendingConfirm: null, // { type: 'profile' | 'rollback', id, title, diff }
+    showIgnored: false,
   };
 
   function byId(id) {
@@ -156,7 +159,14 @@ export function createGovernanceModule({
 
     const metaEl = byId('govHealthSummaryText');
     if (metaEl) {
-      metaEl.textContent = `严重 ${lint.counts.errors} · 警告 ${lint.counts.warnings} · 提示 ${lint.counts.infos} · 隐私扫描 ${lint.counts.scannedFiles} 份文件（${lint.counts.secretHits} 处告警）`;
+      const parts = [
+        `严重 ${lint.counts.errors}`,
+        `警告 ${lint.counts.warnings}`,
+        `提示 ${lint.counts.infos}`,
+        `隐私扫描 ${lint.counts.scannedFiles} 份文件（${lint.counts.secretHits} 处告警）`,
+      ];
+      if (lint.counts.ignored > 0) parts.push(`已忽略 ${lint.counts.ignored} 项`);
+      metaEl.textContent = parts.join('  ');
     }
 
     const baseEl = byId('govBaselineTokens');
@@ -180,6 +190,20 @@ export function createGovernanceModule({
         .join('');
     }
 
+    const hasDirectSend = Boolean(canSendMessage?.());
+    const agentFixable = (lint.findings || []).filter(
+      (f) => f.remediation?.strategy === 'agent' && f.remediation?.prompt
+    );
+    const fixAllBtn = byId('govFixAllBtn');
+    if (fixAllBtn) {
+      fixAllBtn.classList.toggle('hidden', agentFixable.length === 0);
+      if (agentFixable.length > 0) {
+        fixAllBtn.textContent = hasDirectSend
+          ? `打包交给 Agent (${agentFixable.length})`
+          : `复制全部修复提示词 (${agentFixable.length})`;
+      }
+    }
+
     const listEl = byId('govLintFindingsList');
     if (listEl) {
       if (!lint.findings.length) {
@@ -189,18 +213,98 @@ export function createGovernanceModule({
           </div>`;
       } else {
         listEl.innerHTML = lint.findings
+          .map((f, idx) => {
+            const rem = f.remediation || {};
+            const strategy = rem.strategy || 'agent';
+            const btns = [];
+
+            if (strategy === 'secret_manual') {
+              if (f.absFile) {
+                btns.push(
+                  `<button type="button" class="agy-btn agy-btn-secondary text-xs" data-gov-preview-file="${esc(f.absFile)}" data-gov-preview-title="${esc(f.target || '脱敏预览')}">脱敏预览</button>`
+                );
+              }
+              if (rem.prompt) {
+                btns.push(
+                  `<button type="button" class="agy-btn agy-btn-secondary text-xs" data-gov-fix-idx="${idx}">安全改造提示词</button>`
+                );
+              }
+            } else if (strategy === 'local_toggle') {
+              if (rem.actionTargetTab) {
+                btns.push(
+                  `<button type="button" class="agy-btn agy-btn-primary text-xs" data-gov-jump-tab="${esc(rem.actionTargetTab)}" data-gov-jump-search="${esc(rem.searchHint || '')}">前往处理</button>`
+                );
+              }
+              if (rem.prompt) {
+                btns.push(
+                  `<button type="button" class="agy-btn agy-btn-secondary text-xs" data-gov-fix-idx="${idx}">${hasDirectSend ? '交给 Agent' : '修复提示词'}</button>`
+                );
+              }
+            } else {
+              if (rem.prompt) {
+                btns.push(
+                  `<button type="button" class="agy-btn agy-btn-primary text-xs" data-gov-fix-idx="${idx}">${hasDirectSend ? '交给 Agent' : '修复提示词'}</button>`
+                );
+              }
+              if (rem.actionTargetTab) {
+                btns.push(
+                  `<button type="button" class="agy-btn agy-btn-secondary text-xs" data-gov-jump-tab="${esc(rem.actionTargetTab)}" data-gov-jump-search="${esc(rem.searchHint || '')}">前往停用</button>`
+                );
+              }
+            }
+
+            if (f.id) {
+              btns.push(
+                `<button type="button" class="agy-btn agy-btn-secondary text-xs" data-gov-ignore-id="${esc(f.id)}">忽略</button>`
+              );
+            }
+
+            return `
+            <div class="px-5 py-3.5 flex flex-wrap items-start justify-between gap-3">
+              <div class="min-w-0 flex-1 space-y-1" style="min-width: min(240px, 100%);">
+                <div class="flex flex-wrap items-center gap-1.5">
+                  <span class="gov-sev-badge" data-sev="${esc(f.severity)}">${esc(SEVERITY_LABEL[f.severity] || f.severity)}</span>
+                  <span class="agy-pill text-xs">${esc(CATEGORY_LABEL[f.category] || f.category)}</span>
+                  ${f.isPluginManaged ? `<span class="agy-pill text-xs text-muted">已安装插件</span>` : ''}
+                  <span class="text-xs font-medium text-fg truncate">${esc(f.target || '')}</span>
+                </div>
+                <div class="text-xs text-fg leading-relaxed break-words">${esc(f.message)}</div>
+                ${rem.summary ? `<div class="text-xs text-muted leading-relaxed break-words">建议：${esc(rem.summary)}</div>` : ''}
+                ${f.file ? `<div class="text-[11px] text-muted mono-num truncate">${esc(f.file)}</div>` : ''}
+              </div>
+              <div class="shrink-0 flex flex-wrap items-center gap-1.5 pt-0.5">
+                ${btns.join('')}
+              </div>
+            </div>`;
+          })
+          .join('');
+      }
+    }
+
+    const ignoredList = lint.ignoredFindings || [];
+    const ignoredSec = byId('govIgnoredSection');
+    const ignoredCountEl = byId('govIgnoredCount');
+    const ignoredListEl = byId('govIgnoredList');
+    const ignoredChevron = byId('govIgnoredChevron');
+    if (ignoredSec && ignoredCountEl && ignoredListEl) {
+      ignoredSec.classList.toggle('hidden', ignoredList.length === 0);
+      ignoredCountEl.textContent = String(ignoredList.length);
+      ignoredListEl.classList.toggle('hidden', !state.showIgnored || ignoredList.length === 0);
+      if (ignoredChevron) ignoredChevron.textContent = state.showIgnored ? '收起' : '展开';
+      if (ignoredList.length > 0) {
+        ignoredListEl.innerHTML = ignoredList
           .map(
             (f) => `
-            <div class="px-5 py-3 flex items-start justify-between gap-3">
-              <div class="min-w-0 space-y-1">
+            <div class="px-5 py-3 flex items-center justify-between gap-3 opacity-80">
+              <div class="min-w-0 space-y-0.5">
                 <div class="flex flex-wrap items-center gap-1.5">
                   <span class="gov-sev-badge" data-sev="${esc(f.severity)}">${esc(SEVERITY_LABEL[f.severity] || f.severity)}</span>
                   <span class="agy-pill text-xs">${esc(CATEGORY_LABEL[f.category] || f.category)}</span>
                   <span class="text-xs font-medium text-fg truncate">${esc(f.target || '')}</span>
                 </div>
-                <div class="text-xs text-muted leading-relaxed break-words">${esc(f.message)}</div>
-                ${f.file ? `<div class="text-[11px] text-muted mono-num truncate">${esc(f.file)}</div>` : ''}
+                <div class="text-xs text-muted truncate">${esc(f.message)}</div>
               </div>
+              <button type="button" class="agy-btn agy-btn-secondary text-xs shrink-0" data-gov-unignore-id="${esc(f.id)}">恢复检查</button>
             </div>`
           )
           .join('');
@@ -364,7 +468,7 @@ export function createGovernanceModule({
           priority: r.priority,
           scope: SCOPE_LABEL[r.scope] || r.scope,
           name: r.name,
-          sub: `${r.sourceLabel} · ${r.lines} 行 · ${r.trigger}`,
+          sub: `${r.sourceLabel} / ${r.lines} 行 / ${r.trigger}`,
           tokens: r.tokens,
           active: r.active,
           shadowedBy: null,
@@ -380,7 +484,7 @@ export function createGovernanceModule({
           priority: sk.priority,
           scope: SCOPE_LABEL[sk.scope] || sk.scope,
           name: sk.name,
-          sub: `${sk.sourceLabel} · 描述 ~${sk.descTokens}t / 全文 ~${fmtK(sk.fullTokens)}t`,
+          sub: `${sk.sourceLabel} / 描述 ~${sk.descTokens}t / 全文 ~${fmtK(sk.fullTokens)}t`,
           tokens: sk.descTokens,
           active: sk.active && !sk.shadowedBy,
           shadowedBy: sk.shadowedBy,
@@ -396,7 +500,7 @@ export function createGovernanceModule({
           priority: h.scope === 'global' ? 2 : 3,
           scope: SCOPE_LABEL[h.scope] || h.scope,
           name: `${h.event}`,
-          sub: `${h.sourceLabel}${h.timeout ? ` · 超时 ${h.timeout}s` : ''}`,
+          sub: `${h.sourceLabel}${h.timeout ? ` / 超时 ${h.timeout}s` : ''}`,
           tokens: 0,
           active: h.active,
           shadowedBy: null,
@@ -526,7 +630,7 @@ export function createGovernanceModule({
                   <span class="text-xs font-medium text-fg mono-num truncate">${esc(sn.reason)}</span>
                   ${sn.baseline ? `<span class="agy-pill text-[11px] text-success" style="border-color: var(--success);">永久基线</span>` : ''}
                 </div>
-                <div class="text-[11px] text-muted mono-num truncate">${fmtTime(sn.createdAt)} · ${esc(sn.id)}</div>
+                <div class="text-[11px] text-muted mono-num truncate">${fmtTime(sn.createdAt)} | ${esc(sn.id)}</div>
               </div>
               <button type="button" class="agy-btn agy-btn-secondary agy-btn-sm text-xs shrink-0" data-gov-rollback="${esc(sn.id)}" ${sn.available ? '' : 'disabled'}>
                 预览回滚
@@ -572,7 +676,7 @@ export function createGovernanceModule({
       const titleEl = byId('govPreviewTitle');
       const pathEl = byId('govPreviewPath');
       const codeEl = byId('govPreviewContent');
-      if (titleEl) titleEl.textContent = `只读脱敏预览 · ${title || ''}`;
+      if (titleEl) titleEl.textContent = title ? `只读脱敏预览：${title}` : '只读脱敏预览';
       if (pathEl) pathEl.textContent = `${res.displayPath || filePath}（${res.lines || 0} 行${res.truncated ? '，已截断' : ''}）`;
       if (codeEl) codeEl.textContent = res.content || '(空文件)';
       if (modal) modal.classList.remove('hidden');
@@ -874,6 +978,131 @@ export function createGovernanceModule({
     }
   }
 
+  function openLintFixModal({ title, prompt, notice = '', noticeTone = 'info' }) {
+    const modal = byId('govLintFixModal');
+    const titleEl = byId('govLintFixTitle');
+    const noticeEl = byId('govLintFixNotice');
+    const inputEl = byId('govLintFixPromptInput');
+    const sendBtn = byId('govLintFixSendBtn');
+    const copyBtn = byId('govLintFixCopyBtn');
+    const hintEl = byId('govLintFixSurfaceHint');
+    if (!modal || !inputEl) return;
+
+    if (titleEl) titleEl.textContent = title || '修复提示词预览';
+    inputEl.value = String(prompt || '');
+
+    if (noticeEl) {
+      if (notice) {
+        noticeEl.textContent = notice;
+        noticeEl.classList.remove('hidden');
+        noticeEl.style.borderColor =
+          noticeTone === 'danger' ? 'var(--danger)' : noticeTone === 'warning' ? 'var(--warning)' : 'var(--border)';
+        noticeEl.style.color =
+          noticeTone === 'danger' ? 'var(--danger)' : noticeTone === 'warning' ? 'var(--warning)' : 'var(--muted)';
+      } else {
+        noticeEl.classList.add('hidden');
+      }
+    }
+
+    const directSend = Boolean(canSendMessage?.());
+    if (sendBtn) sendBtn.classList.toggle('hidden', !directSend);
+    if (hintEl) hintEl.classList.toggle('hidden', directSend);
+    if (copyBtn) {
+      copyBtn.classList.toggle('agy-btn-primary', !directSend);
+      copyBtn.classList.toggle('agy-btn-secondary', directSend);
+    }
+
+    modal.classList.remove('hidden');
+  }
+
+  function closeLintFixModal() {
+    byId('govLintFixModal')?.classList.add('hidden');
+  }
+
+  function handleOpenFindingFix(idx) {
+    const finding = state.overview?.lint?.findings?.[Number(idx)];
+    if (!finding?.remediation?.prompt) return;
+    let notice = '';
+    let noticeTone = 'info';
+    if (finding.category === 'secret') {
+      notice = '安全提示：直接让 Agent 读取含明文密钥的文件会使原文进入上下文，建议优先自行改为环境变量，或确认后再发送此安全改造提示词。';
+      noticeTone = 'danger';
+    } else if (finding.isPluginManaged) {
+      notice = '该文件位于已安装插件目录，修改可能在插件更新后被覆盖，提示词已自动附加确认提醒。';
+      noticeTone = 'warning';
+    }
+    openLintFixModal({
+      title: `修复建议：${finding.target || finding.code}`,
+      prompt: finding.remediation.prompt,
+      notice,
+      noticeTone,
+    });
+  }
+
+  function handleOpenBatchFix() {
+    const findings = (state.overview?.lint?.findings || []).filter(
+      (f) => f.remediation?.strategy === 'agent' && f.remediation?.prompt
+    );
+    if (!findings.length) {
+      showToast('当前没有可打包交给 Agent 的体检项', 'info');
+      return;
+    }
+    const hasPluginManaged = findings.some((f) => f.isPluginManaged);
+    const lines = [
+      `请按顺序帮我排查并修复 Antigravity Hub 离线体检发现的以下 ${findings.length} 项问题：`,
+      '',
+    ];
+    findings.forEach((f, i) => {
+      lines.push(`${i + 1}. [${CATEGORY_LABEL[f.category] || f.category}] ${f.target || f.code}`);
+      lines.push(`   - 现象：${f.message}`);
+      if (f.file) lines.push(`   - 文件：${f.file}`);
+      if (f.remediation?.summary) lines.push(`   - 目标：${f.remediation.summary}`);
+    });
+    lines.push('');
+    lines.push('执行要求：逐项读取相关文件并给出最小必要改动；修改前简要说明方案，不要改动无关内容。');
+    if (hasPluginManaged) {
+      lines.push('注意：部分文件位于已安装插件目录，更新插件后可能被覆盖，请对插件目录内的改动先征得我确认再写入。');
+    }
+
+    openLintFixModal({
+      title: `批量修复提示词（共 ${findings.length} 项）`,
+      prompt: lines.join('\n'),
+      notice: hasPluginManaged ? '包含已安装插件目录内的文件，提示词已自动提醒 Agent 修改前先征得确认。' : '',
+      noticeTone: 'warning',
+    });
+  }
+
+  async function handleSetLintIgnore(findingId, ignored) {
+    try {
+      const res = await callAppTool('app_governance_manage', {
+        action: 'set_lint_ignore',
+        findingId,
+        ignored,
+        projectDir: getProjectDir?.() || undefined,
+      });
+      if (res?.overview) {
+        state.overview = res.overview;
+        renderAll();
+      }
+      showToast(res?.result?.message || (ignored ? '已忽略该体检项' : '已恢复该体检项'), 'success');
+    } catch (err) {
+      showToast(err.message || String(err), 'error');
+    }
+  }
+
+  function handleJumpToTarget(tab, searchHint) {
+    setSubTab(tab);
+    if (tab === 'extensions' && searchHint) {
+      const inp = byId('govExtSearch');
+      state.extQuery = searchHint;
+      if (inp) {
+        inp.value = searchHint;
+        inp.focus();
+      }
+      renderExtensionsPanel();
+    }
+  }
+
   function init() {
     document.querySelectorAll('#govSegNav [data-gov-tab]').forEach((btn) => {
       btn.addEventListener('click', () => setSubTab(btn.dataset.govTab));
@@ -881,6 +1110,11 @@ export function createGovernanceModule({
 
     byId('govRefreshBtn')?.addEventListener('click', () => void loadOverview(true));
     byId('govSettingsBtn')?.addEventListener('click', () => onOpenSettings?.());
+    byId('govFixAllBtn')?.addEventListener('click', () => handleOpenBatchFix());
+    byId('govIgnoredToggleBtn')?.addEventListener('click', () => {
+      state.showIgnored = !state.showIgnored;
+      renderOverviewPanel();
+    });
 
     byId('govExtSearch')?.addEventListener('input', (e) => {
       state.extQuery = e.target.value || '';
@@ -925,6 +1159,22 @@ export function createGovernanceModule({
     byId('module-governance')?.addEventListener('click', (e) => {
       const target = e.target.closest('button');
       if (!target) return;
+      if (target.dataset.govFixIdx !== undefined) {
+        handleOpenFindingFix(target.dataset.govFixIdx);
+        return;
+      }
+      if (target.dataset.govJumpTab) {
+        handleJumpToTarget(target.dataset.govJumpTab, target.dataset.govJumpSearch || '');
+        return;
+      }
+      if (target.dataset.govIgnoreId) {
+        void handleSetLintIgnore(target.dataset.govIgnoreId, true);
+        return;
+      }
+      if (target.dataset.govUnignoreId) {
+        void handleSetLintIgnore(target.dataset.govUnignoreId, false);
+        return;
+      }
       if (target.dataset.govTogglePlugin) {
         const nextEnabled = target.dataset.enabled !== 'true';
         void handleTogglePlugin(target.dataset.govTogglePlugin, nextEnabled);
@@ -990,6 +1240,37 @@ export function createGovernanceModule({
     byId('govConfirmCancelBtn')?.addEventListener('click', closeConfirmDialog);
     byId('govConfirmCloseBtn')?.addEventListener('click', closeConfirmDialog);
     byId('govPreviewCloseBtn')?.addEventListener('click', () => byId('govPreviewModal')?.classList.add('hidden'));
+
+    byId('govLintFixCloseBtn')?.addEventListener('click', closeLintFixModal);
+    byId('govLintFixCancelBtn')?.addEventListener('click', closeLintFixModal);
+    byId('govLintFixCopyBtn')?.addEventListener('click', async () => {
+      const txt = String(byId('govLintFixPromptInput')?.value || '').trim();
+      if (!txt) return;
+      try {
+        await navigator.clipboard?.writeText(txt);
+        showToast('已复制修复提示词，切回任意对话粘贴发送即可', 'success');
+      } catch {
+        showToast('复制失败，请手动选中文本框内容复制', 'warning');
+      }
+    });
+    byId('govLintFixSendBtn')?.addEventListener('click', async () => {
+      const txt = String(byId('govLintFixPromptInput')?.value || '').trim();
+      if (!txt) return;
+      try {
+        const res = await sendToAgent?.(txt);
+        closeLintFixModal();
+        if (res?.mode === 'sent') {
+          showToast('已发送修复任务给当前对话 Agent', 'success');
+        } else if (res?.mode === 'attached') {
+          showToast('已附着到下条消息上下文，发送任意消息即可触发修复', 'success');
+        } else {
+          await navigator.clipboard?.writeText(txt).catch(() => {});
+          showToast('当前视图不支持直发，已复制到剪贴板', 'info');
+        }
+      } catch (err) {
+        showToast(`发送失败: ${err.message || err}`, 'error');
+      }
+    });
   }
 
   async function activate(subTab = null) {

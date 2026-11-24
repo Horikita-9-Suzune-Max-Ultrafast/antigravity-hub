@@ -510,7 +510,10 @@ export function loadGovernancePreferences(options = {}) {
       }
     }
   }
-  return { pinnedPlugins, categories };
+  const ignoredFindings = Array.isArray(raw?.ignoredFindings)
+    ? [...new Set(raw.ignoredFindings.map((x) => String(x || '').trim()).filter(Boolean))]
+    : [];
+  return { pinnedPlugins, categories, ignoredFindings };
 }
 
 export function saveGovernancePreferences(prefs, options = {}) {
@@ -519,6 +522,7 @@ export function saveGovernancePreferences(prefs, options = {}) {
   const normalized = {
     pinnedPlugins: [...new Set((prefs?.pinnedPlugins || []).map((x) => String(x || '').trim()).filter(Boolean))],
     categories: {},
+    ignoredFindings: [...new Set((prefs?.ignoredFindings || []).map((x) => String(x || '').trim()).filter(Boolean))],
     updatedAt: new Date().toISOString(),
   };
   if (prefs?.categories && typeof prefs.categories === 'object') {
@@ -609,5 +613,38 @@ export function setItemCategory(itemKey, category, options = {}) {
     category: cat || 'auto',
     preferences: saved,
     message: `已更新分类为「${labelMap[cat || 'auto'] || cat}」`,
+  };
+}
+
+/**
+ * Ignore or unignore a specific lint finding by its deterministic findingId.
+ */
+export function setLintFindingIgnored(findingId, ignored, options = {}) {
+  const id = String(findingId || '').trim();
+  if (!id) throw new Error('findingId 不能为空');
+  const prefs = loadGovernancePreferences(options);
+  const set = new Set(prefs.ignoredFindings || []);
+  if (ignored) {
+    set.add(id);
+  } else {
+    set.delete(id);
+  }
+  const saved = saveGovernancePreferences({ ...prefs, ignoredFindings: [...set] }, options);
+
+  appendAuditLog(
+    {
+      action: 'set_lint_ignore',
+      findingId: id,
+      ignored: Boolean(ignored),
+    },
+    options
+  );
+
+  return {
+    ok: true,
+    findingId: id,
+    ignored: Boolean(ignored),
+    preferences: saved,
+    message: ignored ? '已忽略该体检项（可随时在底部恢复）' : '已恢复该体检项检查',
   };
 }

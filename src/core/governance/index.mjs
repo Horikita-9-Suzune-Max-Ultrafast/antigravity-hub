@@ -13,6 +13,7 @@ import {
   loadGovernancePreferences,
   setPluginPinned,
   setItemCategory,
+  setLintFindingIgnored,
 } from './guardrails.mjs';
 import {
   listBuiltinProfiles,
@@ -34,6 +35,7 @@ export {
   loadGovernancePreferences,
   setPluginPinned,
   setItemCategory,
+  setLintFindingIgnored,
   listBuiltinProfiles,
   listProfiles,
   saveProfile,
@@ -124,6 +126,10 @@ export function handleGovernanceAction(args = {}, options = {}) {
     }
     case 'set_item_category': {
       const result = setItemCategory(args.itemKey, args.category, options);
+      return { result, overview: getGovernanceOverview({ projectDir }, options) };
+    }
+    case 'set_lint_ignore': {
+      const result = setLintFindingIgnored(args.findingId, Boolean(args.ignored), options);
       return { result, overview: getGovernanceOverview({ projectDir }, options) };
     }
     case 'list_profiles':

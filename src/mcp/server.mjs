@@ -23,6 +23,7 @@ import { listConversations } from '../core/transcript-parser.mjs';
 import { handleI18nAction } from '../core/i18n/index.mjs';
 import { handleGovernanceAction } from '../core/governance/index.mjs';
 import { handleAppearanceAction } from '../core/appearance/index.mjs';
+import { restartAntigravity } from '../core/client-restart.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -32,7 +33,7 @@ export const APP_RESOURCE_URI = 'ui://context-cache/dashboard.html';
 export const APP_RESOURCE_MIME = 'text/html;profile=mcp-app';
 export const SERVER_INFO = {
   name: 'context-cache-server',
-  version: '1.5.0',
+  version: '1.5.2',
 };
 
 const APP_ONLY_META = { ui: { visibility: ['app'] } };
@@ -221,17 +222,19 @@ export const TOOL_DEFINITIONS = [
   {
     name: 'app_config_manage',
     title: 'App: Manage Plugin Settings & Popout Window',
-    description: 'Private UI tool for reading/updating plugin settings, syncing active session across views, and controlling the optional 127.0.0.1 popout window.',
+    description: 'Private UI tool for reading/updating plugin settings (including uiLanguage), syncing active session across views, safely restarting Antigravity, and controlling the optional 127.0.0.1 popout window.',
     inputSchema: {
       type: 'object',
       required: ['action'],
       properties: {
-        action: { type: 'string', enum: ['get', 'update', 'open_popout', 'close_popout', 'set_active_session'] },
+        action: { type: 'string', enum: ['get', 'update', 'open_popout', 'close_popout', 'set_active_session', 'restart_antigravity'] },
         patch: { type: 'object' },
         conversationId: { type: 'string' },
         projectDir: { type: 'string' },
         forceNew: { type: 'boolean' },
         theme: { type: 'string', enum: ['light', 'dark'] },
+        dryRun: { type: 'boolean' },
+        installDir: { type: 'string' },
       },
       additionalProperties: false,
     },
@@ -316,6 +319,7 @@ export const TOOL_DEFINITIONS = [
             'toggle_mcp',
             'set_plugin_pin',
             'set_item_category',
+            'set_lint_ignore',
             'list_profiles',
             'save_profile',
             'delete_profile',
@@ -334,6 +338,8 @@ export const TOOL_DEFINITIONS = [
         pinned: { type: 'boolean' },
         itemKey: { type: 'string' },
         category: { type: 'string' },
+        findingId: { type: 'string' },
+        ignored: { type: 'boolean' },
         profileId: { type: 'string' },
         name: { type: 'string' },
         description: { type: 'string' },
@@ -479,7 +485,7 @@ export function createMcpDispatcher(options = {}) {
           );
           const config = loadConfig(options);
           const requestedTab = args.tab === 'quota' ? 'context' : args.tab || 'context';
-          const requestedModule = ['monitor', 'i18n'].includes(args.module)
+          const requestedModule = ['monitor', 'governance', 'appearance', 'i18n'].includes(args.module)
             ? args.module
             : config.console?.defaultModule || 'monitor';
           const summaryText =
@@ -706,6 +712,17 @@ export function createMcpDispatcher(options = {}) {
               options
             );
             return toolOk('synced', { activeSession });
+          }
+          if (args.action === 'restart_antigravity') {
+            const restartOpts = {
+              ...options,
+              dryRun: Boolean(args.dryRun),
+            };
+            if (typeof args.installDir === 'string' && args.installDir.trim()) {
+              restartOpts.installDir = args.installDir.trim();
+            }
+            const res = restartAntigravity(restartOpts);
+            return toolOk(res.message, res);
           }
           return toolErr(`Unsupported config action: ${args.action}`);
         }

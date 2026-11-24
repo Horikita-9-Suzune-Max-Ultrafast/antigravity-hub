@@ -6,26 +6,49 @@ import {
 import { createI18nModule } from './modules/i18n-module.mjs';
 import { createGovernanceModule } from './modules/governance-module.mjs';
 import { createAppearanceModule } from './modules/appearance-module.mjs';
+import {
+  DEFAULT_UI_LANG,
+  normalizeUiLang,
+  t,
+  applyStaticTranslations,
+  localizeBreakdownItem,
+  localizeDeferredItem,
+  localizeInventoryGroup,
+} from './i18n-ui.mjs';
 
 // Code-level feature flags (all quota UI/backend code is preserved intact when hidden)
 const FEATURE_FLAGS = {
   showQuotaUi: false,
 };
 
-const POLL_OPTIONS = [
-  { value: '3', label: '3 秒（高频）', short: '3s' },
-  { value: '5', label: '5 秒（推荐）', short: '5s' },
-  { value: '10', label: '10 秒', short: '10s' },
-  { value: '30', label: '30 秒', short: '30s' },
-  { value: '60', label: '60 秒（省电）', short: '60s' },
-  { value: '0', label: '手动刷新（暂停）', short: '手动' },
-];
+const APP_VERSION = '1.5.2';
 
-const POPOUT_SIZES = [
-  { value: '420x680', label: '420 × 680（紧凑竖窗）' },
-  { value: '460x720', label: '460 × 720（标准侧栏）' },
-  { value: '880x640', label: '880 × 640（宽屏浮窗）' },
-];
+function getUiLang() {
+  return normalizeUiLang(state.config?.uiLanguage || DEFAULT_UI_LANG);
+}
+
+function tr(key, vars = null) {
+  return t(getUiLang(), key, vars);
+}
+
+function getPollOptions() {
+  return [
+    { value: '3', label: tr('monitor.poll.s3'), short: '3s' },
+    { value: '5', label: tr('monitor.poll.s5'), short: '5s' },
+    { value: '10', label: tr('monitor.poll.s10'), short: '10s' },
+    { value: '30', label: tr('monitor.poll.s30'), short: '30s' },
+    { value: '60', label: tr('monitor.poll.s60'), short: '60s' },
+    { value: '0', label: tr('monitor.poll.manual'), short: tr('monitor.poll.manualShort') },
+  ];
+}
+
+function getPopoutSizes() {
+  return [
+    { value: '420x680', label: tr('settings.popout.sizeCompact') },
+    { value: '460x720', label: tr('settings.popout.sizeStandard') },
+    { value: '880x640', label: tr('settings.popout.sizeWide') },
+  ];
+}
 
 const state = {
   surface: 'aux_pane', // 'aux_pane' | 'global' | 'popout'
@@ -35,7 +58,7 @@ const state = {
   activeProjectDir: null,
   launcherMode: false,
   popoutStatus: { running: false, port: null, activeClients: 0 },
-  activeModule: 'monitor', // 'monitor' | 'i18n'
+  activeModule: 'monitor', // 'monitor' | 'governance' | 'appearance' | 'i18n'
   i18nStatus: null,
   i18nBannerDismissed: false,
   activeTab: 'context',
@@ -52,12 +75,14 @@ const state = {
   openSelectId: null,
   openAccIdx: 0,
   canUpdateModelContext: false,
+  canSendMessage: false,
   contextData: null,
   callsData: null,
   quotaData: null,
   vaultData: null,
   capsuleData: null,
   config: {
+    uiLanguage: DEFAULT_UI_LANG,
     pollIntervalSec: 5,
     auxAutoOpen: true,
     popout: { enabled: false, autoLaunchFromSidebar: true, alwaysOnTop: true, size: '460x720', position: null },
@@ -129,7 +154,8 @@ function esc(str) {
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 function fmtK(n) {
@@ -147,12 +173,45 @@ function fmtHrs(hrs) {
 }
 
 function fmtRelativeTime(iso) {
-  if (!iso) return '刚刚';
+  if (!iso) return tr('common.justNow');
   const diffSec = Math.max(0, Math.floor((Date.now() - Date.parse(iso)) / 1000));
-  if (diffSec < 60) return '刚刚';
-  if (diffSec < 3600) return `${Math.floor(diffSec / 60)} 分钟前`;
-  if (diffSec < 86400) return `${Math.floor(diffSec / 3600)} 小时前`;
-  return `${Math.floor(diffSec / 86400)} 天前`;
+  if (diffSec < 60) return tr('common.justNow');
+  if (diffSec < 3600) return tr('common.minutesAgo', { n: Math.floor(diffSec / 60) });
+  if (diffSec < 86400) return tr('common.hoursAgo', { n: Math.floor(diffSec / 3600) });
+  return tr('common.daysAgo', { n: Math.floor(diffSec / 86400) });
+}
+
+function applyUiLanguage(lang) {
+  const norm = normalizeUiLang(lang);
+  if (!state.config || typeof state.config !== 'object') {
+    state.config = { uiLanguage: norm };
+  } else {
+    state.config.uiLanguage = norm;
+  }
+  applyStaticTranslations(document, norm);
+
+  const zhBtn = document.getElementById('uiLangZhBtn');
+  const enBtn = document.getElementById('uiLangEnBtn');
+  if (zhBtn) zhBtn.dataset.active = String(norm === 'zh-CN');
+  if (enBtn) enBtn.dataset.active = String(norm === 'en');
+
+  renderSelects();
+  if (state.contextData) renderContext(false);
+  if (state.callsData) renderCalls();
+  if (state.vaultData) renderVault();
+  if (state.capsuleData) renderCapsuleModal();
+  renderSettings();
+  renderNativePinButton();
+  if (state.launcherMode) renderLauncherView();
+
+  requestAnimationFrame(() => {
+    positionIndicator('mainSegNav', 'mainSegIndicator');
+    positionIndicator('callsModeNav', 'callsModeIndicator');
+    positionIndicator('capsuleModeNav', 'capsuleModeIndicator');
+    governanceModule?.positionSubNav();
+    appearanceModule?.positionSubNav();
+    i18nModule?.positionSubNav();
+  });
 }
 
 function showToast(msg, tone = 'info') {
@@ -229,7 +288,7 @@ async function callAppTool(name, args = {}) {
 function renderCustomSelect(hostId, { id, value, options, alignRight = false, fullWidth = false, triggerLabel = null }) {
   const host = document.getElementById(hostId);
   if (!host) return;
-  const opts = options.length ? options : [{ value: '', label: '暂无数据' }];
+  const opts = options.length ? options : [{ value: '', label: tr('common.empty') }];
   const current = opts.find((o) => o.value === value) || opts[0];
   const isOpen = state.openSelectId === id;
   const shownLabel = triggerLabel ?? current.label;
@@ -263,13 +322,14 @@ function renderCustomSelect(hostId, { id, value, options, alignRight = false, fu
 function renderPollSelect() {
   const host = document.getElementById('pollIntervalHost');
   if (!host) return;
+  const pollOptions = getPollOptions();
   const val = String(state.config.pollIntervalSec ?? 5);
-  const cur = POLL_OPTIONS.find((o) => o.value === val) || POLL_OPTIONS[1];
+  const cur = pollOptions.find((o) => o.value === val) || pollOptions[1];
   const isOpen = state.openSelectId === 'pollInterval';
   const isLive = Number(val) > 0;
 
   host.innerHTML = `
-    <button type="button" class="agy-select-trigger pill-trigger" aria-expanded="${isOpen}" data-select-toggle="pollInterval" title="切换定时检测周期">
+    <button type="button" class="agy-select-trigger pill-trigger" aria-expanded="${isOpen}" data-select-toggle="pollInterval" title="${esc(tr('monitor.header.pollTitle'))}">
       ${
         isLive
           ? `<span class="live-halo"><span></span></span>`
@@ -281,7 +341,7 @@ function renderPollSelect() {
       </svg>
     </button>
     <div class="agy-select-menu align-right" data-open="${isOpen}">
-      ${POLL_OPTIONS.map(
+      ${pollOptions.map(
         (opt) => `
         <button type="button" class="agy-select-opt" data-selected="${opt.value === val}" data-select-pick="pollInterval" data-select-val="${esc(opt.value)}">
           <span>${esc(opt.label)}</span>
@@ -302,9 +362,7 @@ function renderFollowToggle() {
   if (!btn) return;
   const isAuto = state.followMode === 'auto';
   btn.dataset.mode = isAuto ? 'auto' : 'pinned';
-  btn.title = isAuto
-    ? '自动跟随当前活跃对话（点击锁定本窗口）'
-    : '已锁定当前对话（点击恢复自动跟随）';
+  btn.title = isAuto ? tr('monitor.header.followAutoTitle') : tr('monitor.header.followPinnedTitle');
   btn.innerHTML = isAuto
     ? `<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="2.2"/><path d="M8 2v2M8 12v2M2 8h2M12 8h2"/></svg>`
     : `<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="7" width="9" height="6.5" rx="1.5"/><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2"/></svg>`;
@@ -365,16 +423,16 @@ function renderSessionSelect() {
   const isOpen = state.openSelectId === 'sessionSelect';
   const activeCount = sessions.filter((s) => s.isActive).length;
   const titleText = isAggregate
-    ? `当前运行汇总${activeCount ? ` (${activeCount} 活跃)` : ' (主+子)'}`
+    ? (activeCount ? tr('monitor.session.aggregateTitleActive', { count: activeCount }) : tr('monitor.session.aggregateTitle'))
     : matched
-      ? (matched.isSubagent && matched.subTag ? `${matched.subTag} · ${matched.label}` : matched.label)
-      : '等待会话记录';
+      ? (matched.isSubagent && matched.subTag ? `${matched.subTag} / ${matched.label}` : matched.label)
+      : tr('monitor.session.waiting');
 
   const modeChipHtml = isAggregate
-    ? `<span class="session-mode-chip" data-mode="aggregate"><span class="session-mode-dot"></span><span>汇总</span></span>`
+    ? `<span class="session-mode-chip" data-mode="aggregate"><span class="session-mode-dot"></span><span>${esc(tr('monitor.session.aggregateChip'))}</span></span>`
     : isAuto
-      ? `<span class="session-mode-chip" data-mode="auto"><span class="session-mode-dot"></span><span>自动</span></span>`
-      : `<span class="session-mode-chip" data-mode="pinned"><span>锁定</span></span>`;
+      ? `<span class="session-mode-chip" data-mode="auto"><span class="session-mode-dot"></span><span>${esc(tr('monitor.session.autoChip'))}</span></span>`
+      : `<span class="session-mode-chip" data-mode="pinned"><span>${esc(tr('monitor.session.pinnedChip'))}</span></span>`;
 
   const checkSvg = `<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" class="shrink-0"><path d="M3.5 8.5L6.5 11.5L12.5 4.8" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
 
@@ -385,18 +443,18 @@ function renderSessionSelect() {
           return `
         <button type="button" class="agy-select-opt" data-selected="${isCur}" data-select-pick="sessionSelect" data-select-val="${esc(s.id)}">
           <span class="flex items-center gap-1.5 min-w-0">
-            ${s.isActive ? `<span class="session-live-dot" title="近期运行中"></span>` : ''}
-            ${s.isSubagent ? `<span class="session-sub-pill">${esc(s.subTag || '子')}</span>` : ''}
+            ${s.isActive ? `<span class="session-live-dot" title="${esc(tr('monitor.session.recentActive'))}"></span>` : ''}
+            ${s.isSubagent ? `<span class="session-sub-pill">${esc(s.subTag || tr('monitor.session.subTag'))}</span>` : ''}
             <span class="truncate">${esc(s.label)}</span>
           </span>
           <span class="flex items-center gap-2 shrink-0">
-            ${s.stepCount ? `<span class="session-opt-meta mono-num">${s.stepCount}步</span>` : ''}
+            ${s.stepCount ? `<span class="session-opt-meta mono-num">${esc(tr('monitor.session.stepsShort', { count: s.stepCount }))}</span>` : ''}
             ${isCur ? checkSvg : ''}
           </span>
         </button>`;
         })
         .join('')
-    : `<div class="px-2.5 py-2 text-xs text-muted">当前工作区暂无会话记录</div>`;
+    : `<div class="px-2.5 py-2 text-xs text-muted">${esc(tr('monitor.session.emptyWorkspace'))}</div>`;
 
   host.innerHTML = `
     <button type="button" class="agy-select-trigger w-full" aria-expanded="${isOpen}" data-select-toggle="sessionSelect">
@@ -411,20 +469,20 @@ function renderSessionSelect() {
     <div class="agy-select-menu w-full" data-open="${isOpen}">
       <button type="button" class="agy-select-opt" data-selected="${isAuto}" data-select-pick="sessionSelect" data-select-val="__auto__">
         <span class="flex items-center gap-2 min-w-0">
-          <span class="session-mode-chip" data-mode="auto"><span class="session-mode-dot"></span><span>自动</span></span>
-          <span class="truncate">跟随当前选中 / 活跃对话</span>
+          <span class="session-mode-chip" data-mode="auto"><span class="session-mode-dot"></span><span>${esc(tr('monitor.session.autoChip'))}</span></span>
+          <span class="truncate">${esc(tr('monitor.session.autoOption'))}</span>
         </span>
         ${isAuto ? checkSvg : ''}
       </button>
       <button type="button" class="agy-select-opt" data-selected="${isAggregate}" data-select-pick="sessionSelect" data-select-val="__active_all__">
         <span class="flex items-center gap-2 min-w-0">
-          <span class="session-mode-chip" data-mode="aggregate"><span class="session-mode-dot"></span><span>汇总</span></span>
-          <span class="truncate">当前运行中的全部对话 (主+子)</span>
+          <span class="session-mode-chip" data-mode="aggregate"><span class="session-mode-dot"></span><span>${esc(tr('monitor.session.aggregateChip'))}</span></span>
+          <span class="truncate">${esc(tr('monitor.session.aggregateOption'))}</span>
         </span>
         ${isAggregate ? checkSvg : ''}
       </button>
       <div class="session-menu-divider"></div>
-      <div class="session-menu-caption">对话与子代理列表（点击切换所有视图）</div>
+      <div class="session-menu-caption">${esc(tr('monitor.session.listCaption'))}</div>
       ${sessionsHtml}
     </div>
   `;
@@ -439,9 +497,9 @@ function renderSelects() {
     id: 'agentSelect',
     value: state.agentFilter,
     options: [
-      { value: 'all', label: '全部 Agent (主+子)' },
-      { value: 'main', label: '仅主 Agent' },
-      { value: 'sub', label: '仅子 Agent' },
+      { value: 'all', label: tr('monitor.calls.agentAll') },
+      { value: 'main', label: tr('monitor.calls.agentMain') },
+      { value: 'sub', label: tr('monitor.calls.agentSub') },
     ],
   });
 
@@ -449,7 +507,7 @@ function renderSelects() {
   renderCustomSelect('modelSelectHost', {
     id: 'modelSelect',
     value: state.modelFilter,
-    options: [{ value: 'all', label: '全部模型' }, ...models.map((m) => ({ value: m, label: m }))],
+    options: [{ value: 'all', label: tr('monitor.calls.modelAll') }, ...models.map((m) => ({ value: m, label: m }))],
     alignRight: true,
   });
 
@@ -457,7 +515,7 @@ function renderSelects() {
     id: 'vaultKindSelect',
     value: state.vaultKind,
     options: [
-      { value: 'all', label: '全部类型' },
+      { value: 'all', label: tr('monitor.vault.kindAll') },
       { value: 'working_state', label: 'working_state' },
       { value: 'decision', label: 'decision' },
       { value: 'architecture', label: 'architecture' },
@@ -485,25 +543,26 @@ function renderSelects() {
     id: 'newMemKindSelect',
     value: state.newMemKind,
     options: [
-      { value: 'decision', label: 'decision（设计决策）' },
-      { value: 'working_state', label: 'working_state（当前状态）' },
-      { value: 'architecture', label: 'architecture（架构地图）' },
-      { value: 'pitfall', label: 'pitfall（踩坑与禁忌）' },
+      { value: 'decision', label: tr('monitor.vault.kindDecision') },
+      { value: 'working_state', label: tr('monitor.vault.kindWorkingState') },
+      { value: 'architecture', label: tr('monitor.vault.kindArchitecture') },
+      { value: 'pitfall', label: tr('monitor.vault.kindPitfall') },
     ],
     fullWidth: true,
   });
 
+  const pollOptions = getPollOptions();
   renderCustomSelect('settingsPollHost', {
     id: 'settingsPoll',
     value: String(state.config.pollIntervalSec ?? 5),
-    options: POLL_OPTIONS.map((o) => ({ value: o.value, label: o.label })),
+    options: pollOptions.map((o) => ({ value: o.value, label: o.label })),
     alignRight: true,
   });
 
   renderCustomSelect('popoutSizeSelectHost', {
     id: 'popoutSize',
     value: state.config.popout?.size || '460x720',
-    options: POPOUT_SIZES,
+    options: getPopoutSizes(),
   });
 
   i18nModule?.renderSelects();
@@ -520,7 +579,7 @@ async function handleSelectPick(id, val) {
       resetSessionViewState();
       renderSelects();
       await refreshAll(true, false, true);
-      showToast('已开启自动跟随当前选中 / 活跃对话');
+      showToast(tr('toast.followAuto'));
       return;
     }
 
@@ -531,7 +590,7 @@ async function handleSelectPick(id, val) {
       resetSessionViewState();
       renderSelects();
       await refreshAll(true, false, true);
-      showToast('已切换至「当前运行中的全部对话」汇总视图');
+      showToast(tr('toast.aggregateMode'));
       return;
     }
 
@@ -550,7 +609,7 @@ async function handleSelectPick(id, val) {
     renderSelects();
     await callAppTool('app_config_manage', { action: 'set_active_session', conversationId: val }).catch(() => {});
     await refreshAll(true, false, true);
-    showToast('已同步切换所有监控视图至所选对话');
+    showToast(tr('toast.sessionSynced'));
     return;
   }
   if (id === 'pollInterval' || id === 'settingsPoll') {
@@ -558,16 +617,24 @@ async function handleSelectPick(id, val) {
     state.config.pollIntervalSec = sec;
     renderSelects();
     restartPollTimer();
-    await persistConfigPatch({ pollIntervalSec: sec });
-    const opt = POLL_OPTIONS.find((o) => o.value === val);
-    showToast(sec > 0 ? `已切换自动检测周期：每 ${opt?.short || sec + 's'}` : '已切换为手动刷新');
+    try {
+      await persistConfigPatch({ pollIntervalSec: sec });
+      const opt = getPollOptions().find((o) => o.value === val);
+      showToast(sec > 0 ? tr('toast.pollUpdated', { interval: opt?.short || `${sec}s` }) : tr('toast.pollManual'));
+    } catch (err) {
+      showToast(tr('toast.syncFailed', { error: err?.message || String(err) }), 'error');
+    }
     return;
   }
   if (id === 'popoutSize') {
     state.config.popout = { ...(state.config.popout || {}), size: val };
     renderSelects();
-    await persistConfigPatch({ popout: { size: val } });
-    showToast(`独立小窗默认尺寸已设为 ${val}`);
+    try {
+      await persistConfigPatch({ popout: { size: val } });
+      showToast(tr('toast.popoutSize', { size: val }));
+    } catch (err) {
+      showToast(tr('toast.syncFailed', { error: err?.message || String(err) }), 'error');
+    }
     return;
   }
   if (id === 'agentSelect') {
@@ -671,12 +738,16 @@ function updateNativeTitleBarTelemetry(ctx, pct, cache, tps) {
     state.pinnedConversationId === '__active_all__' ||
     state.activeConversationId === '__active_all__' ||
     ctx?.conversationId === '__active_all__';
-  const followTag = isAggregate ? '运行汇总' : state.followMode === 'auto' ? '自动跟随' : '已锁定';
+  const followTag = isAggregate
+    ? tr('titlebar.modeAggregate')
+    : state.followMode === 'auto'
+      ? tr('titlebar.modeAuto')
+      : tr('titlebar.modePinned');
 
   const miniEl = document.getElementById('titleBarMiniSummary');
   if (miniEl) {
-    miniEl.textContent = `${pct.toFixed(1)}% · ${cache.toFixed(0)}% Cache`;
-    miniEl.title = `上下文占用 ${pct.toFixed(1)}% · 最新缓存命中 ${cache.toFixed(1)}%（${followTag}）`;
+    miniEl.textContent = tr('titlebar.miniSummary', { pct: pct.toFixed(1), cache: cache.toFixed(0) });
+    miniEl.title = tr('titlebar.miniSummaryTitle', { pct: pct.toFixed(1), cache: cache.toFixed(1), mode: followTag });
   }
 
   const modelEl = document.getElementById('titleBarModelBadge');
@@ -686,7 +757,7 @@ function updateNativeTitleBarTelemetry(ctx, pct, cache, tps) {
       modelEl.dataset.fullModel = activeModel;
       modelEl.dataset.shortModel = formatShortModel(activeModel);
       modelEl.textContent = activeModel;
-      modelEl.title = `当前对话模型：${activeModel}（${followTag}）`;
+      modelEl.title = tr('titlebar.modelBadgeTitle', { model: activeModel, mode: followTag });
       modelEl.classList.remove('hidden');
     } else {
       modelEl.dataset.fullModel = '';
@@ -702,11 +773,11 @@ function updateNativeTitleBarTelemetry(ctx, pct, cache, tps) {
     if (hasCalls || tps > 0) {
       tpsEl.textContent = `${tps.toFixed(1)} tok/s`;
       tpsEl.dataset.tone = tps < 15 ? 'warn' : 'ok';
-      tpsEl.title = `当前对话有效输出速度：${tps.toFixed(1)} tok/s（${followTag}）`;
+      tpsEl.title = tr('titlebar.tpsBadgeTitle', { tps: tps.toFixed(1), mode: followTag });
     } else {
       tpsEl.textContent = '-- tok/s';
       tpsEl.dataset.tone = 'muted';
-      tpsEl.title = `等待当前对话输出数据（${followTag}）`;
+      tpsEl.title = tr('titlebar.tpsWaitingTitle', { mode: followTag });
     }
     tpsEl.classList.remove('hidden');
   }
@@ -717,13 +788,14 @@ function updateNativeTitleBarTelemetry(ctx, pct, cache, tps) {
 function renderContext(animated = false) {
   const ctx = state.contextData;
   if (!ctx) return;
+  const lang = getUiLang();
 
   document.getElementById('gitBranchLabel').textContent = ctx.git?.branch || 'nogit';
   document.getElementById('gitHeadLabel').textContent = `@${ctx.git?.head || 'none'}${ctx.git?.dirty ? '*' : ''}`;
   document.getElementById('tabCallsCount').textContent = String(ctx.totalCallsCount ?? 0);
 
   const alerts = ctx.alerts || [];
-  document.getElementById('alertCountLabel').textContent = `${alerts.length} 项预警`;
+  document.getElementById('alertCountLabel').textContent = tr('monitor.header.alertsCount', { count: alerts.length });
   const alertDot = document.getElementById('alertDot');
   alertDot.style.background = alerts.some((a) => a.level === 'error')
     ? 'var(--error)'
@@ -733,7 +805,7 @@ function renderContext(animated = false) {
 
   const alertsList = document.getElementById('alertsList');
   if (!alerts.length) {
-    alertsList.innerHTML = `<div class="py-2 text-xs text-muted">当前无异常预警</div>`;
+    alertsList.innerHTML = `<div class="py-2 text-xs text-muted">${esc(tr('monitor.header.alertsEmpty'))}</div>`;
   } else {
     alertsList.innerHTML = alerts
       .map(
@@ -817,7 +889,7 @@ function renderContext(animated = false) {
     segBar.innerHTML = breakdown
       .map((b) => {
         const w = b.tokens > 0 ? Math.max(0.8, (b.tokens / limit) * 100) : 0;
-        return `<div class="ctx-seg" data-id="${esc(b.id)}" style="width:${w}%; background:${b.color};"></div>`;
+        return `<div class="ctx-seg" data-id="${esc(b.id)}" style="width:${w}%; background:${esc(b.color)};"></div>`;
       })
       .join('');
   }
@@ -826,12 +898,13 @@ function renderContext(animated = false) {
     breakdown
       .map((b) => {
         const bp = limit > 0 ? ((b.tokens / limit) * 100).toFixed(1) : '0.0';
+        const loc = localizeBreakdownItem(b, lang);
         return `
       <div class="ctx-row flex items-center justify-between gap-2 text-xs" data-id="${esc(b.id)}">
         <div class="flex items-center gap-2.5 min-w-0">
-          <span class="dot-md" style="background:${b.color};"></span>
-          <span class="font-medium text-fg truncate">${esc(b.key)}</span>
-          <span class="hide-narrow text-muted truncate">${esc(b.note)}</span>
+          <span class="dot-md" style="background:${esc(b.color)};"></span>
+          <span class="font-medium text-fg truncate">${esc(loc.key)}</span>
+          <span class="hide-narrow text-muted truncate">${esc(loc.note)}</span>
         </div>
         <div class="flex items-center gap-3.5 shrink-0 mono-num">
           <span class="text-muted">${fmtK(b.tokens)}</span>
@@ -844,7 +917,7 @@ function renderContext(animated = false) {
     <div class="flex items-center justify-between gap-2 text-xs pt-2 mt-1 border-t">
       <div class="flex items-center gap-2.5">
         <span class="dot-md" style="border: 1px solid var(--border); background: var(--background);"></span>
-        <span class="text-muted">Free space</span>
+        <span class="text-muted">${esc(tr('monitor.ctx.freeSpace'))}</span>
       </div>
       <div class="flex items-center gap-3.5 mono-num text-muted">
         <span>${fmtK(free)}</span>
@@ -854,18 +927,20 @@ function renderContext(animated = false) {
 
   const deferred = ctx.deferred || [];
   document.getElementById('ctxDeferredList').innerHTML = deferred
-    .map(
-      (d) => `
+    .map((d) => {
+      const ld = localizeDeferredItem(d, lang);
+      return `
     <div class="flex items-center justify-between text-xs text-muted py-0.5">
-      <span>${esc(d.key)} <span class="mono-num">(${esc(d.count)})</span></span>
-      <span class="mono-num">${fmtK(d.tokens)} · 未加载</span>
-    </div>`
-    )
+      <span>${esc(ld.key)} <span class="mono-num">(${esc(ld.count)})</span></span>
+      <span class="mono-num">${fmtK(d.tokens)} / ${esc(ld.status)}</span>
+    </div>`;
+    })
     .join('');
 
   const inventories = ctx.inventories || [];
   document.getElementById('inventoryList').innerHTML = inventories
-    .map((inv, idx) => {
+    .map((rawInv, idx) => {
+      const inv = localizeInventoryGroup(rawInv, lang);
       const open = idx === state.openAccIdx;
       const itemsHtml = inv.items?.length
         ? inv.items
@@ -880,7 +955,7 @@ function renderContext(animated = false) {
           </div>`
             )
             .join('')
-        : `<div class="text-xs text-muted py-1">暂无条目</div>`;
+        : `<div class="text-xs text-muted py-1">${esc(tr('monitor.ctx.emptyItems'))}</div>`;
       return `
       <div>
         <button type="button" class="acc-trigger" data-acc-idx="${idx}" data-open="${open}">
@@ -908,7 +983,8 @@ function highlightCtx(id) {
   const hint = document.getElementById('ctxHoverHint');
   if (item && ctx.limitTokens > 0) {
     const bp = ((item.tokens / ctx.limitTokens) * 100).toFixed(1);
-    hint.textContent = `${item.key} · ${fmtK(item.tokens)} (${bp}%)`;
+    const loc = localizeBreakdownItem(item, getUiLang());
+    hint.textContent = tr('monitor.ctx.hoverHint', { key: loc.key, tokens: fmtK(item.tokens), pct: bp });
     hint.dataset.show = 'true';
   } else {
     hint.dataset.show = 'false';
@@ -928,7 +1004,7 @@ function renderCalls() {
   const tbody = document.getElementById('callsTbody');
 
   if (!list.length) {
-    tbody.innerHTML = `<tr><td colspan="7" class="py-8 text-center text-xs text-muted">当前筛选条件下无匹配调用记录</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="7" class="py-8 text-center text-xs text-muted">${esc(tr('monitor.calls.empty'))}</td></tr>`;
   } else {
     tbody.innerHTML = list
       .map((c) => {
@@ -947,7 +1023,7 @@ function renderCalls() {
         const thinkRatio = Math.round((c.thinkingTokensEst / totalOut) * 100);
 
         const shortModel = formatShortModel(c.model);
-        const sourceText = c.sourceLabel || `${c.agentTag} · ${String(c.conversationId || '').slice(0, 8)}`;
+        const sourceText = c.sourceLabel || `${c.agentTag} / ${String(c.conversationId || '').slice(0, 8)}`;
 
         return `
         <tr class="call-row ${c.callUid === state.freshCallId ? 'row-fresh' : ''}" data-call-id="${esc(c.callUid)}" data-expanded="${isExp}">
@@ -963,14 +1039,14 @@ function renderCalls() {
           </td>
           <td class="cell-dur text-right whitespace-nowrap mono-num text-muted">${durText}</td>
           <td class="cell-tok text-right whitespace-nowrap mono-num">
-            <span class="cell-inline-dur">${durText} ·</span>
+            <span class="cell-inline-dur">${durText} /</span>
             <span>${fmtK(c.contextTokens)}</span>
             <span class="text-muted"> / ${fmtK(c.thinkingTokensEst)} / ${fmtK(c.contentTokensEst)}</span>
           </td>
           <td class="cell-cache text-right whitespace-nowrap mono-num ${cacheCls}">
             <span class="cache-cell-wrap">
               <span>${c.cacheHitRate.toFixed(1)}%</span>
-              ${c.cacheDrop ? `<span class="cache-drop-pill">击穿</span>` : ''}
+              ${c.cacheDrop ? `<span class="cache-drop-pill">${esc(tr('monitor.calls.cacheDropPill'))}</span>` : ''}
             </span>
           </td>
           <td class="cell-cost text-right whitespace-nowrap mono-num font-medium">$${c.estimatedCostUsd.toFixed(3)}</td>
@@ -983,15 +1059,15 @@ function renderCalls() {
             <div class="space-y-2.5 text-xs panel-enter">
               <div class="flex flex-wrap items-center justify-between gap-2">
                 <div class="flex flex-wrap items-center gap-x-3 gap-y-1 mono-num">
-                  <span class="font-semibold text-fg">单步解剖 · ${esc(c.agentTag)} #${c.stepIndex}</span>
-                  <span class="text-muted">模型: <span class="text-fg font-medium">${esc(c.model)}</span></span>
-                  <span class="text-muted">计时来源: ${esc(c.timingSource)}</span>
+                  <span class="font-semibold text-fg">${esc(tr('monitor.calls.anatomyTitle', { tag: c.agentTag, step: c.stepIndex }))}</span>
+                  <span class="text-muted">${esc(tr('monitor.calls.anatomyModel'))}<span class="text-fg font-medium">${esc(c.model)}</span></span>
+                  <span class="text-muted">${esc(tr('monitor.calls.anatomyTiming', { source: c.timingSource }))}</span>
                 </div>
-                <span class="mono-num text-muted">思考占比 ${thinkRatio}%</span>
+                <span class="mono-num text-muted">${esc(tr('monitor.calls.anatomyThinkRatio', { ratio: thinkRatio }))}</span>
               </div>
               <div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
-                <span class="text-muted">信息来源：<span class="text-fg font-medium">${esc(sourceText)}</span></span>
-                <span class="mono-num text-muted">缓存命中 ${fmtK(c.cacheReadTokens)} · 新编码 ${fmtK(c.inputTokens)} · 输出 ${fmtK(c.outputTokens)}</span>
+                <span class="text-muted">${esc(tr('monitor.calls.anatomySource'))}<span class="text-fg font-medium">${esc(sourceText)}</span></span>
+                <span class="mono-num text-muted">${esc(tr('monitor.calls.anatomyBreakdown', { cache: fmtK(c.cacheReadTokens), input: fmtK(c.inputTokens), output: fmtK(c.outputTokens) }))}</span>
               </div>
               <div class="flex rounded-full overflow-hidden w-full" style="height: 8px; background: var(--card); border: 1px solid var(--border); box-sizing: border-box;">
                 <div style="width:${Math.min(100, c.cacheHitRate)}%; background: var(--success);"></div>
@@ -1003,7 +1079,7 @@ function renderCalls() {
               <div class="p-3 rounded-xl flex items-start gap-2.5" style="border: 1px solid var(--error); background: color-mix(in srgb, var(--error) 6%, var(--card));">
                 <span class="dot-sm mt-1.5" style="background: var(--error);"></span>
                 <div class="space-y-0.5">
-                  <div class="font-semibold text-error">缓存击穿归因：<span class="mono-num">${esc(c.dropReason)}</span></div>
+                  <div class="font-semibold text-error">${esc(tr('monitor.calls.anatomyDropReason'))}<span class="mono-num">${esc(c.dropReason)}</span></div>
                   <div class="text-muted leading-relaxed">${esc(c.dropDetail)}</div>
                 </div>
               </div>`
@@ -1033,7 +1109,9 @@ function renderCalls() {
   const heroModel = document.getElementById('callsHeroModel');
   const totalAll = data?.totalCallsCount ?? list.length;
   if (heroSteps) {
-    heroSteps.textContent = list.length !== totalAll ? `${list.length} / ${totalAll} 步` : `${list.length} 步`;
+    heroSteps.textContent = list.length !== totalAll
+      ? tr('monitor.calls.heroStepsFiltered', { count: list.length, total: totalAll })
+      : tr('monitor.calls.heroStepsVal', { count: list.length });
   }
   if (heroTps) {
     heroTps.textContent = `${avgTps.toFixed(1)} tok/s`;
@@ -1045,11 +1123,15 @@ function renderCalls() {
   }
   if (heroModel) {
     const latestModel = list[0]?.model || data?.summary?.latestModel || '';
-    heroModel.textContent = latestModel ? `模型: ${latestModel}` : '';
+    heroModel.textContent = latestModel ? tr('monitor.calls.heroModel', { model: latestModel }) : '';
     heroModel.title = latestModel;
     heroModel.classList.toggle('hidden', !latestModel);
   }
-  document.getElementById('callsFooterStats').textContent = `共 ${list.length} 步 · 加权均速 ${avgTps.toFixed(1)} tok/s · 估算 $${totalCost.toFixed(3)}`;
+  document.getElementById('callsFooterStats').textContent = tr('monitor.calls.footerStats', {
+    count: list.length,
+    tps: avgTps.toFixed(1),
+    cost: totalCost.toFixed(3),
+  });
 
   const byAgent = data?.summary?.byAgent || [];
   document.getElementById('summaryAgentList').innerHTML = byAgent.length
@@ -1057,7 +1139,7 @@ function renderCalls() {
         .map(
           (a) => `
       <div class="px-5 py-3 flex items-center justify-between text-xs">
-        <div><span class="font-semibold">${esc(a.agentTag)} Agent</span><span class="ml-2 text-muted mono-num">${a.steps} 步</span></div>
+        <div><span class="font-semibold">${esc(a.agentTag)} Agent</span><span class="ml-2 text-muted mono-num">${esc(tr('monitor.calls.stepsUnit', { count: a.steps }))}</span></div>
         <div class="mono-num flex items-center gap-4">
           <span>${a.avgTps.toFixed(1)} tok/s</span>
           <span class="text-success">${a.avgCache.toFixed(1)}%</span>
@@ -1066,7 +1148,7 @@ function renderCalls() {
       </div>`
         )
         .join('')
-    : `<div class="px-5 py-4 text-xs text-muted">暂无汇总数据</div>`;
+    : `<div class="px-5 py-4 text-xs text-muted">${esc(tr('monitor.calls.summaryEmpty'))}</div>`;
 
   const byModel = data?.summary?.byModel || [];
   document.getElementById('summaryModelList').innerHTML = byModel.length
@@ -1082,7 +1164,7 @@ function renderCalls() {
       </div>`
         )
         .join('')
-    : `<div class="px-5 py-4 text-xs text-muted">暂无汇总数据</div>`;
+    : `<div class="px-5 py-4 text-xs text-muted">${esc(tr('monitor.calls.summaryEmpty'))}</div>`;
 }
 
 function ringSvg(pct, ringId) {
@@ -1123,7 +1205,7 @@ function renderQuota() {
           <div class="px-5 py-3.5 flex items-center justify-between gap-4">
             <div class="min-w-0">
               <div class="text-sm font-medium">每周剩余额度</div>
-              <div id="q-w-sub-${esc(g.id)}" class="text-xs text-muted mt-0.5">${fmtHrs(g.weeklyHrs)} · 本地 7d 实测 ${esc(g.localTokens7d)}</div>
+              <div id="q-w-sub-${esc(g.id)}" class="text-xs text-muted mt-0.5">${fmtHrs(g.weeklyHrs)} / 本地 7d 实测 ${esc(g.localTokens7d)}</div>
             </div>
             <div class="flex items-center gap-3 shrink-0">
               <span id="q-w-pct-${esc(g.id)}" class="mono-num text-sm font-semibold">${g.weeklyPct}%</span>
@@ -1136,7 +1218,7 @@ function renderQuota() {
           <div class="px-5 py-3.5 flex items-center justify-between gap-4">
             <div class="min-w-0">
               <div class="text-sm font-medium">5 小时剩余额度</div>
-              <div id="q-h-sub-${esc(g.id)}" class="text-xs text-muted mt-0.5">当前 5h 窗口本地实测 ${g.localCalls5h} 次调用 · ${Math.floor(g.h5Mins / 60)}h ${g.h5Mins % 60}m 窗口</div>
+              <div id="q-h-sub-${esc(g.id)}" class="text-xs text-muted mt-0.5">当前 5h 窗口本地实测 ${g.localCalls5h} 次调用 / ${Math.floor(g.h5Mins / 60)}h ${g.h5Mins % 60}m 窗口</div>
             </div>
             <div class="flex items-center gap-3 shrink-0">
               <span id="q-h-pct-${esc(g.id)}" class="mono-num text-sm font-semibold">${g.h5Pct}%</span>
@@ -1163,20 +1245,20 @@ function renderQuota() {
       const wp = document.getElementById(`q-w-pct-${g.id}`);
       const ws = document.getElementById(`q-w-sub-${g.id}`);
       if (wp) wp.textContent = `${g.weeklyPct}%`;
-      if (ws) ws.textContent = `${fmtHrs(g.weeklyHrs)} · 本地 7d 实测 ${g.localTokens7d}`;
+      if (ws) ws.textContent = `${fmtHrs(g.weeklyHrs)} / 本地 7d 实测 ${g.localTokens7d}`;
       patchRing(`w-${g.id}`, g.weeklyPct);
       if (g.h5Pct !== null) {
         const hp = document.getElementById(`q-h-pct-${g.id}`);
         const hs = document.getElementById(`q-h-sub-${g.id}`);
         if (hp) hp.textContent = `${g.h5Pct}%`;
-        if (hs) hs.textContent = `当前 5h 窗口本地实测 ${g.localCalls5h} 次调用 · ${Math.floor(g.h5Mins / 60)}h ${g.h5Mins % 60}m 窗口`;
+        if (hs) hs.textContent = `当前 5h 窗口本地实测 ${g.localCalls5h} 次调用 / ${Math.floor(g.h5Mins / 60)}h ${g.h5Mins % 60}m 窗口`;
         patchRing(`h-${g.id}`, g.h5Pct);
       }
     });
   }
 
   const sav = q.savings7d || { savedUsd: 0, avgCacheHitPct: 0 };
-  document.getElementById('quotaSavingsLabel').textContent = `缓存累计节省约 $${sav.savedUsd.toFixed(2)} · 命中均值 ${sav.avgCacheHitPct.toFixed(1)}%`;
+  document.getElementById('quotaSavingsLabel').textContent = `缓存累计节省约 $${sav.savedUsd.toFixed(2)} / 命中均值 ${sav.avgCacheHitPct.toFixed(1)}%`;
 
   const chart = q.weeklyChart || [];
   document.getElementById('weeklyChart').innerHTML = chart
@@ -1184,7 +1266,7 @@ function renderQuota() {
       const cachePct = w.total > 0 ? Math.round((w.cached / w.total) * 100) : 0;
       const freshPct = Math.max(0, 100 - cachePct);
       return `
-      <div class="chart-col" title="${esc(w.day)} · ${w.calls} 次调用 · ${fmtK(w.totalTokens)} tokens">
+      <div class="chart-col" title="${esc(w.day)} / ${w.calls} 次调用 / ${fmtK(w.totalTokens)} tokens">
         <div class="chart-bar" style="height:${w.total}%;">
           <div style="height:${freshPct}%; background: var(--chart-2);"></div>
           <div style="height:${cachePct}%; background: var(--chart-1);"></div>
@@ -1201,10 +1283,10 @@ function renderVault() {
   document.getElementById('vaultPathLabel').textContent = v.storagePath || '%USERPROFILE%\\.context-cache';
   const staleBadge = document.getElementById('vaultStaleBadge');
   if (v.commitsAhead > 0) {
-    staleBadge.textContent = `HEAD 前进 +${v.commitsAhead} commits`;
+    staleBadge.textContent = tr('monitor.vault.commitsAhead', { count: v.commitsAhead });
     staleBadge.classList.remove('hidden');
   } else if (v.staleCount > 0) {
-    staleBadge.textContent = `${v.staleCount} 条基于旧 HEAD`;
+    staleBadge.textContent = tr('monitor.vault.staleHead', { count: v.staleCount });
     staleBadge.classList.remove('hidden');
   } else {
     staleBadge.classList.add('hidden');
@@ -1213,7 +1295,7 @@ function renderVault() {
   const items = v.items || [];
   const el = document.getElementById('vaultList');
   if (!items.length) {
-    el.innerHTML = `<div class="py-8 text-center text-xs text-muted">暂无匹配记忆条目，点击右上角「+ 新增记忆」或等待 Stop 自动快照</div>`;
+    el.innerHTML = `<div class="py-8 text-center text-xs text-muted">${esc(tr('monitor.vault.empty'))}</div>`;
     return;
   }
 
@@ -1229,12 +1311,12 @@ function renderVault() {
         <p class="text-xs text-muted m-0 leading-relaxed">${esc(it.summary)}</p>
         <div class="flex flex-wrap items-center gap-2 text-xs text-muted mono-num pt-0.5">
           <span>${esc(it.branch)}@${esc(it.head)}</span>
-          <span>·</span>
-          <span>${fmtRelativeTime(it.updatedAt)}</span>
+          <span>/</span>
+          <span>${esc(fmtRelativeTime(it.updatedAt))}</span>
           ${(it.tags || []).map((t) => `<span>#${esc(t)}</span>`).join('')}
         </div>
       </div>
-      <button type="button" data-archive-mem="${esc(it.id)}" class="text-xs text-muted bg-transparent border-0 cursor-pointer shrink-0 pt-0.5">归档</button>
+      <button type="button" data-archive-mem="${esc(it.id)}" class="text-xs text-muted bg-transparent border-0 cursor-pointer shrink-0 pt-0.5">${esc(tr('monitor.vault.archive'))}</button>
     </div>`
     )
     .join('');
@@ -1275,21 +1357,21 @@ function renderLauncherView() {
   const sessEl = document.getElementById('launcherSessionLabel');
 
   if (dot) dot.classList.toggle('hidden', !running);
-  if (title) title.textContent = running ? '独立悬浮监控窗已启动' : '独立悬浮监控窗已关闭';
+  if (title) title.textContent = running ? tr('launcher.titleRunning') : tr('launcher.titleStopped');
   if (sub) {
     sub.textContent = running && port
-      ? `127.0.0.1:${port} · 本地一次性令牌 · 自动跟随活跃对话`
-      : '已自动释放本地端口，点击下方按钮可随时再次弹出';
+      ? tr('launcher.subRunning', { port })
+      : tr('launcher.subStopped');
   }
   if (badge) {
-    badge.textContent = running ? '运行中' : '已关闭';
+    badge.textContent = running ? tr('launcher.statusRunning') : tr('launcher.statusStopped');
     badge.style.color = running ? 'var(--success)' : 'var(--muted-foreground)';
     badge.style.borderColor = running ? 'var(--success)' : 'var(--border)';
   }
   if (sessEl) {
     const sessions = state.contextData?.sessions || [];
     const cur = sessions.find((s) => s.id === state.activeConversationId) || sessions[0];
-    sessEl.textContent = cur ? cur.label : '自动跟随最新活跃对话';
+    sessEl.textContent = cur ? cur.label : tr('launcher.autoFollowLatest');
   }
 }
 
@@ -1409,8 +1491,8 @@ function renderNativePinButton() {
   if (!btn) return;
   const pinned = Boolean(state.windowPinned);
   btn.dataset.pinned = String(pinned);
-  btn.title = pinned ? '已固定置顶在页面最前（点击取消固定）' : '未固定置顶（点击固定在 Antigravity 页面最前）';
-  if (lbl) lbl.textContent = pinned ? '已固定' : '置顶';
+  btn.title = pinned ? tr('titlebar.pinnedTitle') : tr('titlebar.unpinnedTitle');
+  if (lbl) lbl.textContent = pinned ? tr('titlebar.pinned') : tr('titlebar.pin');
 }
 
 function setupNativeFramelessChrome() {
@@ -1514,7 +1596,13 @@ function setupNativeFramelessChrome() {
 }
 
 function renderSettings() {
-  const cfg = state.config;
+  const cfg = state.config || {};
+  const uiLang = getUiLang();
+  const zhBtn = document.getElementById('uiLangZhBtn');
+  const enBtn = document.getElementById('uiLangEnBtn');
+  if (zhBtn) zhBtn.dataset.active = String(uiLang === 'zh-CN');
+  if (enBtn) enBtn.dataset.active = String(uiLang === 'en');
+
   document.getElementById('auxAutoSwitch').dataset.on = String(Boolean(cfg.auxAutoOpen));
   const sidebarAutoEl = document.getElementById('sidebarAutoPopoutSwitch');
   if (sidebarAutoEl) {
@@ -1532,10 +1620,10 @@ function renderSettings() {
   document.getElementById('popoutSwitch').dataset.on = String(popOn);
   const badge = document.getElementById('popoutStateBadge');
   badge.textContent = state.popoutStatus?.running
-    ? `运行中 :${state.popoutStatus.port}`
+    ? tr('settings.popout.running', { port: state.popoutStatus.port })
     : popOn
-      ? '已启用'
-      : '已关闭';
+      ? tr('settings.popout.enabled')
+      : tr('settings.popout.closed');
   badge.style.color = popOn ? 'var(--success)' : 'var(--muted-foreground)';
   badge.style.borderColor = popOn ? 'var(--success)' : 'var(--border)';
 
@@ -1544,7 +1632,9 @@ function renderSettings() {
   const preview = document.getElementById('bannerPreview');
   preview.style.opacity = bannerOn ? '1' : '0.42';
   if (state.callsData?.banner) {
-    preview.textContent = state.callsData.banner;
+    preview.textContent = String(state.callsData.banner).replace(/\s*\u00B7\s*/g, ' | ');
+  } else {
+    preview.textContent = tr('settings.banner.preview');
   }
 
   document.getElementById('cfgBudgetInput').value = cfg.sessionStartBudgetTokens ?? 450;
@@ -1552,27 +1642,36 @@ function renderSettings() {
   document.getElementById('cfgDropPctInput').value = cfg.alerts?.cacheDropThresholdPct ?? 50;
 
   const rep = state.doctorReport;
+  const verEl = document.getElementById('settingsVersionLabel');
+  if (verEl) {
+    verEl.textContent = tr('settings.version', { version: rep?.version || APP_VERSION });
+  }
   if (rep) {
-    document.getElementById('settingsVersionLabel').textContent = `context-cache v${rep.version || '1.2.0'}`;
     const pill = document.getElementById('doctorStatusPill');
-    pill.textContent = rep.healthy ? '健康' : '需关注';
+    pill.textContent = rep.healthy ? tr('settings.doctor.healthy') : tr('settings.doctor.attention');
     pill.style.color = rep.healthy ? 'var(--success)' : 'var(--warning)';
     pill.style.borderColor = rep.healthy ? 'var(--success)' : 'var(--warning)';
 
     const driftEl = document.getElementById('docDriftVal');
-    driftEl.textContent = `${rep.drift.count} 项漂移`;
+    driftEl.textContent = tr('settings.doctor.driftVal', { count: rep.drift.count });
     driftEl.style.color = rep.drift.count === 0 ? 'var(--success)' : 'var(--warning)';
 
     document.getElementById('docCircuitVal').textContent = `${rep.circuit.state} (${rep.circuit.failures} / ${rep.circuit.threshold})`;
-    document.getElementById('docIndexVal').textContent = `${rep.index.ok ? '已同步' : '需重建'} · ${rep.index.dbMemories} 条`;
-    document.getElementById('docDeployVal').textContent = `v${rep.version} · ${rep.deployment.zeroNodeModules ? '0 node_modules' : '含冗余依赖'}`;
+    document.getElementById('docIndexVal').textContent = tr('settings.doctor.indexVal', {
+      status: rep.index.ok ? tr('settings.doctor.indexSynced') : tr('settings.doctor.indexRebuild'),
+      count: rep.index.dbMemories,
+    });
+    document.getElementById('docDeployVal').textContent = tr('settings.doctor.deployVal', {
+      version: rep.version || APP_VERSION,
+      status: rep.deployment.zeroNodeModules ? tr('settings.doctor.deployClean') : tr('settings.doctor.deployDirty'),
+    });
   }
 }
 
 function renderCapsuleModal() {
   const cap = state.capsuleData;
   if (!cap) return;
-  document.getElementById('capsuleGitMeta').textContent = `${cap.project} · ${cap.branch}@${cap.head}`;
+  document.getElementById('capsuleGitMeta').textContent = `${cap.project} / ${cap.branch}@${cap.head}`;
   document.getElementById('capsuleGoalText').textContent = cap.activeGoal;
   document.getElementById('capsuleNextAction').textContent = cap.nextAction;
   document.getElementById('capsuleTokenBadge').textContent = `${cap.tokens} / ${cap.budgetTokens} tokens`;
@@ -1592,14 +1691,14 @@ function renderCapsuleModal() {
       </label>`
         )
         .join('')
-    : `<div class="text-xs text-muted py-1">当前项目暂无已保存决策条目</div>`;
+    : `<div class="text-xs text-muted py-1">${esc(tr('monitor.capsule.noDecisions'))}</div>`;
 
   const filesHost = document.getElementById('capsuleFilesList');
   filesHost.innerHTML = (cap.touchedFiles || []).length
     ? cap.touchedFiles
         .map((f) => `<span class="mono-num text-xs px-2 py-0.5 rounded-md" style="background:var(--card);border:1px solid var(--border);">${esc(f)}</span>`)
         .join('')
-    : `<span class="text-xs text-muted">自动随会话追踪</span>`;
+    : `<span class="text-xs text-muted">${esc(tr('monitor.capsule.autoTrack'))}</span>`;
 
   document.getElementById('capsuleRawPre').textContent = cap.agentPayload || '';
 
@@ -1659,9 +1758,9 @@ async function loadCalls(force = false) {
   state.callsData = data;
   renderSelects();
   renderCalls();
-  const nowStr = new Date().toLocaleTimeString('zh-CN', { hour12: false });
+  const nowStr = new Date().toLocaleTimeString(getUiLang() === 'en' ? 'en-US' : 'zh-CN', { hour12: false });
   const lbl = document.getElementById('lastUpdatedLabel');
-  if (lbl) lbl.textContent = `最近同步 ${nowStr}`;
+  if (lbl) lbl.textContent = tr('monitor.calls.lastSync', { time: nowStr });
 }
 
 async function loadQuota() {
@@ -1687,9 +1786,15 @@ async function loadConfigAndDoctor() {
     callAppTool('app_config_manage', { action: 'get' }),
     callAppTool('app_doctor_action', { action: 'diagnose' }),
   ]);
+  const prevLang = getUiLang();
   if (cfgRes?.config) state.config = cfgRes.config;
   if (cfgRes?.popoutStatus) state.popoutStatus = cfgRes.popoutStatus;
   if (docRes?.report) state.doctorReport = docRes.report;
+  const nextLang = getUiLang();
+  if (nextLang !== prevLang) {
+    applyUiLanguage(nextLang);
+    return;
+  }
   renderSelects();
   renderSettings();
   if (state.launcherMode) renderLauncherView();
@@ -1701,6 +1806,7 @@ async function persistConfigPatch(patch) {
   if (res?.popoutStatus) state.popoutStatus = res.popoutStatus;
   renderSettings();
   renderSelects();
+  return res;
 }
 
 async function refreshAll(animated = true, manual = false, force = false) {
@@ -1725,13 +1831,13 @@ async function refreshAll(animated = true, manual = false, force = false) {
     if (state.inSettings && mySeq === refreshSeq) {
       await loadConfigAndDoctor().catch(() => {});
     }
-    if (manual && mySeq === refreshSeq) showToast('已增量同步最新数据');
+    if (manual && mySeq === refreshSeq) showToast(tr('toast.synced'));
   } catch (err) {
     if (!state.contextData) {
       const attr = document.getElementById('ctxAttribution');
-      if (attr) attr.textContent = `数据加载异常：${err.message}`;
+      if (attr) attr.textContent = tr('toast.syncFailed', { error: err.message });
     }
-    if (manual && mySeq === refreshSeq) showToast(`同步失败：${err.message}`);
+    if (manual && mySeq === refreshSeq) showToast(tr('toast.syncFailed', { error: err.message }), 'error');
   } finally {
     if (mySeq === refreshSeq) {
       refreshInFlight = false;
@@ -1781,7 +1887,7 @@ function renderContextModelSim() {
   const targetLimit = Number(sel.value) || 0;
   const used = Number(state.contextData?.usedTokens) || 0;
   if (!targetLimit) {
-    out.textContent = '选择目标窗口实时预览占比';
+    out.textContent = tr('monitor.ctx.modelSimHint');
     out.style.color = 'var(--muted-foreground)';
     return;
   }
@@ -1790,8 +1896,8 @@ function renderContextModelSim() {
   const warnPct = state.config.alerts?.contextWarningPct ?? 75;
   out.textContent =
     simPct >= 100
-      ? `超出上限（${simPct.toFixed(1)}%，超额 ${fmtK(used - targetLimit)}，需先压缩）`
-      : `模拟占比 ${simPct.toFixed(1)}% · 剩余 ${fmtK(simFree)}`;
+      ? tr('monitor.ctx.modelSimOverflow', { pct: simPct.toFixed(1), over: fmtK(used - targetLimit) })
+      : tr('monitor.ctx.modelSimResult', { pct: simPct.toFixed(1), free: fmtK(simFree) });
   out.style.color = simPct >= 95 ? 'var(--error)' : simPct >= warnPct ? 'var(--warning)' : 'var(--success)';
 }
 
@@ -2023,7 +2129,8 @@ function bindEvents() {
         state.openSelectId = null;
         renderSelects();
       }
-      ['capsuleModal', 'quotaModal', 'addMemModal', 'i18nPatchConfirmModal', 'i18nEntryModal', 'i18nImportModal', 'appRotationPoolModal'].forEach(closeModal);
+      ['capsuleModal', 'quotaModal', 'addMemModal', 'i18nPatchConfirmModal', 'i18nEntryModal', 'i18nImportModal', 'appRotationPoolModal', 'restartIdeModal'].forEach(closeModal);
+      document.getElementById('govLintFixModal')?.classList.add('hidden');
     }
   });
 
@@ -2062,21 +2169,21 @@ function bindEvents() {
       state.followMode = 'pinned';
       state.pinnedConversationId = state.activeConversationId;
       renderSelects();
-      showToast('已锁定当前对话（不再随其他对话切换）');
+      showToast(tr('toast.followPinned'));
     } else {
       state.followMode = 'auto';
       state.pinnedConversationId = null;
       resetSessionViewState();
       renderSelects();
       void refreshAll(true, false);
-      showToast('已恢复自动跟随当前活跃对话');
+      showToast(tr('toast.followAuto'));
     }
   });
 
   let popoutLaunchBusy = false;
   const handleOpenPopout = async (forceNew = false) => {
     if (isNativePopout) {
-      showToast('当前已在独立悬浮窗中');
+      showToast(tr('toast.popoutAlreadyIn'));
       return state.popoutStatus;
     }
     if (popoutLaunchBusy) return state.popoutStatus;
@@ -2097,15 +2204,15 @@ function bindEvents() {
       if (state.launcherMode) renderLauncherView();
       const st = res?.popoutStatus;
       if (st?.reused) {
-        showToast(`已聚焦现有独立悬浮窗（127.0.0.1:${st.port}）`);
+        showToast(tr('toast.popoutFocused', { port: st.port }));
       } else if (st?.launched) {
-        showToast(`已弹出无框固定悬浮窗（127.0.0.1:${st.port}）`);
+        showToast(tr('toast.popoutLaunched', { port: st.port }));
       } else {
-        showToast('未检测到 WebView2 或 Edge/Chrome，已保留在当前页内运行');
+        showToast(tr('toast.popoutFallback'));
       }
       return st;
     } catch (err) {
-      showToast(`唤出独立悬浮窗失败：${err?.message || '未知错误'}`);
+      showToast(tr('toast.popoutFailed', { error: err?.message || String(err) }), 'error');
       return null;
     } finally {
       popoutLaunchBusy = false;
@@ -2177,6 +2284,47 @@ function bindEvents() {
   document.getElementById('refreshBtn').addEventListener('click', () => void refreshAll(true, true));
   document.getElementById('settingsBtn').addEventListener('click', toggleSettingsView);
   document.getElementById('exitSettingsBtn').addEventListener('click', exitSettingsView);
+
+  // Monitor & Settings Restart Antigravity confirmation flow
+  let restartIdeBusy = false;
+  const openRestartIdeModal = () => {
+    const confirmBtn = document.getElementById('restartIdeConfirmBtn');
+    if (confirmBtn) {
+      confirmBtn.disabled = false;
+      confirmBtn.textContent = tr('monitor.restart.confirm');
+    }
+    openModal('restartIdeModal');
+  };
+  document.getElementById('restartIdeBtn')?.addEventListener('click', openRestartIdeModal);
+  document.getElementById('settingsRestartIdeBtn')?.addEventListener('click', openRestartIdeModal);
+  document.getElementById('restartIdeConfirmBtn')?.addEventListener('click', () => {
+    if (restartIdeBusy) return;
+    restartIdeBusy = true;
+    const btn = document.getElementById('restartIdeConfirmBtn');
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = tr('monitor.restart.restarting');
+    }
+    void (async () => {
+      try {
+        const res = await callAppTool('app_config_manage', { action: 'restart_antigravity' });
+        closeModal('restartIdeModal');
+        if (res && res.ok === false) {
+          showToast(tr('monitor.restart.failed', { error: res.message || res.error || res.status || 'not_found' }), 'error');
+        } else {
+          showToast(tr('monitor.restart.success'), 'success');
+        }
+      } catch (err) {
+        showToast(tr('monitor.restart.failed', { error: err?.message || String(err) }), 'error');
+      } finally {
+        restartIdeBusy = false;
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = tr('monitor.restart.confirm');
+        }
+      }
+    })();
+  });
   document.getElementById('alertBtn').addEventListener('click', () => {
     const acc = document.getElementById('alertsAcc');
     acc.dataset.open = String(acc.dataset.open !== 'true');
@@ -2318,19 +2466,45 @@ function bindEvents() {
     })();
   });
 
+  // Settings: UI language switcher (instant apply + persist)
+  document.querySelectorAll('#uiLangSeg [data-ui-lang]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const nextLang = normalizeUiLang(btn.dataset.uiLang);
+      if (nextLang === getUiLang()) return;
+      applyUiLanguage(nextLang);
+      void persistConfigPatch({ uiLanguage: nextLang })
+        .then(() => {
+          showToast(tr('toast.langUpdated'), 'success');
+        })
+        .catch((err) => {
+          showToast(tr('toast.syncFailed', { error: err?.message || String(err) }), 'error');
+        });
+    });
+  });
+
   // Settings switches & inputs
   document.getElementById('auxAutoSwitch').addEventListener('click', () => {
     const next = !state.config.auxAutoOpen;
-    void persistConfigPatch({ auxAutoOpen: next }).then(() => {
-      showToast(next ? '已开启右侧边栏自动呼出' : '已关闭自动呼出（仅通过右侧 + 菜单手动打开）');
-    });
+    void persistConfigPatch({ auxAutoOpen: next })
+      .then(() => {
+        showToast(next ? tr('toast.auxAutoOn') : tr('toast.auxAutoOff'));
+      })
+      .catch((err) => {
+        renderSettings();
+        showToast(tr('toast.syncFailed', { error: err?.message || String(err) }), 'error');
+      });
   });
 
   document.getElementById('sidebarAutoPopoutSwitch')?.addEventListener('click', () => {
     const next = state.config.popout?.autoLaunchFromSidebar === false;
-    void persistConfigPatch({ popout: { autoLaunchFromSidebar: next } }).then(() => {
-      showToast(next ? '已开启左侧边栏点击自动弹出独立悬浮窗' : '已关闭自动弹出（左侧边栏将以全页内嵌展示）');
-    });
+    void persistConfigPatch({ popout: { autoLaunchFromSidebar: next } })
+      .then(() => {
+        showToast(next ? tr('toast.sidebarPopoutOn') : tr('toast.sidebarPopoutOff'));
+      })
+      .catch((err) => {
+        renderSettings();
+        showToast(tr('toast.syncFailed', { error: err?.message || String(err) }), 'error');
+      });
   });
 
   document.getElementById('popoutTopMostSwitch')?.addEventListener('click', () => {
@@ -2340,23 +2514,33 @@ function bindEvents() {
       postHostWindowMsg(next ? 'pin:1' : 'pin:0');
       renderNativePinButton();
     }
-    void persistConfigPatch({ popout: { alwaysOnTop: next } }).then(() => {
-      showToast(next ? '已开启独立悬浮窗默认固定置顶' : '已关闭默认固定置顶');
-    });
+    void persistConfigPatch({ popout: { alwaysOnTop: next } })
+      .then(() => {
+        showToast(next ? tr('toast.pinnedTop') : tr('toast.unpinnedTop'));
+      })
+      .catch((err) => {
+        renderSettings();
+        showToast(tr('toast.syncFailed', { error: err?.message || String(err) }), 'error');
+      });
   });
 
   document.getElementById('popoutSwitch').addEventListener('click', () => {
     const next = !(state.popoutStatus?.running || state.config.popout?.enabled);
     void (async () => {
-      if (!next) {
-        const res = await callAppTool('app_config_manage', { action: 'close_popout' });
-        if (res?.config) state.config = res.config;
-        if (res?.popoutStatus) state.popoutStatus = res.popoutStatus;
+      try {
+        if (!next) {
+          const res = await callAppTool('app_config_manage', { action: 'close_popout' });
+          if (res?.config) state.config = res.config;
+          if (res?.popoutStatus) state.popoutStatus = res.popoutStatus;
+          renderSettings();
+          showToast(tr('toast.popoutClosed'));
+        } else {
+          await persistConfigPatch({ popout: { enabled: true } });
+          showToast(tr('toast.popoutEnabled'));
+        }
+      } catch (err) {
         renderSettings();
-        showToast('已关闭独立悬浮小窗并释放本地端口');
-      } else {
-        await persistConfigPatch({ popout: { enabled: true } });
-        showToast('已启用独立悬浮小窗（仅 127.0.0.1 按需拉起）');
+        showToast(tr('toast.syncFailed', { error: err?.message || String(err) }), 'error');
       }
     })();
   });
@@ -2367,58 +2551,118 @@ function bindEvents() {
 
   document.getElementById('bannerSwitch').addEventListener('click', () => {
     const next = !state.config.uiBanner?.enabled;
-    void persistConfigPatch({ uiBanner: { enabled: next } }).then(() => {
-      showToast(next ? '已开启聊天流单行状态条（0 模型消耗）' : '已关闭聊天流单行状态条');
-    });
+    void persistConfigPatch({ uiBanner: { enabled: next } })
+      .then(() => {
+        showToast(next ? tr('toast.bannerOn') : tr('toast.bannerOff'));
+      })
+      .catch((err) => {
+        renderSettings();
+        showToast(tr('toast.syncFailed', { error: err?.message || String(err) }), 'error');
+      });
   });
 
   document.getElementById('cfgBudgetInput').addEventListener('change', (e) => {
     const val = Number(e.target.value);
-    void persistConfigPatch({ sessionStartBudgetTokens: val }).then(() => {
-      showToast(`已更新 SessionStart 预算为 ${state.config.sessionStartBudgetTokens} tokens`);
-    });
+    void persistConfigPatch({ sessionStartBudgetTokens: val })
+      .then(() => {
+        showToast(tr('toast.budgetUpdated', { tokens: state.config.sessionStartBudgetTokens }));
+      })
+      .catch((err) => {
+        renderSettings();
+        showToast(tr('toast.syncFailed', { error: err?.message || String(err) }), 'error');
+      });
   });
 
   document.getElementById('cfgWarnPctInput').addEventListener('change', (e) => {
     const val = Number(e.target.value);
-    void persistConfigPatch({ alerts: { contextWarningPct: val } }).then(() => {
-      renderContext(false);
-      showToast(`已更新上下文警戒线为 ${state.config.alerts.contextWarningPct}%`);
-    });
+    void persistConfigPatch({ alerts: { contextWarningPct: val } })
+      .then(() => {
+        renderContext(false);
+        showToast(tr('toast.warnPctUpdated', { pct: state.config.alerts.contextWarningPct }));
+      })
+      .catch((err) => {
+        renderSettings();
+        showToast(tr('toast.syncFailed', { error: err?.message || String(err) }), 'error');
+      });
   });
 
   document.getElementById('cfgDropPctInput').addEventListener('change', (e) => {
     const val = Number(e.target.value);
-    void persistConfigPatch({ alerts: { cacheDropThresholdPct: val } }).then(() => {
-      showToast(`已更新击穿告警阈值为 ${state.config.alerts.cacheDropThresholdPct}%`);
-    });
+    void persistConfigPatch({ alerts: { cacheDropThresholdPct: val } })
+      .then(() => {
+        showToast(tr('toast.dropPctUpdated', { pct: state.config.alerts.cacheDropThresholdPct }));
+      })
+      .catch((err) => {
+        renderSettings();
+        showToast(tr('toast.syncFailed', { error: err?.message || String(err) }), 'error');
+      });
+  });
+
+  document.getElementById('settingsResetDefaultsBtn')?.addEventListener('click', () => {
+    void (async () => {
+      try {
+        await persistConfigPatch({
+          uiLanguage: DEFAULT_UI_LANG,
+          pollIntervalSec: 5,
+          auxAutoOpen: true,
+          uiBanner: { enabled: true },
+          sessionStartBudgetTokens: 450,
+          alerts: { contextWarningPct: 75, cacheDropThresholdPct: 50 },
+          popout: { autoLaunchFromSidebar: true, alwaysOnTop: true, size: '460x720' },
+        });
+        applyUiLanguage(state.config?.uiLanguage || DEFAULT_UI_LANG);
+        restartPollTimer();
+        renderContext(false);
+        showToast(tr('toast.configReset'), 'success');
+      } catch (err) {
+        renderSettings();
+        showToast(tr('toast.syncFailed', { error: err?.message || String(err) }), 'error');
+      }
+    })();
   });
 
   // Doctor actions
   document.getElementById('docRebuildBtn').addEventListener('click', () => {
     void (async () => {
-      const res = await callAppTool('app_doctor_action', { action: 'rebuild_index' });
-      state.doctorReport = res.report;
-      renderSettings();
-      showToast(`已从真相源无损重建 SQLite 索引（${res.rebuild?.elapsedMs ?? 0}ms）`);
+      try {
+        const res = await callAppTool('app_doctor_action', { action: 'rebuild_index' });
+        state.doctorReport = res.report;
+        renderSettings();
+        showToast(tr('toast.indexRebuilt', { ms: res.rebuild?.elapsedMs ?? 0 }), 'success');
+      } catch (err) {
+        showToast(tr('toast.syncFailed', { error: err?.message || String(err) }), 'error');
+      }
     })();
   });
 
   document.getElementById('docExportBtn').addEventListener('click', () => {
     void (async () => {
-      const res = await callAppTool('app_doctor_action', { action: 'export_backup' });
-      state.doctorReport = res.report;
-      renderSettings();
-      showToast(`已导出脱敏备份至 ${res.exported?.displayPath || '.context-cache/exports/'}`);
+      try {
+        const res = await callAppTool('app_doctor_action', { action: 'export_backup' });
+        state.doctorReport = res.report;
+        renderSettings();
+        showToast(tr('toast.backupExported', { path: res.exported?.displayPath || '.context-cache/exports/' }), 'success');
+      } catch (err) {
+        showToast(tr('toast.syncFailed', { error: err?.message || String(err) }), 'error');
+      }
     })();
   });
 
   document.getElementById('docRunBtn').addEventListener('click', () => {
     void (async () => {
-      const res = await callAppTool('app_doctor_action', { action: 'diagnose' });
-      state.doctorReport = res.report;
-      renderSettings();
-      showToast(res.report?.healthy ? 'Doctor 体检通过：Hook / MCP / 索引 / 部署均正常' : `Doctor 发现 ${res.report?.issues?.length || 1} 项待关注`);
+      try {
+        const res = await callAppTool('app_doctor_action', { action: 'diagnose' });
+        state.doctorReport = res.report;
+        renderSettings();
+        showToast(
+          res.report?.healthy
+            ? tr('toast.doctorHealthy')
+            : tr('toast.doctorIssues', { count: res.report?.issues?.length || 1 }),
+          res.report?.healthy ? 'success' : 'info'
+        );
+      } catch (err) {
+        showToast(tr('toast.syncFailed', { error: err?.message || String(err) }), 'error');
+      }
     })();
   });
 }
@@ -2445,6 +2689,25 @@ async function init() {
     positionIndicator,
     onOpenSettings: toggleSettingsView,
     getProjectDir: () => state.activeProjectDir || state.contextData?.projectDir || undefined,
+    canSendMessage: () => Boolean(mcpApp && state.canSendMessage),
+    sendToAgent: async (text) => {
+      const payload = String(text || '').trim();
+      if (!payload) throw new Error('提示词不能为空');
+      if (mcpApp && state.canSendMessage && typeof mcpApp.sendMessage === 'function') {
+        await mcpApp.sendMessage({
+          role: 'user',
+          content: [{ type: 'text', text: payload }],
+        });
+        return { mode: 'sent' };
+      }
+      if (mcpApp && state.canUpdateModelContext && typeof mcpApp.updateModelContext === 'function') {
+        await mcpApp.updateModelContext({
+          content: [{ type: 'text', text: payload }],
+        });
+        return { mode: 'attached' };
+      }
+      return { mode: 'unsupported' };
+    },
   });
   governanceModule.init();
   appearanceModule = createAppearanceModule({
@@ -2460,6 +2723,7 @@ async function init() {
   });
   appearanceModule.init();
   bindEvents();
+  applyStaticTranslations(document, getUiLang());
   syncConsoleNavState();
   renderSelects();
   requestAnimationFrame(() => {
@@ -2482,7 +2746,7 @@ async function init() {
   ro.observe(document.getElementById('consoleWorkspace') || document.getElementById('appShell'));
 
   if (!popoutToken) {
-    mcpApp = new App({ name: 'Antigravity Hub', version: '1.5.0' }, {});
+    mcpApp = new App({ name: 'Antigravity Hub', version: APP_VERSION }, {});
 
     // Register handlers BEFORE connect() per Antigravity mcp-app-development guidelines
     mcpApp.ontoolinput = ({ arguments: args }) => {
@@ -2506,8 +2770,12 @@ async function init() {
     mcpApp.ontoolresult = (result) => {
       const sc = result?.structuredContent;
       if (!sc) return;
+      const prevLang = getUiLang();
       if (sc.config) state.config = sc.config;
       if (sc.popoutStatus) state.popoutStatus = sc.popoutStatus;
+      if (getUiLang() !== prevLang) {
+        applyUiLanguage(getUiLang());
+      }
       if (sc.context) {
         const changed = Boolean(
           state.activeConversationId &&
@@ -2556,6 +2824,7 @@ async function init() {
 
       const caps = mcpApp.getHostCapabilities();
       state.canUpdateModelContext = Boolean(caps?.updateModelContext);
+      state.canSendMessage = Boolean(caps?.message);
       // Distinguish left sidebar global entrypoint (no conversation capabilities) vs right aux_pane
       state.surface = caps?.updateModelContext || caps?.message ? 'aux_pane' : 'global';
 
@@ -2572,6 +2841,7 @@ async function init() {
     // Standalone popout window: native frameless OS floating window with TopMost pin, drag/resize & bounds memory
     state.surface = 'popout';
     state.canUpdateModelContext = false;
+    state.canSendMessage = false;
     if (initialThemeParam === 'dark' || initialThemeParam === 'light') {
       applyDocumentTheme(initialThemeParam);
       postHostWindowMsg(`theme:${initialThemeParam}`);

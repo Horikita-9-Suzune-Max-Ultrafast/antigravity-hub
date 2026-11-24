@@ -3,9 +3,11 @@ import { getDataPaths } from './paths.mjs';
 import { atomicWriteJson } from './storage.mjs';
 
 export const VALID_POLL_INTERVALS = [3, 5, 10, 30, 60, 0];
+export const VALID_UI_LANGUAGES = ['zh-CN', 'en'];
 
 export const DEFAULT_CONFIG = {
   version: 1,
+  uiLanguage: 'zh-CN',
   pollIntervalSec: 5,
   auxAutoOpen: true,
   popout: {
@@ -117,17 +119,20 @@ export const DEFAULT_CONFIG = {
   quotaCalibrations: {},
 };
 
+const UNSAFE_MERGE_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+
 function deepMerge(base, patch) {
   if (!patch || typeof patch !== 'object' || Array.isArray(patch)) {
     return patch === undefined ? structuredClone(base) : structuredClone(patch);
   }
   const out = structuredClone(base);
   for (const [k, v] of Object.entries(patch)) {
-    if (v === undefined) continue;
+    if (v === undefined || UNSAFE_MERGE_KEYS.has(k)) continue;
     if (
       v &&
       typeof v === 'object' &&
       !Array.isArray(v) &&
+      Object.prototype.hasOwnProperty.call(out, k) &&
       out[k] &&
       typeof out[k] === 'object' &&
       !Array.isArray(out[k])
@@ -145,6 +150,18 @@ function deepMerge(base, patch) {
  */
 export function sanitizeConfig(cfg) {
   const out = deepMerge(DEFAULT_CONFIG, cfg);
+  if (typeof out.uiLanguage === 'string') {
+    const trimmedLang = out.uiLanguage.trim();
+    if (VALID_UI_LANGUAGES.includes(trimmedLang)) {
+      out.uiLanguage = trimmedLang;
+    } else if (trimmedLang.toLowerCase() === 'en') {
+      out.uiLanguage = 'en';
+    } else {
+      out.uiLanguage = 'zh-CN';
+    }
+  } else {
+    out.uiLanguage = 'zh-CN';
+  }
   if (!VALID_POLL_INTERVALS.includes(Number(out.pollIntervalSec))) {
     out.pollIntervalSec = 5;
   } else {
@@ -179,7 +196,7 @@ export function sanitizeConfig(cfg) {
   out.alerts.lowTpsThreshold = Math.max(5, Math.min(100, Number(out.alerts.lowTpsThreshold) || 15));
   out.alerts.lowTpsStreak = Math.max(2, Math.min(10, Number(out.alerts.lowTpsStreak) || 3));
 
-  if (!['monitor', 'i18n'].includes(out.console?.defaultModule)) {
+  if (!['monitor', 'governance', 'appearance', 'i18n'].includes(out.console?.defaultModule)) {
     out.console = { defaultModule: 'monitor' };
   }
   out.i18n.installDirOverride = typeof out.i18n.installDirOverride === 'string' ? out.i18n.installDirOverride.trim() : '';

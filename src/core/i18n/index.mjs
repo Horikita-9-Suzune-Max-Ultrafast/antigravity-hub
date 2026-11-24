@@ -340,3 +340,4 @@ export async function handleI18nAction(args = {}, options = {}) {
 }
 
 export { getMergedDictionary, compileRuntimeBundle };
+export { restartAntigravity } from '../client-restart.mjs';

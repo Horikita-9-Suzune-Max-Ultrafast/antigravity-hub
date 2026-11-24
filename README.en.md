@@ -8,9 +8,9 @@
 [![Node.js >= 24](https://img.shields.io/badge/Node.js-%3E%3D24-339933.svg)](https://nodejs.org/)
 [![Zero Runtime Deps](https://img.shields.io/badge/Runtime%20Deps-0-brightgreen.svg)](#architecture--design-principles)
 
-**Antigravity Hub** is a modular native MCP App platform for **Google Antigravity**, featuring a responsive dual-layout shell (left icon rail on wide screens, compact top module bar in narrow side panes) with four built-in core modules:
-1. **Context Cache & Monitor**: Context window breakdown, main/sub-agent TPS & prefix-cache drop attribution, auto-following active conversations across views, native frameless floating monitor, Git-aware cross-session memory & dual-view handoff capsules.
-2. **Ecosystem & Harness Governance**: Effective Harness stack (`P1 Workspace` → `P4 Built-in`), offline 3-in-1 linter (MCP health, Skill conflicts/broken links, redacted secret audit), 5-layer safety guardrails, **multi-signal content classifier & interactive scenario profiles (user-pinned core plugins, manual category overrides, Rules/Skills/MCP token breakdown diff, and one-step save as custom profile)**, plus host config snapshot time machine & CLI rollback escape hatch.
+**Antigravity Hub** is a modular native MCP App platform for **Google Antigravity**, featuring a responsive dual-layout shell (left icon rail on wide screens, compact top module bar in narrow side panes) and **instant zh-CN / English UI language switching** across four built-in core modules:
+1. **Context Cache & Monitor**: Context window breakdown, fully localized Mounted Assets, main/sub-agent TPS & prefix-cache drop attribution, auto-following active conversations across views, one-click safe Antigravity restart right from Monitor (never touches `app.asar`), native frameless floating monitor, Git-aware cross-session memory & dual-view handoff capsules.
+2. **Ecosystem & Harness Governance**: Effective Harness stack (`P1 Workspace` → `P4 Built-in`), offline 3-in-1 linter (MCP health, Skill conflicts/broken links, redacted secret audit) with **tiered remediation workflows (preview/send preset fix prompts to Agent, local jump-to-toggle, redacted preview, and persistent per-finding ignore with live score recalc)**, 5-layer safety guardrails, **multi-signal content classifier & interactive scenario profiles (user-pinned core plugins, manual category overrides, Rules/Skills/MCP token breakdown diff, and one-step save as custom profile)**, plus host config snapshot time machine & CLI rollback escape hatch.
 3. **Appearance & Wallpaper Engine**: Reuses the fail-open client runtime (zero new ASAR injection points), pure CSS gradient presets, external wallpaper library & 100% read-only local folder scanning, **custom rotation pool & library subset selection with dual-buffer crossfade**, 15 MiB circuit breaker, **live slider tuning (opacity, blur, saturation, scrim opacity, glass)**, independent light/dark theme bindings, and instant emergency off.
 4. **Antigravity Localization**: Pure Node.js zero-dependency streaming ASAR patcher, 739+ curated default Chinese entries (native menus + UI + dynamic regex patterns), 3-layer hot-reloaded external dictionary, physical immunity zones, brand customization, update-drift reminders, and detached apply/restore worker.
 
@@ -47,8 +47,9 @@
 - Auto-redacts secrets (Bearer tokens, API keys, JWTs, PEM private keys) before writing to disk; injects a `< 500 tokens` brief at `SessionStart` with `HEAD` staleness indicators.
 - **Fixed-Height Dual-View Handoff Capsule**: Toggle between human-readable cards (with live per-decision checkboxes updating the token budget) and the compact `[CTX-CAPSULE]` agent payload, with optional `updateModelContext` attachment in Aux Pane.
 
-### 5. Native Frameless Floating Host, Responsive Console Shell & Settings (Upgraded in v1.3.0)
-- **Responsive Modular Console Shell**: Displays a `56px` left icon rail on wide viewports (`> 680px`) and automatically collapses into a compact top module bar in narrow side panes (`<= 680px`), maintaining zero horizontal overflow and dynamic popover viewport clamping.
+### 5. Native Frameless Floating Host, Responsive Bilingual Shell & Settings (Upgraded in v1.5.2)
+- **Responsive Modular Console Shell & Instant Bilingual Switch**: Displays a `56px` left icon rail on wide viewports (`> 680px`) and collapses into a compact top module bar in narrow side panes (`<= 680px`), with zero horizontal overflow. Ships a zero-dep `zh-CN` / `en` UI dictionary (`src/ui/i18n-ui.mjs`) switchable live in Settings without reload, fully localizing Monitor Mounted Assets and all controls.
+- **Monitor Safe Restart & 4-Section Settings**: Adds a confirmation-guarded **Restart Antigravity** button in both the Monitor toolbar and Settings Maintenance (detached breakaway restart that never touches `app.asar`). Settings are cleanly organized into General & Language, Monitor & Alerts, Floating Window, and Maintenance & Actions (Doctor, Rebuild Index, Export Backup, Restart Antigravity, Reset Defaults).
 - **Native Windows Frameless WebView2 Floating Window** (`global`: `Antigravity Hub`): Launches a native rounded borderless OS window over a `127.0.0.1` ephemeral port with one-time token auth (falling back to Edge/Chrome `--app` on other platforms). Supports Always-on-Top pinning, **quick-collapse mini bar (with Context %, TPS & Model badges + horizontal resize)**, **independent minimize & foreground restore**, high-DPI scaling, 8-edge resize, and **auto-port release on close**.
 - Configurable auto-refresh interval (`3s` / `5s` / `10s` / `30s` / `60s` / `manual`), running exclusively over app-only tools at **0 LLM token cost**.
 
@@ -60,7 +61,8 @@
 - **Physical Immunity Zones, Brand Customization & Update Alerts**: Protects code editors, inputs, terminals, file paths, and custom CSS selectors from accidental translation; customizes top-left brand display; alerts automatically when an official Antigravity update overwrites `app.asar`.
 
 ### 7. Ecosystem & Harness Governance
-- **Effective Harness Stack & Offline 3-in-1 Linter**: Scans Rules, Skills, Hooks, and MCP servers across `P1 Workspace > P2 Global > P3 Plugin > P4 Built-in`, detecting broken MCP targets, shadowed/broken skills, and plaintext secrets (auto-redacted) completely offline.
+- **Effective Harness Stack & Offline 3-in-1 Linter**: Scans Rules, Skills, Hooks, and MCP servers across `P1 Workspace > P2 Global > P3 Plugin > P4 Built-in`, detecting broken MCP targets, shadowed/broken skills (filtering fenced code blocks and placeholder links to eliminate false positives), and plaintext secrets (auto-redacted) completely offline.
+- **Tiered Remediation & Persistent Ignore (New in v1.5.1)**: Every finding includes a concise fix summary and strategy-matched action—Skill/config items open an editable preset prompt modal to send directly to the active conversation Agent (or copy in standalone full-page views) plus batch bundling; heavy MCP items jump straight to the toggle list; secret alerts offer redacted preview and safety-constrained prompts; per-finding ignore immediately updates the health score and can be restored anytime.
 - **Multi-Signal Classifier & User Preferences**: Classifies plugins and global MCP servers using weighted bilingual signals across manifest descriptions, `SKILL.md` descriptions, MCP tool names, and launch arguments rather than brittle name-only regexes. Users can **pin core plugins** and override categories (`coding` / `office` / `general`) in `%USERPROFILE%\.context-cache\governance\preferences.json`.
 - **Deterministic Presets & Interactive Diff Modal**: Separates deterministic presets (**Minimal**, **Full Power**) from smart templates (**Coding Focus**, **Office Collaboration**—leaving unclassified items untouched by default). Preview modal supports per-item checkboxes, live **Rules / Skills / MCP token delta breakdown**, and optional one-step **save as custom profile**.
 - **5-Layer Guardrails & Snapshot Time Machine**: System-protects `context-cache`, captures immutable host config snapshots before every write, and provides one-click lossless rollback in UI or via `ctx gov rollback`.
@@ -99,16 +101,16 @@
 
 ### Option A: Prebuilt Release Bundle (Recommended, No `npm install`)
 
-1. Download `context-cache-v1.5.0-plugin.zip` from [Releases](https://github.com/Horikita-9-Suzune-Max-Ultrafast/antigravity-hub/releases) (plain readable `.mjs` source + pre-bundled single-file UI, zero `node_modules`).
+1. Download `context-cache-v1.5.2-plugin.zip` from [Releases](https://github.com/Horikita-9-Suzune-Max-Ultrafast/antigravity-hub/releases) (plain readable `.mjs` source + pre-bundled single-file UI, zero `node_modules`).
 2. Extract into `~/.gemini/config/plugins/` so `plugin.json` lives at `~/.gemini/config/plugins/context-cache/plugin.json`:
    - **Windows PowerShell**:
      ```powershell
-     Expand-Archive -Path .\context-cache-v1.5.0-plugin.zip -DestinationPath "$env:USERPROFILE\.gemini\config\plugins" -Force
+     Expand-Archive -Path .\context-cache-v1.5.2-plugin.zip -DestinationPath "$env:USERPROFILE\.gemini\config\plugins" -Force
      ```
    - **macOS / Linux**:
      ```bash
      mkdir -p ~/.gemini/config/plugins
-     unzip -o context-cache-v1.5.0-plugin.zip -d ~/.gemini/config/plugins
+     unzip -o context-cache-v1.5.2-plugin.zip -d ~/.gemini/config/plugins
      ```
 3. Antigravity discovers and loads the plugin automatically (no restart required).
 
@@ -122,7 +124,7 @@ cd antigravity-hub
 # 2. Install dev-only UI build tools (never copied into deployed bundle)
 npm install
 
-# 3. Run full 12-file automated test suite (27 test cases, isolated temp dirs)
+# 3. Run full 13-file automated test suite (31 test cases, isolated temp dirs)
 npm test
 
 # 4. Build single-file MCP App UI and deploy to ~/.gemini/config/plugins/context-cache

@@ -393,3 +393,97 @@ test('Multi-signal classification, user pinning, category overrides, and interac
     env.cleanup();
   }
 });
+
+test('governance v1.5.1: ignores code-block/placeholder links, attaches tiered remediation, and supports ignore/unignore with live score recalc', () => {
+  const env = makeTempEnv();
+  try {
+    const configDir = env.options.configDir;
+
+    // Skill with placeholder [text](url) and fenced code link (must NOT trigger false positive)
+    const cleanSkillDir = path.join(configDir, 'plugins', 'gdocs-mock', 'skills', 'gdocs-mock');
+    fs.mkdirSync(cleanSkillDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(configDir, 'plugins', 'gdocs-mock', 'plugin.json'),
+      JSON.stringify({ name: 'gdocs-mock', displayName: 'Docs Mock', version: '1.0.0' })
+    );
+    fs.writeFileSync(
+      path.join(cleanSkillDir, 'SKILL.md'),
+      [
+        '---',
+        'name: gdocs-mock',
+        'description: Read and edit documents with markdown examples.',
+        '---',
+        'Inline example `[title](url)` and plain [doc](url) or [ref](<url>).',
+        '```markdown',
+        '[inside fence](./nonexistent-in-code.md)',
+        '```',
+      ].join('\n'),
+      'utf8'
+    );
+
+    // Skill with a REAL broken relative link
+    const brokenSkillDir = path.join(configDir, 'plugins', 'broken-mock', 'skills', 'broken-mock');
+    fs.mkdirSync(brokenSkillDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(configDir, 'plugins', 'broken-mock', 'plugin.json'),
+      JSON.stringify({ name: 'broken-mock', displayName: 'Broken Mock', version: '1.0.0' })
+    );
+    fs.writeFileSync(
+      path.join(brokenSkillDir, 'SKILL.md'),
+      [
+        '---',
+        'name: broken-mock',
+        'description: Skill referencing a missing local file.',
+        '---',
+        'See [details](./missing-ref.md) for instructions.',
+      ].join('\n'),
+      'utf8'
+    );
+
+    const ov1 = handleGovernanceAction({ action: 'overview', projectDir: env.options.projectDir }, env.options);
+    const findings1 = ov1.lint.findings;
+
+    // gdocs-mock must NOT have a SKILL_BROKEN_LINK false positive
+    assert.ok(!findings1.some((f) => f.code === 'SKILL_BROKEN_LINK' && f.target === 'gdocs-mock'));
+
+    // broken-mock MUST have SKILL_BROKEN_LINK with agent strategy & plugin-managed warning
+    const brokenFinding = findings1.find((f) => f.code === 'SKILL_BROKEN_LINK' && f.target === 'broken-mock');
+    assert.ok(brokenFinding);
+    assert.ok(brokenFinding.id);
+    assert.equal(brokenFinding.isPluginManaged, true);
+    assert.equal(brokenFinding.remediation?.strategy, 'agent');
+    assert.match(brokenFinding.remediation?.prompt || '', /missing-ref\.md/);
+    assert.match(brokenFinding.remediation?.prompt || '', /已安装插件目录/);
+
+    // Secret finding MUST use secret_manual strategy with safety prompt
+    const secretFinding = findings1.find((f) => f.category === 'secret');
+    assert.ok(secretFinding);
+    assert.equal(secretFinding.remediation?.strategy, 'secret_manual');
+    assert.match(secretFinding.remediation?.prompt || '', /禁止.*回显/);
+
+    const scoreBefore = ov1.lint.score;
+
+    // Ignore the broken-mock finding -> removed from active findings, added to ignoredFindings, score rises
+    const ignoreRes = handleGovernanceAction(
+      { action: 'set_lint_ignore', findingId: brokenFinding.id, ignored: true, projectDir: env.options.projectDir },
+      env.options
+    );
+    assert.equal(ignoreRes.result.ok, true);
+    assert.ok(!ignoreRes.overview.lint.findings.some((f) => f.id === brokenFinding.id));
+    assert.ok(ignoreRes.overview.lint.ignoredFindings.some((f) => f.id === brokenFinding.id));
+    assert.equal(ignoreRes.overview.lint.counts.ignored, 1);
+    assert.ok(ignoreRes.overview.lint.score > scoreBefore);
+
+    // Unignore restores it and score returns
+    const unignoreRes = handleGovernanceAction(
+      { action: 'set_lint_ignore', findingId: brokenFinding.id, ignored: false, projectDir: env.options.projectDir },
+      env.options
+    );
+    assert.equal(unignoreRes.result.ok, true);
+    assert.ok(unignoreRes.overview.lint.findings.some((f) => f.id === brokenFinding.id));
+    assert.equal(unignoreRes.overview.lint.counts.ignored, 0);
+    assert.equal(unignoreRes.overview.lint.score, scoreBefore);
+  } finally {
+    env.cleanup();
+  }
+});

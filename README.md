@@ -8,9 +8,9 @@
 [![Node.js >= 24](https://img.shields.io/badge/Node.js-%3E%3D24-339933.svg)](https://nodejs.org/)
 [![Zero Runtime Deps](https://img.shields.io/badge/Runtime%20Deps-0-brightgreen.svg)](#架构与设计原则)
 
-**Antigravity Hub** 是为 **Google Antigravity** 打造的模块化原生控制中心，采用**宽屏左侧窄图标栏 / 窄屏顶部紧凑切换条**的响应式双形态外壳，内置四大核心模块：
-1. **上下文缓存与监控（Context Cache & Monitor）**：上下文构成透视与切模型水位模拟、主/子 Agent 实时 TPS 与缓存击穿/卫生体检、多对话自动跟随、右侧边栏一键呼出原生无框悬浮窗、Git 感知跨会话记忆库与交接胶囊（含新手悬停说明）。
-2. **生态治理与 Harness 体检（Ecosystem & Harness Governance）**：Effective Harness 全景生效栈（P1 工作区 → P4 内置）、三合一纯离线体检（MCP 健康/Schema 冗余、Skill 质量/冲突/断链、隐私防泄露审计盾）、五重零事故安全护栏开关、**多信号内容分类与可勾选场景预设（支持用户自定义常驻核心、分类覆盖、Rules/Skills/MCP Token 拆分预览与一步另存）**，以及宿主配置快照时间机器（含 CLI 应急逃生舱）。
+**Antigravity Hub** 是为 **Google Antigravity** 打造的模块化原生控制中心，采用**宽屏左侧窄图标栏 / 窄屏顶部紧凑切换条**的响应式双形态外壳，支持**简体中文 / English 双语界面免刷新实时切换**，内置四大核心模块：
+1. **上下文缓存与监控（Context Cache & Monitor）**：上下文构成透视与切模型水位模拟、已挂载资产完整双语展示、主/子 Agent 实时 TPS 与缓存击穿/卫生体检、多对话自动跟随、顶栏一键安全重启 Antigravity（不触碰 `app.asar`）、右侧边栏一键呼出原生无框悬浮窗、Git 感知跨会话记忆库与交接胶囊（含新手悬停说明）。
+2. **生态治理与 Harness 体检（Ecosystem & Harness Governance）**：Effective Harness 全景生效栈（P1 工作区 → P4 内置）、三合一纯离线体检（MCP 健康/Schema 冗余、Skill 质量/冲突/断链、隐私防泄露审计盾）与**分层修复闭环（一键预览/发送预设提示词给 Agent、本地跳转处理、脱敏预览、单条忽略与实时重算评分）**、五重零事故安全护栏开关、**多信号内容分类与可勾选场景预设（支持用户自定义常驻核心、分类覆盖、Rules/Skills/MCP Token 拆分预览与一步另存）**，以及宿主配置快照时间机器（含 CLI 应急逃生舱）。
 3. **外观壁纸系统（Appearance & Wallpaper）**：复用现有 Fail-Open 客户端运行时（零新增 ASAR 侵入点）、原创纯 CSS 渐变氛围预设、外置本地壁纸库与 100% 只读文件夹扫描、**本地壁纸库轮播池子集选择与双缓冲淡入淡出**、15 MiB 体积熔断与 Blob 内存自动释放、**实时拖动热调参（不透明度/模糊/饱和度/遮罩/面板不透明度/毛玻璃）**、深浅主题独立绑定、定时/启动轮播（支持 1 分钟自定义间隔）与秒级热关闭（含 CLI 急救命令）。
 4. **界面汉化（Antigravity Localization）**：纯 Node.js 零依赖流式 ASAR 补丁引擎、739+ 精校内置词典（含原生菜单与动态模板正则）、三层词典外置热加载、物理免疫区防误翻、品牌名自定义、官方升级覆盖自动提醒与脱离进程一键应用/无损还原。
 
@@ -47,8 +47,9 @@
 - 所有记忆写入前自动脱敏（过滤 Bearer Token、API Key、JWT、PEM 私钥等），`SessionStart` 在 `< 500 tokens` 硬预算内注入极简项目索引并提示 `HEAD` 前进标脏。
 - **固定高度双视图交接胶囊**：默认展示人眼易读卡片（逐条勾选决策实时计算 Token 预算），一键切换 Agent 紧凑载荷原文（`[CTX-CAPSULE] ...`），在 Aux Pane 中支持通过 `updateModelContext` 一键附着到下一条消息。
 
-### 5. 原生无框悬浮窗、响应式控制台外壳与专属设置（v1.3.0 升级）
-- **响应式模块化控制台外壳**：宽屏（`> 680px`，左侧边栏全页或宽屏悬浮窗）展示 `56px` 固定左侧图标导航栏，窄屏（`<= 680px`，右侧边栏或紧凑悬浮窗）自动折叠为顶部紧凑模块切换条；所有自定义下拉菜单内置动态视口边界钳制，零横向滚动与裁切。
+### 5. 原生无框悬浮窗、响应式控制台外壳、双语界面与专属设置（v1.5.2 升级）
+- **响应式模块化控制台外壳与双语实时切换**：宽屏（`> 680px`，左侧边栏全页或宽屏悬浮窗）展示 `56px` 固定左侧图标导航栏，窄屏（`<= 680px`，右侧边栏或紧凑悬浮窗）自动折叠为顶部紧凑模块切换条；内置零依赖中英双语词典（`src/ui/i18n-ui.mjs`），可在设置中一键切换 **简体中文 / English** 并即时生效，完整汉化监控页「已挂载资产」（MCP 服务、按需/常驻工具、记忆与规则文件、生效技能与自定义代理等）。
+- **监控顶栏安全重启与 4 分区设置中心**：监控页顶栏与设置页维护区均提供 **「重启 Antigravity」** 按钮（带确认弹窗防误触，通过脱离进程安全重启且绝不触碰 `app.asar`）；设置页按「常规与语言 / 监控与告警 / 独立悬浮窗 / 维护与快捷操作」清晰分组，集成健康体检、重建索引、导出备份与恢复默认配置。
 - **Windows 原生无框 WebView2 悬浮窗**（`global`: `Antigravity Hub`）：基于 `127.0.0.1` 一次性令牌自动拉起无浏览器标题栏的原生圆角悬浮窗（非 Windows 或异常时自动降级至 Edge/Chrome `--app`），支持 Always-on-Top 一键置顶固定、**快捷收缩为迷你悬浮条（含上下文占比 / TPS / 模型徽章且支持横向拉伸）**、**独立最小化与一键唤醒还原**、8 方向缩放与高 DPI 精准记忆，关闭即释放本地端口。
 - 定时检测周期可调（`3s` / `5s` / `10s` / `30s` / `60s` / `手动暂停`），全部面板刷新走私有工具，**0 模型 Token 消耗**。
 
@@ -60,7 +61,8 @@
 - **防误翻物理免疫区、品牌定制与更新提醒**：支持一键开关代码块（`.monaco-editor`/`pre`/`code`）、输入框、终端（`.xterm`）、文件路径及自定义 CSS 选择器免疫；支持原版/中文/自定义/隐藏左上角品牌显示；官方升级覆盖 `app.asar` 后顶部自动提醒一键重新汉化。
 
 ### 7. 生态治理与场景预设（Ecosystem & Harness Governance）
-- **Effective Harness 全景生效栈与离线三合一体检**：按 `P1 工作区 > P2 全局 > P3 插件 > P4 内置` 扫描全部 Rules、Skills、Hooks 与 MCP Server，纯离线检测 MCP 断路径/过重 Schema、Skill 覆盖冲突/断链以及规则文件中的明文密钥风险（自动脱敏）。
+- **Effective Harness 全景生效栈与离线三合一体检**：按 `P1 工作区 > P2 全局 > P3 插件 > P4 内置` 扫描全部 Rules、Skills、Hooks 与 MCP Server，纯离线检测 MCP 断路径/过重 Schema、Skill 覆盖冲突/断链（自动过滤代码块与占位符防误报）以及规则/配置中的明文密钥风险（自动脱敏）。
+- **体检分层修复闭环与忽略持久化（v1.5.1 新增）**：每条体检项附带简明修复建议与分层处置按钮——Skill/配置类支持预览/微调预设提示词后一键发送给当前对话 Agent（全页视图自动切为复制提示词）或批量打包修复；重型 MCP 一键跳转停用；隐私安全类提供脱敏预览与禁止回显明文的安全改造提示词；支持单条忽略（实时回升健康评分）与底部折叠区随时恢复。
 - **多信号内容分类与用户偏好**：内置分类器综合读取插件 Manifest 描述、`SKILL.md` 描述、MCP 工具名与启动参数（支持中英文语义），不再仅凭名称盲猜；用户可在「插件/MCP」页一键将核心插件设为**常驻保护**，或手动覆盖任意插件/全局 MCP 的场景分类（开发 / 办公协作 / 通用），配置持久化于 `%USERPROFILE%\.context-cache\governance\preferences.json`。
 - **确定性预设 + 可勾选推荐模板**：内置「极简省流」「全部启用」（确定性）与「专注编码」「办公协作」（推荐模板，未归类项默认保持现状防误关）；预览弹窗支持**逐项勾选微调**、实时重算 **Rules / Skills / MCP 拆分 Token 变化**，并可一步勾选**「执行后同时另存为自定义预设」**。
 - **五重安全护栏与快照时间机器**：系统级保护 `context-cache` 防失联、所有修改前自动留存不可变宿主配置快照（含永久基线），支持界面一键无损回滚与 CLI 逃生舱（`ctx gov rollback`）。
@@ -99,16 +101,16 @@
 
 ### 方式一：下载 Release 免构建插件包（推荐，零 `npm install`）
 
-1. 前往 [Releases](https://github.com/Horikita-9-Suzune-Max-Ultrafast/antigravity-hub/releases) 下载 `context-cache-v1.5.0-plugin.zip`（内部为全明文可读 `.mjs` 源码 + 预编译单文件 UI，零 `node_modules`）。
+1. 前往 [Releases](https://github.com/Horikita-9-Suzune-Max-Ultrafast/antigravity-hub/releases) 下载 `context-cache-v1.5.2-plugin.zip`（内部为全明文可读 `.mjs` 源码 + 预编译单文件 UI，零 `node_modules`）。
 2. 解压至 Antigravity 插件目录，使目录结构为 `~/.gemini/config/plugins/context-cache/plugin.json`：
    - **Windows PowerShell**：
      ```powershell
-     Expand-Archive -Path .\context-cache-v1.5.0-plugin.zip -DestinationPath "$env:USERPROFILE\.gemini\config\plugins" -Force
+     Expand-Archive -Path .\context-cache-v1.5.2-plugin.zip -DestinationPath "$env:USERPROFILE\.gemini\config\plugins" -Force
      ```
    - **macOS / Linux**：
      ```bash
      mkdir -p ~/.gemini/config/plugins
-     unzip -o context-cache-v1.5.0-plugin.zip -d ~/.gemini/config/plugins
+     unzip -o context-cache-v1.5.2-plugin.zip -d ~/.gemini/config/plugins
      ```
 3. Antigravity 会自动发现并加载插件（无需重启）。
 
@@ -122,7 +124,7 @@ cd antigravity-hub
 # 2. 安装开发期 UI 打包依赖（仅 devDependencies，不会进入部署产物）
 npm install
 
-# 3. 运行全套 12 个自动化测试文件（27 项用例，完全隔离临时目录，零真实数据与宿主污染）
+# 3. 运行全套 13 个自动化测试文件（31 项用例，完全隔离临时目录，零真实数据与宿主污染）
 npm test
 
 # 4. 构建单文件 MCP App UI 并幂等部署至 ~/.gemini/config/plugins/context-cache
@@ -206,8 +208,9 @@ context-cache/
 │   │   ├── quota.mjs                    # 5h/7d 滑动窗口、基线校准与 QuotaProvider 扩展口
 │   │   ├── popout-server.mjs            # 127.0.0.1 令牌鉴权悬浮小窗服务、握手与自动降级
 │   │   ├── win-floating-host.ps1        # Windows 原生无框 WebView2 置顶/收缩/最小化悬浮窗宿主
+│   │   ├── client-restart.mjs           # 脱离进程安全重启 Antigravity（不触碰 app.asar）
 │   │   ├── doctor.mjs                   # 体检、漂移报告、备份导出与自愈
-│   │   ├── governance/                  # 生态治理（全景扫描/多信号分类器/场景预设/离线体检/护栏快照）
+│   │   ├── governance/                  # 生态治理（全景扫描/多信号分类器/场景预设/离线体检修复闭环/护栏快照）
 │   │   ├── appearance/                  # 外观壁纸引擎（预设/外置库/只读扫描/轮播池/热加载）
 │   │   └── i18n/                        # 零依赖 Antigravity 汉化引擎（ASAR/词典/脱离重启）
 │   ├── adapters/antigravity/            # 极薄 Fail-Open Hook 适配层
@@ -215,10 +218,10 @@ context-cache/
 │   │   ├── circuit-breaker.mjs          # 3 次异常熔断 5 分钟
 │   │   └── hook.mjs                     # 统一 Hook 入口（5s 硬超时）
 │   ├── mcp/server.mjs                   # 零依赖 MCP Stdio Server（5 Model + 10 App-Only）
-│   └── ui/                              # 单文件自包含模块化控制台前端（governance/appearance/i18n）
+│   └── ui/                              # 单文件自包含模块化控制台前端（含 i18n-ui.mjs 双语词典与 governance/appearance/i18n）
 ├── plugin/                              # Antigravity 插件清单、Hooks、Rules、Skills 与图标
 ├── scripts/                             # deploy.mjs、pack-release.mjs 与 doctor.mjs
-├── tests/                               # 12 个端到端 / 单元 / 韧性测试文件（27 项用例）
+├── tests/                               # 13 个端到端 / 单元 / 韧性测试文件（31 项用例）
 ├── LICENSE                              # MIT License
 ├── README.md                            # 简体中文文档
 ├── README.en.md                         # English documentation

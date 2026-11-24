@@ -366,7 +366,7 @@ export function createI18nModule({
             <div class="px-5 py-3 flex items-center justify-between gap-3 text-xs">
               <div class="min-w-0">
                 <div class="mono-num font-medium text-fg truncate" title="${esc(b.path || name)}">${esc(name)}</div>
-                ${subParts.length ? `<div class="text-muted mono-num mt-0.5">${esc(subParts.join(' · '))}</div>` : ''}
+                ${subParts.length ? `<div class="text-muted mono-num mt-0.5">${esc(subParts.join(' / '))}</div>` : ''}
               </div>
               <span class="agy-pill i18n-status-pill shrink-0" data-tone="${tone}">${badgeText}</span>
             </div>`;
@@ -447,7 +447,7 @@ export function createI18nModule({
       packHost.innerHTML = packs
         .map(
           (pk) =>
-            `<span class="agy-pill mono-num text-[11px]" title="${esc(pk.description || pk.name)}">${esc(pk.name)} · ${pk.total}</span>`
+            `<span class="agy-pill mono-num text-[11px]" title="${esc(pk.description || pk.name)}">${esc(pk.name)} (${pk.total})</span>`
         )
         .join('');
     }
@@ -502,7 +502,7 @@ export function createI18nModule({
     const maxPage = Math.max(1, Math.ceil(total / pageSize));
 
     const infoEl = document.getElementById('i18nDictPageInfo');
-    if (infoEl) infoEl.textContent = `第 ${page} / ${maxPage} 页 · 共 ${total} 条`;
+    if (infoEl) infoEl.textContent = `第 ${page} / ${maxPage} 页（共 ${total} 条）`;
 
     const prevBtn = document.getElementById('i18nPrevPageBtn');
     const nextBtn = document.getElementById('i18nNextPageBtn');

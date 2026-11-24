@@ -482,16 +482,20 @@ export function inspectContext(params = {}, options = {}) {
 
   const deferred = [
     {
+      id: 'mcp_deferred',
       key: 'MCP tools (deferred)',
       tokens: mcpScan.deferredTokens,
+      toolCount: mcpScan.deferredCount,
       count: `${mcpScan.deferredCount} tools`,
     },
   ];
 
   const inventories = [
     {
+      id: 'mcp_servers',
       title: 'MCP servers & tools',
-      count: `${mcpScan.deferredCount} deferred · ${mcpScan.eagerCount} eager`,
+      stats: { deferred: mcpScan.deferredCount, eager: mcpScan.eagerCount },
+      count: `${mcpScan.deferredCount} deferred / ${mcpScan.eagerCount} eager`,
       items: mcpScan.servers.slice(0, 12).map((s) => ({
         name: s.name,
         meta: s.meta,
@@ -499,7 +503,9 @@ export function inspectContext(params = {}, options = {}) {
       })),
     },
     {
+      id: 'memory_rules',
       title: 'Memory & Rules files',
+      stats: { files: rulesScan.files.length },
       count: `${rulesScan.files.length} files`,
       items: rulesScan.files.slice(0, 12).map((f) => ({
         name: f.name,
@@ -508,8 +514,10 @@ export function inspectContext(params = {}, options = {}) {
       })),
     },
     {
+      id: 'skills_agents',
       title: 'Active Skills & Custom Agents',
-      count: `${skillScan.loadedSkillsCount} active · ${skillScan.agents.length} agents`,
+      stats: { active: skillScan.loadedSkillsCount, agents: skillScan.agents.length },
+      count: `${skillScan.loadedSkillsCount} active / ${skillScan.agents.length} agents`,
       items: [...skillScan.loadedSkills, ...skillScan.agents].slice(0, 12).map((it) => ({
         name: it.name,
         meta: it.meta,
