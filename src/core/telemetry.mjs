@@ -1,14 +1,169 @@
 import fs from 'node:fs';
+import path from 'node:path';
 import { getDataPaths, findTranscriptPath } from './paths.mjs';
 import { loadConfig, estimateCallCostUsd, getModelLimit } from './config.mjs';
-import { atomicWriteJson, appendJsonl, ensureDataDirs, readJsonSafe } from './storage.mjs';
+import { atomicWriteFile, atomicWriteJson, appendJsonl, ensureDataDirs, readJsonSafe } from './storage.mjs';
 import { ensureIndexReady, upsertCallRow, withIndexDb } from './index-db.mjs';
 import {
   discoverSubagentIds,
   listConversations,
-  parseTranscriptFull,
   parseTranscriptIncremental,
 } from './transcript-parser.mjs';
+
+const TELEMETRY_REPORT_TTL_MS = 1_500;
+const TELEMETRY_REPORT_CACHE_MAX = 24;
+const TIMINGS_COMPACT_MAX_LINES = 500;
+const TIMINGS_COMPACT_SIZE_HINT = 32_768;
+
+const telemetryReportCache = new Map();
+const timingsMapCache = new Map();
+
+export function clearTelemetryCache() {
+  telemetryReportCache.clear();
+  timingsMapCache.clear();
+}
+
+function safeStatSig(filePath) {
+  if (!filePath) return '-';
+  try {
+    const st = fs.statSync(filePath);
+    return `${st.size}:${st.mtimeMs}`;
+  } catch {
+    return '-';
+  }
+}
+
+function getTimingsLogPath(paths) {
+  return paths.timingsFile.replace(/\.json$/i, '.jsonl');
+}
+
+function applyTimingEvent(map, convId, ev) {
+  if (!convId) return null;
+  const entry = map[convId] || { pendingPreMs: null, pendingInvocationNum: null, samples: [] };
+  if (ev.s && typeof ev.s === 'object') {
+    entry.samples.push(ev.s);
+    if (entry.samples.length > 200) entry.samples = entry.samples.slice(-200);
+  } else if (ev.p === 'pre') {
+    entry.pendingPreMs = ev.t;
+    entry.pendingInvocationNum = ev.n ?? null;
+  } else if (ev.p === 'post') {
+    const startMs = entry.pendingPreMs;
+    const timestampMs = ev.t;
+    if (startMs && timestampMs >= startMs && timestampMs - startMs <= 600_000) {
+      const durationMs = Math.max(150, timestampMs - startMs);
+      entry.samples.push({
+        startMs,
+        endMs: timestampMs,
+        durationMs,
+        invocationNum: ev.n ?? entry.pendingInvocationNum ?? null,
+      });
+      if (entry.samples.length > 200) {
+        entry.samples = entry.samples.slice(-200);
+      }
+    }
+    entry.pendingPreMs = null;
+  }
+  map[convId] = entry;
+  return entry;
+}
+
+function loadTimingsMap(paths) {
+  const logPath = getTimingsLogPath(paths);
+  const legacyPath = paths.timingsFile;
+  const sig = `${safeStatSig(logPath)}|${safeStatSig(legacyPath)}`;
+  const cacheKey = path.resolve(logPath).toLowerCase();
+
+  const cached = timingsMapCache.get(cacheKey);
+  if (cached && cached.sig === sig) {
+    return cached.map;
+  }
+
+  const map = {};
+  // Backward compatibility: load legacy timings.json if present
+  const legacy = readJsonSafe(legacyPath, null);
+  if (legacy && typeof legacy === 'object') {
+    for (const [cid, val] of Object.entries(legacy)) {
+      if (!val || typeof val !== 'object') continue;
+      map[cid] = {
+        pendingPreMs: val.pendingPreMs ?? null,
+        pendingInvocationNum: val.pendingInvocationNum ?? null,
+        samples: Array.isArray(val.samples) ? val.samples.slice(-200) : [],
+      };
+    }
+  }
+
+  // Replay lightweight append-only timings.jsonl
+  if (fs.existsSync(logPath)) {
+    try {
+      const raw = fs.readFileSync(logPath, 'utf8');
+      for (const line of raw.split(/\r?\n/)) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        try {
+          const ev = JSON.parse(trimmed);
+          if (ev && ev.c) {
+            applyTimingEvent(map, ev.c, ev);
+          }
+        } catch {
+          // ignore malformed line
+        }
+      }
+    } catch {
+      // fail open
+    }
+  }
+
+  if (timingsMapCache.size > 16) {
+    const oldest = timingsMapCache.keys().next().value;
+    if (oldest !== undefined) timingsMapCache.delete(oldest);
+  }
+  timingsMapCache.set(cacheKey, { sig, map });
+  return map;
+}
+
+function compactTimingsLogIfNeeded(paths) {
+  const logPath = getTimingsLogPath(paths);
+  let stat;
+  try {
+    stat = fs.statSync(logPath);
+  } catch {
+    return;
+  }
+  if (stat.size < TIMINGS_COMPACT_SIZE_HINT) return;
+
+  let raw = '';
+  try {
+    raw = fs.readFileSync(logPath, 'utf8');
+  } catch {
+    return;
+  }
+  const lines = raw.split(/\r?\n/).filter((l) => l.trim().length > 0);
+  if (lines.length <= TIMINGS_COMPACT_MAX_LINES) return;
+
+  const map = {};
+  for (const line of lines) {
+    try {
+      const ev = JSON.parse(line);
+      if (ev && ev.c) applyTimingEvent(map, ev.c, ev);
+    } catch {
+      // ignore
+    }
+  }
+
+  // Keep latest 100 conversations and at most 200 samples per conversation
+  const entries = Object.entries(map);
+  const kept = entries.length > 100 ? entries.slice(entries.length - 100) : entries;
+  const outLines = [];
+  for (const [cid, ent] of kept) {
+    for (const s of (ent.samples || []).slice(-200)) {
+      outLines.push(JSON.stringify({ c: cid, s }));
+    }
+    if (ent.pendingPreMs) {
+      outLines.push(JSON.stringify({ c: cid, p: 'pre', n: ent.pendingInvocationNum ?? null, t: ent.pendingPreMs }));
+    }
+  }
+  atomicWriteFile(logPath, outLines.length ? outLines.join('\n') + '\n' : '');
+}
 
 /**
  * Resolve quota group id for a model name based on config.quotaGroups.
@@ -28,43 +183,25 @@ export function resolveQuotaGroup(modelName, config) {
 
 /**
  * Record PreInvocation or PostInvocation hook timestamp for exact hook_ms TPS calculation.
+ * Uses O(1) append-only timings.jsonl with lazy compaction (>500 lines) instead of full timings.json rewrites.
  */
 export function recordHookTiming({ conversationId, phase, invocationNum, timestampMs = Date.now() }, options = {}) {
   if (!conversationId) return null;
   const paths = ensureDataDirs(options);
-  const timings = readJsonSafe(paths.timingsFile, {});
-  const entry = timings[conversationId] || { pendingPreMs: null, samples: [] };
+  const logPath = getTimingsLogPath(paths);
 
-  if (phase === 'pre') {
-    entry.pendingPreMs = timestampMs;
-    entry.pendingInvocationNum = invocationNum ?? null;
-  } else if (phase === 'post') {
-    const startMs = entry.pendingPreMs;
-    if (startMs && timestampMs >= startMs && timestampMs - startMs <= 600_000) {
-      const durationMs = Math.max(150, timestampMs - startMs);
-      entry.samples.push({
-        startMs,
-        endMs: timestampMs,
-        durationMs,
-        invocationNum: invocationNum ?? entry.pendingInvocationNum ?? null,
-      });
-      if (entry.samples.length > 200) {
-        entry.samples = entry.samples.slice(-200);
-      }
-    }
-    entry.pendingPreMs = null;
-  }
+  const rec = {
+    c: String(conversationId),
+    p: phase === 'post' ? 'post' : 'pre',
+    n: invocationNum ?? null,
+    t: Number(timestampMs) || Date.now(),
+  };
+  appendJsonl(logPath, rec);
+  compactTimingsLogIfNeeded(paths);
 
-  timings[conversationId] = entry;
-  // Prune stale conversations (> 100 entries)
-  const keys = Object.keys(timings);
-  if (keys.length > 100) {
-    for (const k of keys.slice(0, keys.length - 100)) {
-      delete timings[k];
-    }
-  }
-  atomicWriteJson(paths.timingsFile, timings);
-  return entry;
+  timingsMapCache.delete(path.resolve(logPath).toLowerCase());
+  telemetryReportCache.clear();
+  return rec;
 }
 
 /**
@@ -216,11 +353,50 @@ function evaluateCacheDrop(prev, cur, thresholdPct) {
   };
 }
 
+function compactTailSteps(steps) {
+  if (!Array.isArray(steps) || steps.length === 0) return [];
+  return steps.slice(-6).map((s) => {
+    const invokeCalls = Array.isArray(s.toolCalls)
+      ? s.toolCalls.filter((tc) => {
+          const name = String(tc?.name || tc?.tool || '').toLowerCase();
+          return name === 'invoke_subagent' || name.endsWith('invoke_subagent');
+        })
+      : [];
+    const rawContent = typeof s.content === 'string' ? s.content : '';
+    const keepContent =
+      rawContent && /conversationid|conversation_id|conversation:\/\/|subagent|launched/i.test(rawContent)
+        ? rawContent.slice(0, 320)
+        : '';
+    return {
+      stepIndex: s.stepIndex,
+      type: s.type,
+      tsMs: s.tsMs,
+      mediaCount: s.mediaCount || 0,
+      toolCalls: invokeCalls,
+      content: keepContent,
+    };
+  });
+}
+
+function compactLastCall(call) {
+  if (!call) return null;
+  return {
+    model: call.model,
+    tsMs: call.tsMs,
+    stepIndex: call.stepIndex,
+    cacheHitRate: call.cacheHitRate,
+    contextTokens: call.contextTokens,
+  };
+}
+
 /**
- * Parse a single transcript (main or subagent) into normalized telemetry call records.
+ * Build normalized telemetry call records from parsed steps (full or incremental slice).
+ * When startIdx > 0, preceding steps[0..startIdx-1] provide lookbehind context (prevStep / media / tsMs).
  */
-function buildCallsFromTranscript({
-  transcriptPath,
+function buildCallsFromSteps({
+  steps,
+  startIdx = 0,
+  initialPrevCall = null,
   conversationId,
   rootConversationId,
   agentType,
@@ -228,13 +404,12 @@ function buildCallsFromTranscript({
   config,
   timingsMap,
 }) {
-  const steps = parseTranscriptFull(transcriptPath);
   const timingsEntry = timingsMap[conversationId];
   const usedSampleIndices = new Set();
   const calls = [];
-  let prev = null;
+  let prev = initialPrevCall || null;
 
-  for (let i = 0; i < steps.length; i++) {
+  for (let i = startIdx; i < steps.length; i++) {
     const step = steps[i];
     if (step.type !== 'PLANNER_RESPONSE') continue;
     if (step.inputTokens === 0 && step.cacheReadTokens === 0 && step.outputTokens === 0) continue;
@@ -294,12 +469,94 @@ function buildCallsFromTranscript({
     prev = fullCall;
   }
 
-  return { steps, calls };
+  return { calls, lastCall: prev ? compactLastCall(prev) : initialPrevCall };
+}
+
+/**
+ * Incrementally (or full-fallback) parse a single transcript file into new/updated calls + updated cursor state.
+ */
+function parseTranscriptForSync({
+  transcriptPath,
+  conversationId,
+  rootConversationId,
+  agentType,
+  agentTag,
+  prevState,
+  canIncremental,
+  config,
+  timingsMap,
+}) {
+  const stat = fs.statSync(transcriptPath);
+  const prevOffset = Number(prevState?.offset) || 0;
+  const useIncremental =
+    Boolean(canIncremental) && prevOffset > 0 && prevOffset <= stat.size;
+
+  if (useIncremental && prevOffset === stat.size) {
+    return {
+      mode: 'skip',
+      size: stat.size,
+      offset: prevOffset,
+      stepsForSubDiscovery: [],
+      calls: [],
+      lastCall: prevState?.lastCall || null,
+      tailSteps: Array.isArray(prevState?.tailSteps) ? prevState.tailSteps : [],
+    };
+  }
+
+  if (useIncremental) {
+    const inc = parseTranscriptIncremental(transcriptPath, prevOffset);
+    const tail = Array.isArray(prevState?.tailSteps) ? prevState.tailSteps : [];
+    const combinedSteps = [...tail, ...inc.steps];
+    const built = buildCallsFromSteps({
+      steps: combinedSteps,
+      startIdx: tail.length,
+      initialPrevCall: prevState?.lastCall || null,
+      conversationId,
+      rootConversationId,
+      agentType,
+      agentTag,
+      config,
+      timingsMap,
+    });
+    return {
+      mode: 'incremental',
+      size: stat.size,
+      offset: inc.nextOffset,
+      stepsForSubDiscovery: combinedSteps,
+      calls: built.calls,
+      lastCall: built.lastCall,
+      tailSteps: compactTailSteps(combinedSteps),
+    };
+  }
+
+  // Full parse fallback (force, missing cursor, file shrank/rotated, or empty DB)
+  const full = parseTranscriptIncremental(transcriptPath, 0);
+  const built = buildCallsFromSteps({
+    steps: full.steps,
+    startIdx: 0,
+    initialPrevCall: null,
+    conversationId,
+    rootConversationId,
+    agentType,
+    agentTag,
+    config,
+    timingsMap,
+  });
+  return {
+    mode: 'full',
+    size: stat.size,
+    offset: full.nextOffset,
+    stepsForSubDiscovery: full.steps,
+    calls: built.calls,
+    lastCall: built.lastCall,
+    tailSteps: compactTailSteps(full.steps),
+  };
 }
 
 /**
  * Sync a main conversation + all discovered subagents into JSONL truth source & SQLite index.
- * Uses file byte cursor to avoid redundant work when files haven't grown.
+ * Uses true byte-offset incremental parsing (parseTranscriptIncremental) when transcript grows,
+ * falling back to full parse on force, file shrink/rotation, or empty DB.
  */
 export function syncConversationTelemetry({ conversationId, transcriptPath, force = false }, options = {}) {
   const paths = ensureDataDirs(options);
@@ -329,17 +586,17 @@ export function syncConversationTelemetry({ conversationId, transcriptPath, forc
   }
 
   const cursors = readJsonSafe(paths.cursorsFile, {});
-  const timingsMap = readJsonSafe(paths.timingsFile, {});
+  const timingsMap = loadTimingsMap(paths);
 
-  // Check if main or any known subagent transcript changed size
   const mainStat = fs.statSync(resolvedPath);
-  const prevCursor = cursors[resolvedId] || { size: -1, subagents: [] };
-  let needsSync = force || prevCursor.size !== mainStat.size;
+  const prevCursor = cursors[resolvedId] || { size: -1, offset: 0, subagents: [] };
+  let needsSync = force || prevCursor.size !== mainStat.size || (Number(prevCursor.offset) || 0) !== mainStat.size;
 
   if (!needsSync && Array.isArray(prevCursor.subagents)) {
     for (const sub of prevCursor.subagents) {
       if (sub.path && fs.existsSync(sub.path)) {
-        if (fs.statSync(sub.path).size !== sub.size) {
+        const subSz = fs.statSync(sub.path).size;
+        if (subSz !== sub.size || (Number(sub.offset) || 0) !== subSz) {
           needsSync = true;
           break;
         }
@@ -347,92 +604,153 @@ export function syncConversationTelemetry({ conversationId, transcriptPath, forc
     }
   }
 
-  // Always check DB count in case DB was rebuilt
-  if (!needsSync) {
-    const existing = queryCalls({ rootConversationId: resolvedId }, options);
-    if (existing.length > 0) {
-      return {
-        conversationId: resolvedId,
-        calls: existing,
-        subagents: prevCursor.subagents || [],
-        syncedNew: 0,
-      };
-    }
+  // Always check DB state in case DB was rebuilt/wiped
+  const existingDbCalls = queryCalls({ rootConversationId: resolvedId }, options);
+  const hasExistingDbRows = existingDbCalls.length > 0;
+
+  if (!needsSync && hasExistingDbRows) {
+    return {
+      conversationId: resolvedId,
+      calls: existingDbCalls,
+      subagents: prevCursor.subagents || [],
+      syncedNew: 0,
+    };
   }
 
-  const mainRes = buildCallsFromTranscript({
+  const canIncrementalMain =
+    !force &&
+    hasExistingDbRows &&
+    Number(prevCursor.offset) > 0 &&
+    Number(prevCursor.offset) <= mainStat.size;
+
+  const mainRes = parseTranscriptForSync({
     transcriptPath: resolvedPath,
     conversationId: resolvedId,
     rootConversationId: resolvedId,
     agentType: 'main',
     agentTag: '主',
+    prevState: prevCursor,
+    canIncremental: canIncrementalMain,
     config,
     timingsMap,
   });
 
-  const subIds = discoverSubagentIds(mainRes.steps, resolvedId);
-  const allCalls = [...mainRes.calls];
+  // Merge previously known subagents with any newly discovered subagents
+  const prevSubMap = new Map();
+  const orderedSubIds = [];
+  if (mainRes.mode !== 'full' && Array.isArray(prevCursor.subagents)) {
+    for (const s of prevCursor.subagents) {
+      if (!s?.conversationId) continue;
+      const lower = s.conversationId.toLowerCase();
+      if (!prevSubMap.has(lower)) {
+        prevSubMap.set(lower, s);
+        orderedSubIds.push(s.conversationId);
+      }
+    }
+  }
+  const discoveredSubs = discoverSubagentIds(mainRes.stepsForSubDiscovery, resolvedId);
+  for (const sid of discoveredSubs) {
+    const lower = sid.toLowerCase();
+    if (!prevSubMap.has(lower)) {
+      prevSubMap.set(lower, null);
+      orderedSubIds.push(sid);
+    }
+  }
+
+  const callsToUpsert = [...mainRes.calls];
   const subMeta = [];
 
-  subIds.forEach((subId, idx) => {
-    const subPath = findTranscriptPath(subId, options);
-    const tag = `子${idx + 1}`;
+  orderedSubIds.forEach((subId, idx) => {
+    const prevSub = prevSubMap.get(subId.toLowerCase()) || null;
+    const subPath = prevSub?.path && fs.existsSync(prevSub.path) ? prevSub.path : findTranscriptPath(subId, options);
+    const tag = prevSub?.tag || `子${idx + 1}`;
     if (!subPath || !fs.existsSync(subPath)) {
-      subMeta.push({ conversationId: subId, tag, path: null, size: 0 });
+      subMeta.push({ conversationId: subId, tag, path: null, size: 0, offset: 0 });
       return;
     }
     const subStat = fs.statSync(subPath);
-    subMeta.push({ conversationId: subId, tag, path: subPath, size: subStat.size });
-    const subRes = buildCallsFromTranscript({
+    const canIncrementalSub =
+      !force &&
+      hasExistingDbRows &&
+      Number(prevSub?.offset) > 0 &&
+      Number(prevSub?.offset) <= subStat.size;
+
+    const subRes = parseTranscriptForSync({
       transcriptPath: subPath,
       conversationId: subId,
       rootConversationId: resolvedId,
       agentType: 'sub',
       agentTag: tag,
+      prevState: prevSub,
+      canIncremental: canIncrementalSub,
       config,
       timingsMap,
     });
-    allCalls.push(...subRes.calls);
-  });
-
-  // Sort newest first for display, persist new call UIDs to append-only JSONL truth source
-  const existingUids = withIndexDb(options, (db) => {
-    const rows = db.prepare('SELECT call_uid FROM calls WHERE root_conversation_id = ?').all(resolvedId);
-    return new Set(rows.map((r) => r.call_uid));
-  });
-
-  let syncedNew = 0;
-  withIndexDb(options, (db) => {
-    db.exec('BEGIN IMMEDIATE');
-    try {
-      for (const c of allCalls) {
-        if (!existingUids.has(c.callUid)) {
-          appendJsonl(paths.callsLogFile, c);
-          syncedNew++;
-        }
-        upsertCallRow(db, c);
-      }
-      db.exec('COMMIT');
-    } catch (err) {
-      db.exec('ROLLBACK');
-      throw err;
+    subMeta.push({
+      conversationId: subId,
+      tag,
+      path: subPath,
+      size: subRes.size,
+      offset: subRes.offset,
+      lastCall: subRes.lastCall,
+      tailSteps: subRes.tailSteps,
+    });
+    if (subRes.calls.length > 0) {
+      callsToUpsert.push(...subRes.calls);
     }
   });
 
-  // Also record incremental byte offset using parseTranscriptIncremental
-  const incCheck = parseTranscriptIncremental(resolvedPath, prevCursor.offset || 0);
+  // Upsert ONLY newly parsed/updated calls in a single SQLite transaction
+  let syncedNew = 0;
+  if (callsToUpsert.length > 0) {
+    withIndexDb(options, (db) => {
+      const rows = db.prepare('SELECT call_uid FROM calls WHERE root_conversation_id = ?').all(resolvedId);
+      const existingUids = new Set(rows.map((r) => r.call_uid));
+      db.exec('BEGIN IMMEDIATE');
+      try {
+        for (const c of callsToUpsert) {
+          if (!existingUids.has(c.callUid)) {
+            appendJsonl(paths.callsLogFile, c);
+            existingUids.add(c.callUid);
+            syncedNew++;
+          }
+          upsertCallRow(db, c);
+        }
+        db.exec('COMMIT');
+      } catch (err) {
+        db.exec('ROLLBACK');
+        throw err;
+      }
+    });
+  }
+
   cursors[resolvedId] = {
-    size: mainStat.size,
-    offset: incCheck.nextOffset,
+    size: mainRes.size,
+    offset: mainRes.offset,
+    lastCall: mainRes.lastCall,
+    tailSteps: mainRes.tailSteps,
     updatedAt: new Date().toISOString(),
     subagents: subMeta,
   };
   atomicWriteJson(paths.cursorsFile, cursors);
 
-  allCalls.sort((a, b) => b.tsMs - a.tsMs || b.stepIndex - a.stepIndex);
+  // If full sync with no skipped subagents, we already have all calls in memory (including transient hasMedia/toolCallCount).
+  // Otherwise merge updated calls with DB rows cleanly.
+  let finalCalls;
+  if (mainRes.mode === 'full' && !subMeta.some((s) => s.path && s.size > 0 && !callsToUpsert.some((c) => c.conversationId === s.conversationId))) {
+    finalCalls = [...callsToUpsert].sort((a, b) => b.tsMs - a.tsMs || b.stepIndex - a.stepIndex);
+  } else {
+    const dbCalls = queryCalls({ rootConversationId: resolvedId }, options);
+    const enriched = new Map(callsToUpsert.map((c) => [c.callUid, c]));
+    finalCalls = dbCalls.map((r) => {
+      const fresh = enriched.get(r.callUid);
+      return fresh ? { ...r, hasMedia: fresh.hasMedia, toolCallCount: fresh.toolCallCount } : r;
+    });
+  }
+
   return {
     conversationId: resolvedId,
-    calls: allCalls,
+    calls: finalCalls,
     subagents: subMeta,
     syncedNew,
   };
@@ -636,13 +954,62 @@ function calcWeightedAvgTps(calls) {
   return Number((calls.reduce((s, c) => s + (c.effectiveTps || 0), 0) / calls.length).toFixed(1));
 }
 
+function buildReportFingerprint(paths, watchedPaths) {
+  const parts = [
+    safeStatSig(getTimingsLogPath(paths)),
+    safeStatSig(paths.timingsFile),
+    safeStatSig(paths.cursorsFile),
+  ];
+  for (const wp of watchedPaths) {
+    parts.push(`${wp}:${safeStatSig(wp)}`);
+  }
+  return parts.join('|');
+}
+
+function applyReportFilters(baseReport, params = {}) {
+  const allCalls = baseReport.allCalls;
+  const filtered = allCalls.filter((c) => {
+    if (params.agentFilter && params.agentFilter !== 'all' && c.agentType !== params.agentFilter) return false;
+    if (params.modelFilter && params.modelFilter !== 'all' && c.model !== params.modelFilter) return false;
+    if (params.onlyDrop && !c.cacheDrop) return false;
+    return true;
+  });
+  return {
+    conversationId: baseReport.conversationId,
+    calls: filtered,
+    totalCallsCount: baseReport.totalCallsCount,
+    models: baseReport.models,
+    subagents: baseReport.subagents,
+    summary: baseReport.summary,
+    alerts: baseReport.alerts,
+    banner: baseReport.banner,
+  };
+}
+
 /**
  * Summarize telemetry calls for UI `明细` tab and KPI strip.
+ * Cached for 1.5s (invalidated immediately on transcript/timings/cursor change or force: true)
+ * so inspectContext + app_get_calls in the same refresh cycle share one computation.
  */
 export function getTelemetryReport(params = {}, options = {}) {
+  const paths = getDataPaths(options);
+  const cacheKey = `${paths.dataDir.toLowerCase()}|${String(options.appDataDir || '').toLowerCase()}|${String(params.conversationId || '')}|${String(params.transcriptPath || '')}`;
+  const now = Date.now();
+
+  if (!params.force) {
+    const cached = telemetryReportCache.get(cacheKey);
+    if (cached && now < cached.expiresAt) {
+      const curFp = buildReportFingerprint(paths, cached.watchedPaths);
+      if (curFp === cached.fingerprint) {
+        return applyReportFilters(cached.baseReport, params);
+      }
+    }
+  }
+
   const config = loadConfig(options);
   const recentConvs = listConversations({ ...options, limit: 25, includeRecentSubagents: true });
   const convLabelMap = new Map(recentConvs.map((c) => [c.conversationId, c.label || c.conversationId.slice(0, 8)]));
+  const watchedPaths = new Set();
 
   let synced;
   if (params.conversationId === '__active_all__') {
@@ -653,6 +1020,7 @@ export function getTelemetryReport(params = {}, options = {}) {
     const mergedMap = new Map();
     const mergedSubs = [];
     for (const conv of activeList) {
+      if (conv.transcriptPath) watchedPaths.add(conv.transcriptPath);
       const res = syncConversationTelemetry(
         { conversationId: conv.conversationId, transcriptPath: conv.transcriptPath, force: Boolean(params.force) },
         options
@@ -660,7 +1028,12 @@ export function getTelemetryReport(params = {}, options = {}) {
       for (const c of res.calls) {
         if (!mergedMap.has(c.callUid)) mergedMap.set(c.callUid, c);
       }
-      if (Array.isArray(res.subagents)) mergedSubs.push(...res.subagents);
+      if (Array.isArray(res.subagents)) {
+        for (const s of res.subagents) {
+          if (s?.path) watchedPaths.add(s.path);
+          mergedSubs.push(s);
+        }
+      }
     }
     const mergedCalls = [...mergedMap.values()].sort((a, b) => b.tsMs - a.tsMs || b.stepIndex - a.stepIndex);
     synced = {
@@ -670,6 +1043,10 @@ export function getTelemetryReport(params = {}, options = {}) {
       syncedNew: 0,
     };
   } else {
+    const resolvedTPath =
+      params.transcriptPath ||
+      (params.conversationId ? findTranscriptPath(params.conversationId, options) : recentConvs[0]?.transcriptPath);
+    if (resolvedTPath) watchedPaths.add(resolvedTPath);
     synced = syncConversationTelemetry(
       {
         conversationId: params.conversationId,
@@ -678,6 +1055,9 @@ export function getTelemetryReport(params = {}, options = {}) {
       },
       options
     );
+    for (const s of synced.subagents || []) {
+      if (s?.path) watchedPaths.add(s.path);
+    }
   }
 
   const allCalls = synced.calls.map((c) => {
@@ -689,13 +1069,6 @@ export function getTelemetryReport(params = {}, options = {}) {
       sourceLabel: `${rolePrefix} · ${convLabel} (${shortId})`,
       sourceTitle: convLabel,
     };
-  });
-
-  const filtered = allCalls.filter((c) => {
-    if (params.agentFilter && params.agentFilter !== 'all' && c.agentType !== params.agentFilter) return false;
-    if (params.modelFilter && params.modelFilter !== 'all' && c.model !== params.modelFilter) return false;
-    if (params.onlyDrop && !c.cacheDrop) return false;
-    return true;
   });
 
   const byAgentMap = new Map();
@@ -751,9 +1124,9 @@ export function getTelemetryReport(params = {}, options = {}) {
   const totalCost = allCalls.reduce((s, c) => s + c.estimatedCostUsd, 0);
   const avgTps = calcWeightedAvgTps(allCalls);
 
-  return {
+  const baseReport = {
     conversationId: synced.conversationId,
-    calls: filtered,
+    allCalls,
     totalCallsCount: allCalls.length,
     models: [...byModelMap.keys()],
     subagents: synced.subagents,
@@ -769,6 +1142,23 @@ export function getTelemetryReport(params = {}, options = {}) {
     alerts: evaluateAlerts(allCalls, config),
     banner: latestMain ? formatUserMarkdownBanner(latestMain) : '',
   };
+
+  const watchedList = [...watchedPaths];
+  const fingerprint = buildReportFingerprint(paths, watchedList);
+  if (telemetryReportCache.has(cacheKey)) telemetryReportCache.delete(cacheKey);
+  telemetryReportCache.set(cacheKey, {
+    baseReport,
+    watchedPaths: watchedList,
+    fingerprint,
+    expiresAt: Date.now() + TELEMETRY_REPORT_TTL_MS,
+  });
+  while (telemetryReportCache.size > TELEMETRY_REPORT_CACHE_MAX) {
+    const oldest = telemetryReportCache.keys().next().value;
+    if (oldest === undefined) break;
+    telemetryReportCache.delete(oldest);
+  }
+
+  return applyReportFilters(baseReport, params);
 }
 
 /**

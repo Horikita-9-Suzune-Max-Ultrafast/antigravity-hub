@@ -3,6 +3,87 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { execFileSync } from 'node:child_process';
 
+const GIT_CTX_TTL_MS = 12_000;
+const GIT_CTX_MAX_ENTRIES = 64;
+const COMMITS_AHEAD_TTL_MS = 60_000;
+const COMMITS_AHEAD_MAX_ENTRIES = 256;
+
+const gitContextCache = new Map();
+const commitsAheadCache = new Map();
+
+export function clearGitContextCache() {
+  gitContextCache.clear();
+  commitsAheadCache.clear();
+}
+
+function lruSet(map, key, val, maxEntries) {
+  if (map.has(key)) map.delete(key);
+  map.set(key, val);
+  while (map.size > maxEntries) {
+    const oldest = map.keys().next().value;
+    if (oldest === undefined) break;
+    map.delete(oldest);
+  }
+}
+
+function safeStatSig(filePath) {
+  try {
+    const st = fs.statSync(filePath);
+    return `${st.mtimeMs}:${st.size}`;
+  } catch {
+    return 'none';
+  }
+}
+
+function resolveGitDir(repoRoot) {
+  const dotGit = path.join(repoRoot, '.git');
+  try {
+    const st = fs.statSync(dotGit);
+    if (st.isDirectory()) return dotGit;
+    if (st.isFile()) {
+      const content = fs.readFileSync(dotGit, 'utf8').trim();
+      const m = /^gitdir:\s*(.+)$/im.exec(content);
+      if (m && m[1]) {
+        return path.resolve(repoRoot, m[1].trim());
+      }
+    }
+  } catch {
+    // not a git root directly
+  }
+  return null;
+}
+
+function computeGitStateFingerprint(repoRoot) {
+  const gitDir = resolveGitDir(repoRoot);
+  if (!gitDir) return null;
+  const headPath = path.join(gitDir, 'HEAD');
+  const indexPath = path.join(gitDir, 'index');
+  const headSig = safeStatSig(headPath);
+  const indexSig = safeStatSig(indexPath);
+
+  // Also capture current branch ref target SHA (fast 41-byte read) so commits
+  // advancing refs/heads/<branch> invalidate immediately even if .git/HEAD mtime is unchanged.
+  let headRefSig = '';
+  try {
+    const headRaw = fs.readFileSync(headPath, 'utf8').trim();
+    if (headRaw.startsWith('ref:')) {
+      const refRel = headRaw.slice(4).trim();
+      const refFile = path.join(gitDir, refRel);
+      try {
+        headRefSig = fs.readFileSync(refFile, 'utf8').trim();
+      } catch {
+        headRefSig = safeStatSig(path.join(gitDir, 'packed-refs'));
+      }
+    } else {
+      headRefSig = headRaw;
+    }
+  } catch {
+    headRefSig = 'err';
+  }
+
+  return `${gitDir}|H:${headSig}|I:${indexSig}|R:${headRefSig}`;
+}
+
 function runGitReadOnly(args, cwd) {
   if (!cwd || !fs.existsSync(cwd)) return null;
   try {
@@ -26,14 +107,35 @@ function shortHash(text) {
 /**
  * Strictly read-only Git context detection.
  * Never writes or mutates any file in the target workspace/repository.
+ * Cached in-memory for 12s and invalidated immediately if .git/HEAD, .git/index, or active ref changes.
  */
 export function getGitContext(targetDir) {
   const resolved = targetDir ? path.resolve(targetDir) : process.cwd();
+  const cacheKey = resolved.toLowerCase();
+  const now = Date.now();
+
+  const cached = gitContextCache.get(cacheKey);
+  if (cached && now < cached.expiresAt) {
+    if (cached.value.isGitRepo) {
+      const curFp = computeGitStateFingerprint(cached.value.repoRoot);
+      if (curFp && curFp === cached.fingerprint) {
+        lruSet(gitContextCache, cacheKey, cached, GIT_CTX_MAX_ENTRIES);
+        return cached.value;
+      }
+    } else {
+      const curDirSig = `${safeStatSig(resolved)}|git:${safeStatSig(path.join(resolved, '.git'))}`;
+      if (curDirSig === cached.fingerprint) {
+        lruSet(gitContextCache, cacheKey, cached, GIT_CTX_MAX_ENTRIES);
+        return cached.value;
+      }
+    }
+  }
+
   const repoRoot = runGitReadOnly(['rev-parse', '--show-toplevel'], resolved);
 
   if (!repoRoot) {
     const norm = resolved.replace(/\\/g, '/').toLowerCase();
-    return {
+    const result = {
       isGitRepo: false,
       repoRoot: resolved,
       projectId: shortHash(`dir:${norm}`),
@@ -44,16 +146,20 @@ export function getGitContext(targetDir) {
       dirty: false,
       remoteOrigin: '',
     };
+    const fp = `${safeStatSig(resolved)}|git:${safeStatSig(path.join(resolved, '.git'))}`;
+    lruSet(gitContextCache, cacheKey, { value: result, fingerprint: fp, expiresAt: now + GIT_CTX_TTL_MS }, GIT_CTX_MAX_ENTRIES);
+    return result;
   }
 
-  const remoteOrigin = runGitReadOnly(['config', '--get', 'remote.origin.url'], repoRoot) || '';
+  const resolvedRoot = path.resolve(repoRoot);
+  const remoteOrigin = runGitReadOnly(['config', '--get', 'remote.origin.url'], resolvedRoot) || '';
   const branch =
-    runGitReadOnly(['symbolic-ref', '--short', 'HEAD'], repoRoot) ||
-    runGitReadOnly(['rev-parse', '--abbrev-ref', 'HEAD'], repoRoot) ||
+    runGitReadOnly(['symbolic-ref', '--short', 'HEAD'], resolvedRoot) ||
+    runGitReadOnly(['rev-parse', '--abbrev-ref', 'HEAD'], resolvedRoot) ||
     'detached';
-  const headFull = runGitReadOnly(['rev-parse', 'HEAD'], repoRoot) || '';
+  const headFull = runGitReadOnly(['rev-parse', 'HEAD'], resolvedRoot) || '';
   const head = headFull ? headFull.slice(0, 7) : 'unborn';
-  const statusShort = runGitReadOnly(['status', '--porcelain'], repoRoot);
+  const statusShort = runGitReadOnly(['status', '--porcelain'], resolvedRoot);
   const dirty = Boolean(statusShort && statusShort.length > 0);
 
   const normOrigin = remoteOrigin
@@ -61,37 +167,63 @@ export function getGitContext(targetDir) {
     .replace(/\.git$/i, '')
     .replace(/^https?:\/\/[^@]+@/i, 'https://')
     .toLowerCase();
-  const normRoot = path.resolve(repoRoot).replace(/\\/g, '/').toLowerCase();
+  const normRoot = resolvedRoot.replace(/\\/g, '/').toLowerCase();
   const fingerprintSource = normOrigin ? `git:${normOrigin}` : `repo:${normRoot}`;
 
-  return {
+  const result = {
     isGitRepo: true,
-    repoRoot: path.resolve(repoRoot),
+    repoRoot: resolvedRoot,
     projectId: shortHash(fingerprintSource),
-    projectName: path.basename(repoRoot) || 'repo',
+    projectName: path.basename(resolvedRoot) || 'repo',
     branch,
     head,
     headFull,
     dirty,
     remoteOrigin: normOrigin ? remoteOrigin.replace(/^(https?:\/\/)[^@]+@/i, '$1') : '',
   };
+
+  const fp = computeGitStateFingerprint(resolvedRoot);
+  lruSet(gitContextCache, cacheKey, { value: result, fingerprint: fp, expiresAt: now + GIT_CTX_TTL_MS }, GIT_CTX_MAX_ENTRIES);
+  return result;
 }
 
 /**
  * Strictly read-only calculation of how many commits current HEAD is ahead of a recorded commit SHA.
  * Returns null if not a git repo, SHAs match, or ancestor relation cannot be established.
+ * Deduplicated and cached by (repoRoot, recordedHead, currentHead).
  */
-export function getCommitsAhead(repoRoot, recordedHead) {
+export function getCommitsAhead(repoRoot, recordedHead, currentHeadHint = '') {
   if (!repoRoot || !recordedHead || recordedHead === 'none' || recordedHead === 'unborn') return null;
   if (!/^[0-9a-f]{6,40}$/i.test(recordedHead)) return null;
-  const current = runGitReadOnly(['rev-parse', '--short=7', 'HEAD'], repoRoot);
+
+  let current = currentHeadHint && /^[0-9a-f]{6,40}$/i.test(currentHeadHint) ? currentHeadHint.slice(0, 7) : '';
+  if (!current) {
+    const ctx = getGitContext(repoRoot);
+    if (ctx.isGitRepo && ctx.head && ctx.head !== 'unborn' && ctx.head !== 'none') {
+      current = ctx.head;
+    } else {
+      current = runGitReadOnly(['rev-parse', '--short=7', 'HEAD'], repoRoot) || '';
+    }
+  }
   if (!current) return null;
   if (current.toLowerCase() === recordedHead.slice(0, 7).toLowerCase()) return 0;
 
+  const key = `${path.resolve(repoRoot).toLowerCase()}|${recordedHead.toLowerCase()}|${current.toLowerCase()}`;
+  const now = Date.now();
+  const cached = commitsAheadCache.get(key);
+  if (cached && now < cached.expiresAt) {
+    lruSet(commitsAheadCache, key, cached, COMMITS_AHEAD_MAX_ENTRIES);
+    return cached.value;
+  }
+
   const aheadStr = runGitReadOnly(['rev-list', '--count', `${recordedHead}..HEAD`], repoRoot);
-  if (aheadStr === null) return -1; // diverged or unknown commit
-  const n = Number(aheadStr);
-  return Number.isFinite(n) ? n : -1;
+  let val = -1;
+  if (aheadStr !== null) {
+    const n = Number(aheadStr);
+    val = Number.isFinite(n) ? n : -1;
+  }
+  lruSet(commitsAheadCache, key, { value: val, expiresAt: now + COMMITS_AHEAD_TTL_MS }, COMMITS_AHEAD_MAX_ENTRIES);
+  return val;
 }
 
 function normalizePorcelainStatus(xy) {

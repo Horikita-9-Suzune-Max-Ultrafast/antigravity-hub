@@ -1,7 +1,8 @@
+import crypto from 'node:crypto';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { loadConfig } from '../../core/config.mjs';
-import { buildCompactBrief, saveMemory } from '../../core/vault.mjs';
+import { buildCompactBrief, saveMemory, pruneAutoStopCheckpoints } from '../../core/vault.mjs';
 import {
   recordHookTiming,
   syncConversationTelemetry,
@@ -153,8 +154,13 @@ export async function handleHookEvent(rawInput, fallbackEvent = '', options = {}
           ? p.lastUserInput.replace(/<\/?USER_REQUEST>/gi, '').replace(/\s+/g, ' ').trim().slice(0, 72)
           : `会话 ${p.conversationId.slice(0, 8)}`;
 
-        saveMemory(
+        const stopCheckpointId = p.conversationId
+          ? `mem_stop_${crypto.createHash('sha256').update(String(p.conversationId)).digest('hex').slice(0, 12)}`
+          : undefined;
+
+        const saved = saveMemory(
           {
+            id: stopCheckpointId,
             projectDir: p.projectDir,
             kind: 'checkpoint',
             title: `Stop 自动快照：${goalHint}`,
@@ -163,6 +169,7 @@ export async function handleHookEvent(rawInput, fallbackEvent = '', options = {}
           },
           options
         );
+        pruneAutoStopCheckpoints(saved.projectId, { maxKeep: 30 }, options);
       }
 
       recordHookSuccess(options);

@@ -148,7 +148,7 @@ test('MCP app_config_manage handles uiLanguage persistence, restart_antigravity,
 
   const dispatcher = createMcpDispatcher({ dataDir, projectDir: root });
   try {
-    assert.equal(SERVER_INFO.version, '1.5.4');
+    assert.equal(SERVER_INFO.version, '1.5.5-beta.1');
 
     // Default config get
     const rGet = await dispatcher.callTool('app_config_manage', { action: 'get' });

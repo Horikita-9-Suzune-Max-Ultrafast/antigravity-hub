@@ -222,7 +222,14 @@ namespace ContextCacheHost {
         private Timer _interactTimer;
         private int _interactMode = 0; // 0=none, 1=drag, 10..17=resize hitTest
         private Point _startCursor;
+        private Point _lastCursor;
         private Rectangle _startBounds;
+        private readonly Stopwatch _boundsThrottleWatch = Stopwatch.StartNew();
+        private long _lastResizeTickMs = -100;
+        private long _lastBoundsSyncMs = -100;
+        private RECT _lastSyncedRect;
+        private bool _hasSyncedRect = false;
+        private const long RESIZE_BOUNDS_MIN_INTERVAL_MS = 16; // ~60Hz throttle during resize
         private ICoreWebView2Controller _controller;
         private ICoreWebView2 _webview;
         private IntPtr _hIcon = IntPtr.Zero;
@@ -304,7 +311,9 @@ namespace ContextCacheHost {
             if (!GetCursorPos(out pt)) return;
             _interactMode = mode;
             _startCursor = pt;
+            _lastCursor = pt;
             _startBounds = Bounds;
+            _lastResizeTickMs = -100;
             _interactTimer.Start();
         }
 
@@ -313,15 +322,17 @@ namespace ContextCacheHost {
             if ((GetAsyncKeyState(0x01) & 0x8000) == 0) {
                 _interactTimer.Stop();
                 _interactMode = 0;
-                SyncBounds();
+                SyncBounds(true);
                 return;
             }
             Point pt;
             if (!GetCursorPos(out pt)) return;
+            if (pt.X == _lastCursor.X && pt.Y == _lastCursor.Y) return;
             int dx = pt.X - _startCursor.X;
             int dy = pt.Y - _startCursor.Y;
 
             if (_interactMode == 1) {
+                _lastCursor = pt;
                 var wa = Screen.FromControl(this).WorkingArea;
                 int nx = Math.Max(wa.Left + 8, Math.Min(wa.Right - Width - 8, _startBounds.X + dx));
                 int ny = Math.Max(wa.Top + 8, Math.Min(wa.Bottom - Math.Min(Height, 80) - 8, _startBounds.Y + dy));
@@ -330,6 +341,13 @@ namespace ContextCacheHost {
             }
 
             if (_interactMode >= 10 && _interactMode <= 17) {
+                long nowMs = _boundsThrottleWatch.ElapsedMilliseconds;
+                if ((nowMs - _lastResizeTickMs) < RESIZE_BOUNDS_MIN_INTERVAL_MS) {
+                    return;
+                }
+                _lastResizeTickMs = nowMs;
+                _lastCursor = pt;
+
                 int minW = _collapsed ? (int)Math.Round(220 * _dpiScale) : (int)Math.Round(340 * _dpiScale);
                 int left = _startBounds.Left;
                 int top = _startBounds.Top;
@@ -351,7 +369,7 @@ namespace ContextCacheHost {
                     int nw = Math.Max(minW, right - left);
                     int nh = _startBounds.Height;
                     SetWindowPos(Handle, IntPtr.Zero, left, top, nw, nh, 0x0004 | 0x0010); // SWP_NOZORDER | SWP_NOACTIVATE
-                    SyncBounds();
+                    SyncBounds(false);
                     return;
                 }
 
@@ -370,7 +388,7 @@ namespace ContextCacheHost {
                 _expandedWidth = fullW;
                 _expandedHeight = fullH;
                 SetWindowPos(Handle, IntPtr.Zero, left, top, fullW, fullH, 0x0004 | 0x0010); // SWP_NOZORDER | SWP_NOACTIVATE
-                SyncBounds();
+                SyncBounds(false);
             }
         }
 
@@ -452,15 +470,28 @@ namespace ContextCacheHost {
             } catch {}
         }
 
-        private void SyncBounds() {
+        private void SyncBounds(bool force = true) {
             if (_controller == null) return;
+            int w = Math.Max(1, ClientSize.Width);
+            int h = Math.Max(1, ClientSize.Height);
+            if (_hasSyncedRect && _lastSyncedRect.Right == w && _lastSyncedRect.Bottom == h) {
+                return;
+            }
+            long nowMs = _boundsThrottleWatch.ElapsedMilliseconds;
+            if (!force && _interactMode >= 10 && _interactMode <= 17 && (nowMs - _lastBoundsSyncMs) < RESIZE_BOUNDS_MIN_INTERVAL_MS) {
+                return;
+            }
             try {
-                _controller.put_Bounds(new RECT {
+                var rect = new RECT {
                     Left = 0,
                     Top = 0,
-                    Right = Math.Max(1, ClientSize.Width),
-                    Bottom = Math.Max(1, ClientSize.Height)
-                });
+                    Right = w,
+                    Bottom = h
+                };
+                _controller.put_Bounds(rect);
+                _lastSyncedRect = rect;
+                _hasSyncedRect = true;
+                _lastBoundsSyncMs = nowMs;
             } catch {}
         }
 
@@ -560,7 +591,7 @@ namespace ContextCacheHost {
                 _expandedWidth = Width;
                 _expandedHeight = Height;
             }
-            SyncBounds();
+            SyncBounds(_interactMode < 10 || _interactMode > 17);
         }
 
         protected override void OnLocationChanged(EventArgs e) {
@@ -584,14 +615,27 @@ namespace ContextCacheHost {
                 _interactTimer = null;
             }
             if (_controller != null) {
+                try { _controller.put_IsVisible(0); } catch {}
                 try { _controller.Close(); } catch {}
+            }
+            if (_webview != null) {
+                try { Marshal.FinalReleaseComObject(_webview); } catch {}
+                _webview = null;
+            }
+            if (_controller != null) {
+                try { Marshal.FinalReleaseComObject(_controller); } catch {}
                 _controller = null;
             }
             if (_hIcon != IntPtr.Zero) {
                 try { DestroyIcon(_hIcon); } catch {}
                 _hIcon = IntPtr.Zero;
             }
+            try {
+                Console.Out.WriteLine("CLOSED");
+                Console.Out.Flush();
+            } catch {}
             base.OnFormClosed(e);
+            try { Application.ExitThread(); } catch {}
         }
 
         private static string FindEmbeddedWebViewDll() {
@@ -798,4 +842,13 @@ $isDark = ($Theme -eq 'dark')
 $isTopMost = ($TopMost -ne 0)
 $form = New-Object ContextCacheHost.FloatingForm($Url, $Width, $Height, $PosX, $PosY, $isTopMost, $isDark, $UserDataDir)
 $form.Show()
-[System.Windows.Forms.Application]::Run($form)
+try {
+  [System.Windows.Forms.Application]::Run($form)
+} finally {
+  if ($form -and -not $form.IsDisposed) {
+    try { $form.Dispose() } catch {}
+  }
+  try { [Console]::Out.Flush() } catch {}
+  try { [Console]::Error.Flush() } catch {}
+}
+exit ([Environment]::ExitCode)

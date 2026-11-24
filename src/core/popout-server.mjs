@@ -11,18 +11,29 @@ const __dirname = path.dirname(__filename);
 const WIN_HOST_SCRIPT = path.join(__dirname, 'win-floating-host.ps1');
 
 const CLIENT_TTL_MS = 18_000;
-const DEFAULT_STOP_GRACE_MS = 3_000;
+const DEFAULT_STOP_GRACE_MS = 400;
+const STARTUP_GRACE_MS = 5_000;
+const MAX_WALLPAPER_STREAM_BYTES = 15 * 1024 * 1024;
+const WALLPAPER_MIME_BY_EXT = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.webp': 'image/webp',
+  '.avif': 'image/avif',
+  '.svg': 'image/svg+xml',
+};
 
 /**
  * On-demand localhost-only (127.0.0.1) frameless floating popout window server.
  * On Windows, prefers a native borderless WebView2 host (zero browser titlebar, TopMost pin,
- * Win11 rounded corners, native 120Hz drag & 8-edge resize). Falls back cleanly to --app mode.
+ * Win11 rounded corners, native drag & 8-edge resize). Falls back cleanly to --app mode.
  */
 export class PopoutServerManager {
   constructor({
     getHtml,
     handleAppTool,
     getActiveConversationId = null,
+    resolveWallpaper = null,
     onAutoStop = null,
     stopGraceMs = DEFAULT_STOP_GRACE_MS,
     dataDir = null,
@@ -30,15 +41,18 @@ export class PopoutServerManager {
     this.getHtml = getHtml;
     this.handleAppTool = handleAppTool;
     this.getActiveConversationId = getActiveConversationId;
+    this.resolveWallpaper = resolveWallpaper;
     this.onAutoStop = onAutoStop;
     this.dataDir = dataDir;
     this.stopGraceMs = Math.max(50, Number(stopGraceMs) || DEFAULT_STOP_GRACE_MS);
     this.server = null;
     this.port = null;
     this.token = null;
+    this.serverStartedAt = 0;
     this.hostPid = null;
     this.hostMode = 'none';
     this.hostStartedAt = 0;
+    this.userClosed = false;
     this.lastHostError = null;
     this.activeClients = new Map();
     this.stopTimer = null;
@@ -60,6 +74,22 @@ export class PopoutServerManager {
       return true;
     } catch {
       return false;
+    }
+  }
+
+  _handleHostProcessExited() {
+    this.hostPid = null;
+    this.hostMode = 'none';
+    this.hostStartedAt = 0;
+    this.activeClients.clear();
+    this.userClosed = true;
+    this._cancelPendingStop();
+    if (this.server) {
+      void this.stop().then(() => {
+        if (typeof this.onAutoStop === 'function') {
+          this.onAutoStop();
+        }
+      });
     }
   }
 
@@ -103,20 +133,38 @@ export class PopoutServerManager {
 
   hasActiveClient() {
     if (this.hostMode === 'webview2' && this.hostPid && !this._isHostProcessAlive()) {
-      this.hostPid = null;
-      this.hostMode = 'none';
-      this.activeClients.clear();
+      this._handleHostProcessExited();
       return false;
     }
     return this._pruneStaleClients() > 0;
   }
 
   getStatus() {
-    const activeClients = this._pruneStaleClients();
+    const now = Date.now();
+    let hostAlive = false;
+    if (this.hostMode === 'webview2' && this.hostPid) {
+      hostAlive = this._isHostProcessAlive();
+      if (!hostAlive) {
+        this._handleHostProcessExited();
+      }
+    }
+    const activeClients = this._pruneStaleClients(now);
+    const serverListening = Boolean(this.server && this.port);
+    const inHostStartupGrace =
+      this.hostMode === 'webview2'
+        ? Boolean(this.hostPid && hostAlive && now - this.hostStartedAt < STARTUP_GRACE_MS)
+        : this.hostMode === 'browser-app'
+          ? Boolean(this.hostStartedAt > 0 && now - this.hostStartedAt < STARTUP_GRACE_MS)
+          : Boolean(this.serverStartedAt > 0 && now - this.serverStartedAt < STARTUP_GRACE_MS);
+    const inStartupGrace = !this.userClosed && inHostStartupGrace;
+    const windowOpen = Boolean(serverListening && (activeClients > 0 || inStartupGrace));
     return {
-      running: Boolean(this.server && this.port),
+      running: windowOpen,
+      windowOpen,
+      serverListening,
+      userClosed: this.userClosed,
       port: this.port,
-      url: this.server && this.port && this.token ? `http://127.0.0.1:${this.port}/?token=${this.token}` : null,
+      url: serverListening && this.token ? `http://127.0.0.1:${this.port}/?token=${this.token}` : null,
       activeClients,
       hostMode: this.hostMode,
     };
@@ -143,6 +191,8 @@ export class PopoutServerManager {
 
   async start() {
     this._cancelPendingStop();
+    this.userClosed = false;
+    this.serverStartedAt = Date.now();
     if (this.server && this.port) {
       return this.getStatus();
     }
@@ -169,6 +219,96 @@ export class PopoutServerManager {
           return;
         }
 
+        if (req.method === 'GET' && urlObj.pathname.startsWith('/api/wallpaper/')) {
+          const rawId = urlObj.pathname.slice('/api/wallpaper/'.length);
+          let wallpaperId = '';
+          try {
+            wallpaperId = decodeURIComponent(rawId);
+          } catch {
+            res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ error: 'Invalid wallpaper id' }));
+            return;
+          }
+          if (
+            !wallpaperId ||
+            wallpaperId.includes('/') ||
+            wallpaperId.includes('\\') ||
+            wallpaperId.includes('..') ||
+            wallpaperId.includes('\0')
+          ) {
+            res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ error: 'Invalid wallpaper id' }));
+            return;
+          }
+          if (typeof this.resolveWallpaper !== 'function') {
+            res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ error: 'Wallpaper not found' }));
+            return;
+          }
+          const resolved = await this.resolveWallpaper(wallpaperId);
+          const filePath = typeof resolved === 'string' ? resolved : resolved?.filePath;
+          if (!filePath || typeof filePath !== 'string') {
+            res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ error: 'Wallpaper not found' }));
+            return;
+          }
+          const ext = path.extname(filePath).toLowerCase();
+          const mime = (typeof resolved === 'object' && resolved?.mime) || WALLPAPER_MIME_BY_EXT[ext];
+          if (!mime || !WALLPAPER_MIME_BY_EXT[ext]) {
+            res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ error: 'Wallpaper not found' }));
+            return;
+          }
+          let stat;
+          try {
+            stat = fs.statSync(filePath);
+          } catch {
+            res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ error: 'Wallpaper not found' }));
+            return;
+          }
+          if (!stat.isFile() || stat.size <= 0 || stat.size > MAX_WALLPAPER_STREAM_BYTES) {
+            res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ error: 'Wallpaper not found' }));
+            return;
+          }
+          const headers = {
+            'Content-Type': mime,
+            'Content-Length': String(stat.size),
+            'Cache-Control': 'private, max-age=300',
+            'X-Content-Type-Options': 'nosniff',
+          };
+          if (ext === '.svg') {
+            headers['Content-Security-Policy'] = "default-src 'none'; sandbox";
+          }
+          res.writeHead(200, headers);
+          await new Promise((resolve) => {
+            const stream = fs.createReadStream(filePath);
+            let done = false;
+            const finish = () => {
+              if (done) return;
+              done = true;
+              resolve();
+            };
+            stream.on('error', () => {
+              if (!res.headersSent) {
+                res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8' });
+                res.end(JSON.stringify({ error: 'Wallpaper not found' }));
+              } else {
+                res.destroy();
+              }
+              finish();
+            });
+            res.on('close', () => {
+              if (!stream.destroyed) stream.destroy();
+              finish();
+            });
+            stream.on('end', finish);
+            stream.pipe(res);
+          });
+          return;
+        }
+
         if (req.method === 'POST' && urlObj.pathname === '/api/tool') {
           const parsed = await this._readJsonBody(req);
           const result = await this.handleAppTool(parsed.name, parsed.arguments || {});
@@ -181,10 +321,8 @@ export class PopoutServerManager {
           const parsed = await this._readJsonBody(req);
           const clientId = String(parsed.clientId || urlObj.searchParams.get('clientId') || 'default');
           this.activeClients.set(clientId, Date.now());
-          if (this.stopTimer) {
-            clearTimeout(this.stopTimer);
-            this.stopTimer = null;
-          }
+          this.userClosed = false;
+          this._cancelPendingStop();
           let activeConversationId = null;
           if (typeof this.getActiveConversationId === 'function') {
             try {
@@ -208,9 +346,13 @@ export class PopoutServerManager {
           const parsed = await this._readJsonBody(req);
           const clientId = String(parsed.clientId || urlObj.searchParams.get('clientId') || 'default');
           this.activeClients.delete(clientId);
-          this._scheduleAutoStopIfEmpty();
+          const remaining = this._pruneStaleClients();
+          if (remaining === 0) {
+            this.userClosed = true;
+            this._scheduleAutoStopIfEmpty();
+          }
           res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-          res.end(JSON.stringify({ ok: true, activeClients: this._pruneStaleClients() }));
+          res.end(JSON.stringify({ ok: true, activeClients: remaining }));
           return;
         }
 
@@ -228,14 +370,20 @@ export class PopoutServerManager {
       this.server.listen(0, '127.0.0.1', () => {
         const addr = this.server.address();
         this.port = typeof addr === 'object' && addr ? addr.port : null;
+        this.serverStartedAt = Date.now();
         resolve();
       });
     });
 
     this.sweeperTimer = setInterval(() => {
+      if (this.hostMode === 'webview2' && this.hostPid && !this._isHostProcessAlive()) {
+        this._handleHostProcessExited();
+        return;
+      }
       const hadAny = this.activeClients.size > 0;
       const alive = this._pruneStaleClients();
       if (hadAny && alive === 0) {
+        this.userClosed = true;
         this._scheduleAutoStopIfEmpty();
       }
     }, 5_000);
@@ -244,9 +392,12 @@ export class PopoutServerManager {
     return this.getStatus();
   }
 
-  async stop() {
+  async stop({ userClosed = undefined } = {}) {
     this._clearTimers();
     this.activeClients.clear();
+    if (typeof userClosed === 'boolean') {
+      this.userClosed = userClosed;
+    }
     if (this.hostPid) {
       const pid = this.hostPid;
       this.hostPid = null;
@@ -257,10 +408,12 @@ export class PopoutServerManager {
       }
     }
     this.hostMode = 'none';
+    this.hostStartedAt = 0;
+    this.serverStartedAt = 0;
     if (!this.server) {
       this.port = null;
       this.token = null;
-      return { running: false, port: null, url: null, activeClients: 0, hostMode: 'none' };
+      return this.getStatus();
     }
     const srv = this.server;
     this.server = null;
@@ -273,7 +426,7 @@ export class PopoutServerManager {
         resolve();
       }
     });
-    return { running: false, port: null, url: null, activeClients: 0, hostMode: 'none' };
+    return this.getStatus();
   }
 
   _hasWindowsWebView2() {
@@ -438,6 +591,7 @@ exit 2
         : { size: sizeOrOpts, position: positionArg, forceNew: false };
 
     this._cancelPendingStop();
+    this.userClosed = false;
     const status = await this.start();
     const [wRaw, hRaw] = String(opts.size || '460x720').split('x');
     const width = Math.max(360, Math.min(1600, Number(wRaw) || 460));
@@ -448,10 +602,11 @@ exit 2
     if (this.hostPid && !this._isHostProcessAlive()) {
       this.hostPid = null;
       this.hostMode = 'none';
+      this.hostStartedAt = 0;
       this.activeClients.clear();
     }
 
-    const inStartupGrace = this.hostPid && Date.now() - this.hostStartedAt < 5_000;
+    const inStartupGrace = this.hostPid && this._isHostProcessAlive() && Date.now() - this.hostStartedAt < STARTUP_GRACE_MS;
     const canReuseLiveHost =
       this.hostMode === 'webview2'
         ? this._isHostProcessAlive() && (this.hasActiveClient() || inStartupGrace)
@@ -544,7 +699,11 @@ exit 2
 
         child.stdout?.setEncoding('utf8');
         child.stdout?.on('data', (chunk) => {
-          if (String(chunk).includes('READY:')) finish(true);
+          const text = String(chunk);
+          if (text.includes('READY:')) finish(true);
+          if (text.includes('CLOSED') && settled && this.hostPid === child.pid) {
+            this._handleHostProcessExited();
+          }
         });
         child.stderr?.setEncoding('utf8');
         child.stderr?.on('data', (chunk) => {
@@ -555,15 +714,20 @@ exit 2
           finish(false);
         });
         child.once('exit', (code) => {
-          if (this.hostPid === child.pid) {
-            this.hostPid = null;
-            this.hostMode = 'none';
-            this.activeClients.clear();
-          }
+          const wasCurrentHost = this.hostPid === child.pid;
           if (!settled) {
+            if (wasCurrentHost) {
+              this.hostPid = null;
+              this.hostMode = 'none';
+              this.hostStartedAt = 0;
+              this.activeClients.clear();
+            }
             finish(code === 0 && this.hasActiveClient());
+            return;
           }
-          this._scheduleAutoStopIfEmpty();
+          if (wasCurrentHost) {
+            this._handleHostProcessExited();
+          }
         });
       });
 

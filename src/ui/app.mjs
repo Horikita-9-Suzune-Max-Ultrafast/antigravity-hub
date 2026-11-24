@@ -21,7 +21,7 @@ const FEATURE_FLAGS = {
   showQuotaUi: false,
 };
 
-const APP_VERSION = '1.5.4';
+const APP_VERSION = '1.5.5-beta.1';
 const MINI_BAR_DEFAULT_ORDER = ['context', 'cache', 'kv', 'tps', 'model'];
 const MINI_BAR_PRESET_COUNTS = { minimal: 1, compact: 2, standard: 3, wide: 4, full: 5, custom: 5 };
 const MINI_BAR_PRESET_WIDTHS = { minimal: 255, compact: 340, standard: 440, wide: 540, full: 650 };
@@ -60,7 +60,7 @@ const state = {
   activeConversationId: null,
   activeProjectDir: null,
   launcherMode: false,
-  popoutStatus: { running: false, port: null, activeClients: 0 },
+  popoutStatus: { running: false, windowOpen: false, serverListening: false, userClosed: false, port: null, activeClients: 0 },
   activeModule: 'monitor', // 'monitor' | 'governance' | 'appearance' | 'i18n'
   i18nStatus: null,
   i18nBannerDismissed: false,
@@ -81,6 +81,9 @@ const state = {
   openAccIdx: 0,
   canUpdateModelContext: false,
   canSendMessage: false,
+  isDraggingMiniBar: false,
+  windowFocused: typeof document !== 'undefined' && typeof document.hasFocus === 'function' ? document.hasFocus() : true,
+  userClosedPopoutSession: false,
   contextData: null,
   callsData: null,
   quotaData: null,
@@ -117,10 +120,26 @@ let pollTimer = null;
 let launcherTimer = null;
 let heartbeatTimer = null;
 let boundsTimer = null;
+let kvCountdownTimer = null;
 let toastTimer = null;
 let refreshInFlight = false;
 let refreshSeq = 0;
 let lastSavedBoundsKey = '';
+let lastRefreshAt = 0;
+let lastHeartbeatAt = 0;
+let launcherCheckInFlight = false;
+let launcherVisibilityHandler = null;
+let launcherFocusHandler = null;
+let idleBadgeCheckScheduled = false;
+let lastKvSig = '';
+let lastTitleBarSig = '';
+let lastContextAlertsSig = '';
+let lastContextBreakdownSig = '';
+let lastContextDeferredSig = '';
+let lastContextInventorySig = '';
+let lastCallsRenderSig = '';
+let lastVaultRenderSig = '';
+let lastMiniBarSig = '';
 
 // Detect standalone popout mode (?token=...) & native frameless WebView2 mode (?native=1)
 const urlParams = new URLSearchParams(window.location.search);
@@ -200,7 +219,7 @@ function applyUiLanguage(lang) {
   if (zhBtn) zhBtn.dataset.active = String(norm === 'zh-CN');
   if (enBtn) enBtn.dataset.active = String(norm === 'en');
 
-  renderSelects();
+  renderSelects('all');
   if (state.contextData) renderContext(false);
   if (state.callsData) renderCalls();
   if (state.vaultData) renderVault();
@@ -209,14 +228,7 @@ function applyUiLanguage(lang) {
   renderNativePinButton();
   if (state.launcherMode) renderLauncherView();
 
-  requestAnimationFrame(() => {
-    positionIndicator('mainSegNav', 'mainSegIndicator');
-    positionIndicator('callsModeNav', 'callsModeIndicator');
-    positionIndicator('capsuleModeNav', 'capsuleModeIndicator');
-    governanceModule?.positionSubNav();
-    appearanceModule?.positionSubNav();
-    i18nModule?.positionSubNav();
-  });
+  requestAnimationFrame(positionVisibleIndicators);
 }
 
 function showToast(msg, tone = 'info') {
@@ -255,8 +267,9 @@ function animateNumber(el, from, to, fmt, dur = 480) {
 function pulseEl(el) {
   if (!el) return;
   el.classList.remove('kpi-bump');
-  void el.offsetWidth;
-  el.classList.add('kpi-bump');
+  requestAnimationFrame(() => {
+    el.classList.add('kpi-bump');
+  });
 }
 
 function positionIndicator(navId, indId) {
@@ -264,9 +277,29 @@ function positionIndicator(navId, indId) {
   const ind = document.getElementById(indId);
   if (!nav || !ind) return;
   const active = nav.querySelector('[data-active="true"]');
-  if (!active) return;
+  if (!active || active.offsetWidth === 0) return;
   ind.style.width = `${active.offsetWidth}px`;
   ind.style.transform = `translateX(${active.offsetLeft}px)`;
+}
+
+function positionVisibleIndicators() {
+  if (state.launcherMode || state.inSettings) return;
+  if (state.activeModule === 'monitor') {
+    positionIndicator('mainSegNav', 'mainSegIndicator');
+    if (state.activeTab === 'calls') {
+      positionIndicator('callsModeNav', 'callsModeIndicator');
+    }
+    const capModal = document.getElementById('capsuleModal');
+    if (capModal?.dataset.open === 'true') {
+      positionIndicator('capsuleModeNav', 'capsuleModeIndicator');
+    }
+  } else if (state.activeModule === 'governance') {
+    governanceModule?.positionSubNav();
+  } else if (state.activeModule === 'appearance') {
+    appearanceModule?.positionSubNav();
+  } else if (state.activeModule === 'i18n') {
+    i18nModule?.positionSubNav();
+  }
 }
 
 /**
@@ -290,13 +323,17 @@ async function callAppTool(name, args = {}) {
 }
 
 // ==================== Custom Popover Select ====================
-function renderCustomSelect(hostId, { id, value, options, alignRight = false, fullWidth = false, triggerLabel = null }) {
+function renderCustomSelect(hostId, { id, value, options, alignRight = false, fullWidth = false, triggerLabel = null, skipIfOpen = false }) {
   const host = document.getElementById(hostId);
   if (!host) return;
+  const isOpen = state.openSelectId === id;
+  if (skipIfOpen && isOpen) return;
   const opts = options.length ? options : [{ value: '', label: tr('common.empty') }];
   const current = opts.find((o) => o.value === value) || opts[0];
-  const isOpen = state.openSelectId === id;
   const shownLabel = triggerLabel ?? current.label;
+  const sig = `${id}|${current.value}|${shownLabel}|${alignRight ? 1 : 0}|${fullWidth ? 1 : 0}|${isOpen ? 1 : 0}|${opts.map((o) => `${o.value}:${o.label}`).join('\u001f')}`;
+  if (host.dataset.selectSig === sig) return;
+  host.dataset.selectSig = sig;
 
   host.innerHTML = `
     <button type="button" class="agy-select-trigger ${fullWidth ? 'w-full' : ''}" aria-expanded="${isOpen}" data-select-toggle="${esc(id)}">
@@ -324,14 +361,19 @@ function renderCustomSelect(hostId, { id, value, options, alignRight = false, fu
   `;
 }
 
-function renderPollSelect() {
+function renderPollSelect(fromPoll = false) {
   const host = document.getElementById('pollIntervalHost');
   if (!host) return;
+  const isOpen = state.openSelectId === 'pollInterval';
+  if (fromPoll && isOpen) return;
   const pollOptions = getPollOptions();
   const val = String(state.config.pollIntervalSec ?? 5);
   const cur = pollOptions.find((o) => o.value === val) || pollOptions[1];
-  const isOpen = state.openSelectId === 'pollInterval';
   const isLive = Number(val) > 0;
+  const lang = getUiLang();
+  const sig = `${lang}|${val}|${isOpen ? 1 : 0}|${isLive ? 1 : 0}`;
+  if (host.dataset.selectSig === sig) return;
+  host.dataset.selectSig = sig;
 
   host.innerHTML = `
     <button type="button" class="agy-select-trigger pill-trigger" aria-expanded="${isOpen}" data-select-toggle="pollInterval" title="${esc(tr('monitor.header.pollTitle'))}">
@@ -366,6 +408,9 @@ function renderFollowToggle() {
   const btn = document.getElementById('followToggleBtn');
   if (!btn) return;
   const isAuto = state.followMode === 'auto';
+  const sig = `${getUiLang()}|${isAuto ? 'auto' : 'pinned'}`;
+  if (btn.dataset.followSig === sig) return;
+  btn.dataset.followSig = sig;
   btn.dataset.mode = isAuto ? 'auto' : 'pinned';
   btn.title = isAuto ? tr('monitor.header.followAutoTitle') : tr('monitor.header.followPinnedTitle');
   btn.innerHTML = isAuto
@@ -417,16 +462,20 @@ function clampOpenSelectMenus() {
   });
 }
 
-function renderSessionSelect() {
+function renderSessionSelect(fromPoll = false) {
   const host = document.getElementById('sessionSelectHost');
   if (!host) return;
+  const isOpen = state.openSelectId === 'sessionSelect';
+  if (fromPoll && isOpen) return;
   const sessions = state.contextData?.sessions || [];
   const isAggregate = state.pinnedConversationId === '__active_all__' || state.activeConversationId === '__active_all__';
   const isAuto = !isAggregate && state.followMode === 'auto';
   const activeId = isAggregate ? '__active_all__' : isAuto ? state.activeConversationId : state.pinnedConversationId || state.activeConversationId;
   const matched = sessions.find((s) => s.id === activeId) || sessions[0] || null;
-  const isOpen = state.openSelectId === 'sessionSelect';
   const activeCount = sessions.filter((s) => s.isActive).length;
+  const sig = `${getUiLang()}|${isOpen ? 1 : 0}|${isAggregate ? 1 : 0}|${isAuto ? 1 : 0}|${activeId || ''}|${activeCount}|${sessions.map((s) => `${s.id}:${s.label}:${s.isActive ? 1 : 0}:${s.stepCount || 0}:${s.subTag || ''}`).join('\u001f')}`;
+  if (host.dataset.selectSig === sig) return;
+  host.dataset.selectSig = sig;
   const titleText = isAggregate
     ? (activeCount ? tr('monitor.session.aggregateTitleActive', { count: activeCount }) : tr('monitor.session.aggregateTitle'))
     : matched
@@ -493,11 +542,13 @@ function renderSessionSelect() {
   `;
 }
 
-function renderSelects() {
-  renderPollSelect();
+function renderMonitorHeaderSelects(fromPoll = false) {
+  renderPollSelect(fromPoll);
   renderFollowToggle();
-  renderSessionSelect();
+  renderSessionSelect(fromPoll);
+}
 
+function renderCallsSelects(fromPoll = false) {
   renderCustomSelect('agentSelectHost', {
     id: 'agentSelect',
     value: state.agentFilter,
@@ -506,6 +557,7 @@ function renderSelects() {
       { value: 'main', label: tr('monitor.calls.agentMain') },
       { value: 'sub', label: tr('monitor.calls.agentSub') },
     ],
+    skipIfOpen: fromPoll,
   });
 
   const models = state.callsData?.models || [];
@@ -514,8 +566,11 @@ function renderSelects() {
     value: state.modelFilter,
     options: [{ value: 'all', label: tr('monitor.calls.modelAll') }, ...models.map((m) => ({ value: m, label: m }))],
     alignRight: true,
+    skipIfOpen: fromPoll,
   });
+}
 
+function renderVaultSelects(fromPoll = false) {
   renderCustomSelect('vaultKindSelectHost', {
     id: 'vaultKindSelect',
     value: state.vaultKind,
@@ -528,21 +583,8 @@ function renderSelects() {
       { value: 'checkpoint', label: 'checkpoint' },
     ],
     alignRight: true,
+    skipIfOpen: fromPoll,
   });
-
-  if (FEATURE_FLAGS.showQuotaUi) {
-    const qGroups = state.quotaData?.groups || [
-      { id: 'gemini', name: 'Gemini 模型' },
-      { id: 'claude_gpt', name: 'Claude 与 GPT 模型' },
-      { id: 'argon', name: 'Gemini 4 Argon' },
-    ];
-    renderCustomSelect('calGroupSelectHost', {
-      id: 'calGroupSelect',
-      value: state.calGroup,
-      options: qGroups.map((g) => ({ value: g.id, label: g.name })),
-      fullWidth: true,
-    });
-  }
 
   renderCustomSelect('newMemKindSelectHost', {
     id: 'newMemKindSelect',
@@ -554,25 +596,75 @@ function renderSelects() {
       { value: 'pitfall', label: tr('monitor.vault.kindPitfall') },
     ],
     fullWidth: true,
+    skipIfOpen: fromPoll,
   });
+}
 
+function renderSettingsSelects(fromPoll = false) {
   const pollOptions = getPollOptions();
   renderCustomSelect('settingsPollHost', {
     id: 'settingsPoll',
     value: String(state.config.pollIntervalSec ?? 5),
     options: pollOptions.map((o) => ({ value: o.value, label: o.label })),
     alignRight: true,
+    skipIfOpen: fromPoll,
   });
 
   renderCustomSelect('popoutSizeSelectHost', {
     id: 'popoutSize',
     value: state.config.popout?.size || '460x720',
     options: getPopoutSizes(),
+    skipIfOpen: fromPoll,
   });
+}
 
-  i18nModule?.renderSelects();
-  appearanceModule?.renderSelects();
-  clampOpenSelectMenus();
+function renderSelects(scope = 'visible', { fromPoll = false } = {}) {
+  const isAll = scope === 'all';
+  const isVisible = scope === 'visible';
+  const onMonitor = !state.inSettings && state.activeModule === 'monitor';
+
+  if (isAll || scope === 'monitor-header' || (isVisible && onMonitor)) {
+    renderMonitorHeaderSelects(fromPoll);
+  }
+  if (isAll || scope === 'calls' || (isVisible && onMonitor && state.activeTab === 'calls')) {
+    renderCallsSelects(fromPoll);
+  }
+  if (
+    isAll ||
+    scope === 'vault' ||
+    (isVisible && ((onMonitor && state.activeTab === 'vault') || document.getElementById('addMemModal')?.dataset.open === 'true'))
+  ) {
+    renderVaultSelects(fromPoll);
+  }
+  if (
+    FEATURE_FLAGS.showQuotaUi &&
+    (isAll || scope === 'quota' || (isVisible && (state.activeTab === 'quota' || document.getElementById('quotaModal')?.dataset.open === 'true')))
+  ) {
+    const qGroups = state.quotaData?.groups || [
+      { id: 'gemini', name: 'Gemini 模型' },
+      { id: 'claude_gpt', name: 'Claude 与 GPT 模型' },
+      { id: 'argon', name: 'Gemini 4 Argon' },
+    ];
+    renderCustomSelect('calGroupSelectHost', {
+      id: 'calGroupSelect',
+      value: state.calGroup,
+      options: qGroups.map((g) => ({ value: g.id, label: g.name })),
+      fullWidth: true,
+      skipIfOpen: fromPoll,
+    });
+  }
+  if (isAll || scope === 'settings' || (isVisible && state.inSettings)) {
+    renderSettingsSelects(fromPoll);
+  }
+  if (isAll || scope === 'i18n' || (isVisible && !state.inSettings && state.activeModule === 'i18n')) {
+    i18nModule?.renderSelects();
+  }
+  if (isAll || scope === 'appearance' || (isVisible && !state.inSettings && state.activeModule === 'appearance')) {
+    appearanceModule?.renderSelects();
+  }
+  if (state.openSelectId) {
+    clampOpenSelectMenus();
+  }
 }
 
 async function handleSelectPick(id, val) {
@@ -833,9 +925,13 @@ function computeGeminiKvState() {
 
 function syncKvCountdownUi() {
   const kv = computeGeminiKvState();
+  const sig = `${kv.visible ? 1 : 0}|${kv.state}|${kv.text}|${kv.title}`;
+  if (sig === lastKvSig) return;
+  lastKvSig = sig;
 
   document.querySelectorAll('.hub-brand-svg').forEach((svg) => {
-    svg.dataset.kvState = kv.visible ? kv.state : 'safe';
+    const nextState = kv.visible ? kv.state : 'safe';
+    if (svg.dataset.kvState !== nextState) svg.dataset.kvState = nextState;
   });
 
   const wrap = document.getElementById('kvCountdownWrap');
@@ -852,12 +948,16 @@ function syncKvCountdownUi() {
 
   const miniKvChip = document.querySelector('#titleBarMiniModules .mini-mod-chip[data-mod="kv"]');
   if (miniKvChip) {
-    miniKvChip.dataset.available = kv.visible ? 'true' : 'false';
+    const prevAvail = miniKvChip.dataset.available;
+    const nextAvail = kv.visible ? 'true' : 'false';
+    miniKvChip.dataset.available = nextAvail;
     miniKvChip.dataset.kvState = kv.visible ? kv.state : 'muted';
     miniKvChip.title = kv.title || '';
     const valSpan = miniKvChip.querySelector('.mini-mod-val');
     if (valSpan) valSpan.textContent = kv.text;
-    if (state.windowCollapsed) requestAnimationFrame(fitNativeTitleBar);
+    if (state.windowCollapsed && prevAvail !== nextAvail) {
+      requestAnimationFrame(fitNativeTitleBar);
+    }
   }
 }
 
@@ -897,6 +997,7 @@ function renderCollapsedMiniModules(ctx, pct, cache, tps, followTag) {
 }
 
 function updateNativeTitleBarTelemetry(ctx, pct, cache, tps) {
+  if (!isNativePopout) return;
   const isAggregate =
     state.pinnedConversationId === '__active_all__' ||
     state.activeConversationId === '__active_all__' ||
@@ -907,6 +1008,17 @@ function updateNativeTitleBarTelemetry(ctx, pct, cache, tps) {
       ? tr('titlebar.modeAuto')
       : tr('titlebar.modePinned');
 
+  const activeModel = String(ctx?.latestModel || ((Number(ctx?.totalCallsCount) || 0) > 0 ? ctx?.model : '') || '').trim();
+  const hasCalls = (Number(ctx?.totalCallsCount) || 0) > 0;
+  const modOrder = getMiniBarModules().join(',');
+  const preset = state.config?.popout?.miniBarPreset || 'standard';
+  const titleBarSig = `${getUiLang()}|${followTag}|${pct.toFixed(1)}|${cache.toFixed(1)}|${tps.toFixed(1)}|${activeModel}|${hasCalls ? 1 : 0}|${modOrder}|${preset}`;
+  if (titleBarSig === lastTitleBarSig) {
+    syncKvCountdownUi();
+    return;
+  }
+  lastTitleBarSig = titleBarSig;
+
   const miniEl = document.getElementById('titleBarMiniSummary');
   if (miniEl) {
     miniEl.textContent = tr('titlebar.miniSummary', { pct: pct.toFixed(1), cache: cache.toFixed(0) });
@@ -915,7 +1027,6 @@ function updateNativeTitleBarTelemetry(ctx, pct, cache, tps) {
 
   const modelEl = document.getElementById('titleBarModelBadge');
   if (modelEl) {
-    const activeModel = String(ctx?.latestModel || ((Number(ctx?.totalCallsCount) || 0) > 0 ? ctx?.model : '') || '').trim();
     if (activeModel) {
       modelEl.dataset.fullModel = activeModel;
       modelEl.dataset.shortModel = formatShortModel(activeModel);
@@ -932,7 +1043,6 @@ function updateNativeTitleBarTelemetry(ctx, pct, cache, tps) {
 
   const tpsEl = document.getElementById('titleBarTpsBadge');
   if (tpsEl) {
-    const hasCalls = (Number(ctx?.totalCallsCount) || 0) > 0;
     if (hasCalls || tps > 0) {
       tpsEl.textContent = `${tps.toFixed(1)} tok/s`;
       tpsEl.dataset.tone = tps < 15 ? 'warn' : 'ok';
@@ -946,6 +1056,7 @@ function updateNativeTitleBarTelemetry(ctx, pct, cache, tps) {
   }
 
   renderCollapsedMiniModules(ctx, pct, cache, tps, followTag);
+  lastKvSig = '';
   syncKvCountdownUi();
   requestAnimationFrame(fitNativeTitleBar);
 }
@@ -970,21 +1081,24 @@ function renderContext(animated = false) {
   document.getElementById('tabCallsCount').textContent = String(ctx.totalCallsCount ?? 0);
 
   const alerts = ctx.alerts || [];
-  document.getElementById('alertCountLabel').textContent = tr('monitor.header.alertsCount', { count: alerts.length });
-  const alertDot = document.getElementById('alertDot');
-  alertDot.style.background = alerts.some((a) => a.level === 'error')
-    ? 'var(--error)'
-    : alerts.length > 0
-      ? 'var(--warning)'
-      : 'var(--success)';
+  const alertsSig = `${lang}|${alerts.map((a) => `${a.level}:${a.code || ''}:${a.title}:${a.detail}`).join('\u001f')}`;
+  if (alertsSig !== lastContextAlertsSig) {
+    lastContextAlertsSig = alertsSig;
+    document.getElementById('alertCountLabel').textContent = tr('monitor.header.alertsCount', { count: alerts.length });
+    const alertDot = document.getElementById('alertDot');
+    alertDot.style.background = alerts.some((a) => a.level === 'error')
+      ? 'var(--error)'
+      : alerts.length > 0
+        ? 'var(--warning)'
+        : 'var(--success)';
 
-  const alertsList = document.getElementById('alertsList');
-  if (!alerts.length) {
-    alertsList.innerHTML = `<div class="py-2 text-xs text-muted">${esc(tr('monitor.header.alertsEmpty'))}</div>`;
-  } else {
-    alertsList.innerHTML = alerts
-      .map(
-        (a, idx) => `
+    const alertsList = document.getElementById('alertsList');
+    if (!alerts.length) {
+      alertsList.innerHTML = `<div class="py-2 text-xs text-muted">${esc(tr('monitor.header.alertsEmpty'))}</div>`;
+    } else {
+      alertsList.innerHTML = alerts
+        .map(
+          (a, idx) => `
       <button type="button" class="alert-row-btn text-xs" data-alert-idx="${idx}">
         <span class="flex items-start gap-2.5 min-w-0 flex-1">
           <span class="dot-sm mt-1.5" style="background: var(--${a.level === 'error' ? 'error' : 'warning'})"></span>
@@ -996,8 +1110,9 @@ function renderContext(animated = false) {
         <span class="alert-row-chevron" aria-hidden="true">›</span>
       </button>
     `
-      )
-      .join('');
+        )
+        .join('');
+    }
   }
 
   const warnPct = state.config.alerts?.contextWarningPct ?? 75;
@@ -1023,6 +1138,10 @@ function renderContext(animated = false) {
   const freeEl = document.getElementById('kpiFree');
   const costEl = document.getElementById('kpiCost');
 
+  const pctChanged = Math.abs(pct - prevDisplay.pct) >= 0.05;
+  const cacheChanged = Math.abs(cache - prevDisplay.cache) >= 0.05;
+  const tpsChanged = Math.abs(tps - prevDisplay.tps) >= 0.05;
+
   if (animated) {
     animateNumber(pctEl, prevDisplay.pct, pct, (v) => `${v.toFixed(1)}%`, 520);
     animateNumber(ratioEl, prevDisplay.used, used, (v) => `${fmtK(Math.round(v))} / ${fmtK(limit)}`, 520);
@@ -1030,7 +1149,9 @@ function renderContext(animated = false) {
     animateNumber(tpsEl, prevDisplay.tps, tps, (v) => `${v.toFixed(1)} tok/s`, 500);
     animateNumber(freeEl, prevDisplay.free, free, (v) => fmtK(Math.round(v)), 520);
     animateNumber(costEl, prevDisplay.cost, cost, (v) => `$${v.toFixed(3)}`, 500);
-    [pctEl, cacheEl, tpsEl].forEach(pulseEl);
+    if (pctChanged) pulseEl(pctEl);
+    if (cacheChanged) pulseEl(cacheEl);
+    if (tpsChanged) pulseEl(tpsEl);
   } else {
     pctEl.textContent = `${pct.toFixed(1)}%`;
     ratioEl.textContent = `${fmtK(used)} / ${fmtK(limit)}`;
@@ -1054,30 +1175,33 @@ function renderContext(animated = false) {
 
   // In-place DOM patch for multi-segment bar (guaranteed CSS width transition)
   const breakdown = ctx.breakdown || [];
-  const segBar = document.getElementById('ctxSegBar');
-  const existingSegs = segBar.querySelectorAll('.ctx-seg');
-  if (existingSegs.length === breakdown.length) {
-    breakdown.forEach((b, i) => {
-      const w = b.tokens > 0 ? Math.max(0.8, (b.tokens / limit) * 100) : 0;
-      existingSegs[i].style.width = `${w}%`;
-      existingSegs[i].style.background = b.color;
-      existingSegs[i].dataset.id = b.id;
-    });
-  } else {
-    segBar.innerHTML = breakdown
-      .map((b) => {
+  const breakdownSig = `${lang}|${limit}|${free}|${pct.toFixed(2)}|${breakdown.map((b) => `${b.id}:${b.tokens}:${b.color}:${b.key || ''}:${b.note || ''}`).join('\u001f')}`;
+  if (breakdownSig !== lastContextBreakdownSig) {
+    lastContextBreakdownSig = breakdownSig;
+    const segBar = document.getElementById('ctxSegBar');
+    const existingSegs = segBar.querySelectorAll('.ctx-seg');
+    if (existingSegs.length === breakdown.length) {
+      breakdown.forEach((b, i) => {
         const w = b.tokens > 0 ? Math.max(0.8, (b.tokens / limit) * 100) : 0;
-        return `<div class="ctx-seg" data-id="${esc(b.id)}" style="width:${w}%; background:${esc(b.color)};"></div>`;
-      })
-      .join('');
-  }
+        existingSegs[i].style.width = `${w}%`;
+        existingSegs[i].style.background = b.color;
+        existingSegs[i].dataset.id = b.id;
+      });
+    } else {
+      segBar.innerHTML = breakdown
+        .map((b) => {
+          const w = b.tokens > 0 ? Math.max(0.8, (b.tokens / limit) * 100) : 0;
+          return `<div class="ctx-seg" data-id="${esc(b.id)}" style="width:${w}%; background:${esc(b.color)};"></div>`;
+        })
+        .join('');
+    }
 
-  document.getElementById('ctxBreakdownList').innerHTML =
-    breakdown
-      .map((b) => {
-        const bp = limit > 0 ? ((b.tokens / limit) * 100).toFixed(1) : '0.0';
-        const loc = localizeBreakdownItem(b, lang);
-        return `
+    document.getElementById('ctxBreakdownList').innerHTML =
+      breakdown
+        .map((b) => {
+          const bp = limit > 0 ? ((b.tokens / limit) * 100).toFixed(1) : '0.0';
+          const loc = localizeBreakdownItem(b, lang);
+          return `
       <div class="ctx-row flex items-center justify-between gap-2 text-xs" data-id="${esc(b.id)}">
         <div class="flex items-center gap-2.5 min-w-0">
           <span class="dot-md" style="background:${esc(b.color)};"></span>
@@ -1089,9 +1213,9 @@ function renderContext(animated = false) {
           <span style="width: 48px;" class="text-right font-semibold">${bp}%</span>
         </div>
       </div>`;
-      })
-      .join('') +
-    `
+        })
+        .join('') +
+      `
     <div class="flex items-center justify-between gap-2 text-xs pt-2 mt-1 border-t">
       <div class="flex items-center gap-2.5">
         <span class="dot-md" style="border: 1px solid var(--border); background: var(--background);"></span>
@@ -1102,28 +1226,36 @@ function renderContext(animated = false) {
         <span style="width: 48px;" class="text-right">${Math.max(0, 100 - pct).toFixed(1)}%</span>
       </div>
     </div>`;
+  }
 
   const deferred = ctx.deferred || [];
-  document.getElementById('ctxDeferredList').innerHTML = deferred
-    .map((d) => {
-      const ld = localizeDeferredItem(d, lang);
-      return `
+  const deferredSig = `${lang}|${deferred.map((d) => `${d.key}:${d.count}:${d.tokens}`).join('\u001f')}`;
+  if (deferredSig !== lastContextDeferredSig) {
+    lastContextDeferredSig = deferredSig;
+    document.getElementById('ctxDeferredList').innerHTML = deferred
+      .map((d) => {
+        const ld = localizeDeferredItem(d, lang);
+        return `
     <div class="flex items-center justify-between text-xs text-muted py-0.5">
       <span>${esc(ld.key)} <span class="mono-num">(${esc(ld.count)})</span></span>
       <span class="mono-num">${fmtK(d.tokens)} / ${esc(ld.status)}</span>
     </div>`;
-    })
-    .join('');
+      })
+      .join('');
+  }
 
   const inventories = ctx.inventories || [];
-  document.getElementById('inventoryList').innerHTML = inventories
-    .map((rawInv, idx) => {
-      const inv = localizeInventoryGroup(rawInv, lang);
-      const open = idx === state.openAccIdx;
-      const itemsHtml = inv.items?.length
-        ? inv.items
-            .map(
-              (it, itemIdx) => `
+  const invSig = `${lang}|${state.openAccIdx}|${inventories.map((inv) => `${inv.id || inv.title}:${inv.count}:${(inv.items || []).map((it) => `${it.name}:${it.meta}:${it.size}`).join(',')}`).join('\u001f')}`;
+  if (invSig !== lastContextInventorySig) {
+    lastContextInventorySig = invSig;
+    document.getElementById('inventoryList').innerHTML = inventories
+      .map((rawInv, idx) => {
+        const inv = localizeInventoryGroup(rawInv, lang);
+        const open = idx === state.openAccIdx;
+        const itemsHtml = inv.items?.length
+          ? inv.items
+              .map(
+                (it, itemIdx) => `
           <button type="button" class="inv-item-btn text-xs" data-inv-group="${idx}" data-inv-item="${itemIdx}">
             <span class="min-w-0 flex-1">
               <span class="block mono-num font-medium truncate">${esc(it.name)}</span>
@@ -1134,10 +1266,10 @@ function renderContext(animated = false) {
               <span class="inv-item-chevron" aria-hidden="true">›</span>
             </span>
           </button>`
-            )
-            .join('')
-        : `<div class="text-xs text-muted py-1">${esc(tr('monitor.ctx.emptyItems'))}</div>`;
-      return `
+              )
+              .join('')
+          : `<div class="text-xs text-muted py-1">${esc(tr('monitor.ctx.emptyItems'))}</div>`;
+        return `
       <div>
         <button type="button" class="acc-trigger" data-acc-idx="${idx}" data-open="${open}">
           <span class="acc-title-wrap">
@@ -1154,8 +1286,9 @@ function renderContext(animated = false) {
           </div>
         </div>
       </div>`;
-    })
-    .join('');
+      })
+      .join('');
+  }
 }
 
 function highlightCtx(id) {
@@ -1182,6 +1315,11 @@ function highlightCtx(id) {
 function renderCalls() {
   const data = state.callsData;
   const list = data?.calls || [];
+  const byAgent = data?.summary?.byAgent || [];
+  const byModel = data?.summary?.byModel || [];
+  const callsSig = `${getUiLang()}|${state.expandedCallId || ''}|${state.freshCallId || ''}|${data?.totalCallsCount ?? 0}|${list.map((c) => `${c.callUid}:${c.effectiveTps}:${c.cacheHitRate}:${c.estimatedCostUsd}:${c.durationMs}:${c.cacheDrop ? 1 : 0}`).join(',')}|${byAgent.map((a) => `${a.agentTag}:${a.steps}:${a.cost}`).join(',')}|${byModel.map((m) => `${m.model}:${m.steps}:${m.cost}`).join(',')}`;
+  if (callsSig === lastCallsRenderSig) return;
+  lastCallsRenderSig = callsSig;
   const tbody = document.getElementById('callsTbody');
 
   if (!list.length) {
@@ -1314,7 +1452,6 @@ function renderCalls() {
     cost: totalCost.toFixed(3),
   });
 
-  const byAgent = data?.summary?.byAgent || [];
   document.getElementById('summaryAgentList').innerHTML = byAgent.length
     ? byAgent
         .map(
@@ -1331,7 +1468,6 @@ function renderCalls() {
         .join('')
     : `<div class="px-5 py-4 text-xs text-muted">${esc(tr('monitor.calls.summaryEmpty'))}</div>`;
 
-  const byModel = data?.summary?.byModel || [];
   document.getElementById('summaryModelList').innerHTML = byModel.length
     ? byModel
         .map(
@@ -1461,6 +1597,10 @@ function renderQuota() {
 function renderVault() {
   const v = state.vaultData;
   if (!v) return;
+  const items = v.items || [];
+  const vaultSig = `${getUiLang()}|${v.storagePath || ''}|${v.commitsAhead || 0}|${v.staleCount || 0}|${items.map((it) => `${it.id}:${it.updatedAt}:${it.kind}:${it.title}:${it.summary}`).join('\u001f')}`;
+  if (vaultSig === lastVaultRenderSig) return;
+  lastVaultRenderSig = vaultSig;
   document.getElementById('vaultPathLabel').textContent = v.storagePath || '%USERPROFILE%\\.context-cache';
   const staleBadge = document.getElementById('vaultStaleBadge');
   if (v.commitsAhead > 0) {
@@ -1473,7 +1613,6 @@ function renderVault() {
     staleBadge.classList.add('hidden');
   }
 
-  const items = v.items || [];
   const el = document.getElementById('vaultList');
   if (!items.length) {
     el.innerHTML = `<div class="py-8 text-center text-xs text-muted">${esc(tr('monitor.vault.empty'))}</div>`;
@@ -1508,6 +1647,19 @@ function resetSessionViewState() {
   state.knownCallIds.clear();
   state.freshCallId = null;
   state.modelFilter = 'all';
+  state.callsData = null;
+  state.vaultData = null;
+  lastCallsRenderSig = '';
+  lastVaultRenderSig = '';
+  lastTitleBarSig = '';
+}
+
+function isPopoutOpen(status) {
+  return Boolean(status && (status.windowOpen || status.running));
+}
+
+function isPopoutClosed(status) {
+  return Boolean(status && !status.windowOpen && !status.running);
 }
 
 function applyFeatureFlags() {
@@ -1529,7 +1681,7 @@ function applyFeatureFlags() {
 }
 
 function renderLauncherView() {
-  const running = Boolean(state.popoutStatus?.running);
+  const running = isPopoutOpen(state.popoutStatus);
   const port = state.popoutStatus?.port;
   const dot = document.getElementById('launcherStatusDot');
   const title = document.getElementById('launcherTitle');
@@ -1556,51 +1708,116 @@ function renderLauncherView() {
   }
 }
 
-function enterGlobalLauncherMode(popoutStatus) {
-  state.launcherMode = true;
-  if (popoutStatus) state.popoutStatus = popoutStatus;
-  document.getElementById('appShell')?.classList.add('hidden');
-  document.getElementById('globalLauncherView')?.classList.remove('hidden');
-  renderLauncherView();
-  // Stop high-frequency polling in hidden background shell while popout window handles monitoring
-  if (pollTimer) {
-    clearInterval(pollTimer);
-    pollTimer = null;
-  }
-  if (launcherTimer) clearInterval(launcherTimer);
-  launcherTimer = setInterval(async () => {
-    if (!state.launcherMode) return;
-    try {
-      const res = await callAppTool('app_config_manage', { action: 'get' });
-      if (res?.popoutStatus) state.popoutStatus = res.popoutStatus;
-      if (res?.config) state.config = res.config;
-      renderLauncherView();
-    } catch {
-      // ignore transient status poll errors
-    }
-  }, 6000);
-}
-
-function exitGlobalLauncherMode() {
-  state.launcherMode = false;
+function stopLauncherTimer() {
   if (launcherTimer) {
     clearInterval(launcherTimer);
     launcherTimer = null;
   }
+}
+
+async function checkLauncherPopoutStatus() {
+  if (!state.launcherMode || launcherCheckInFlight) return;
+  launcherCheckInFlight = true;
+  try {
+    const res = await callAppTool('app_config_manage', { action: 'get' });
+    if (res?.popoutStatus) state.popoutStatus = res.popoutStatus;
+    if (res?.config) state.config = res.config;
+    if (!state.launcherMode) return;
+    if (isPopoutClosed(state.popoutStatus)) {
+      if (state.popoutStatus?.userClosed) {
+        state.userClosedPopoutSession = true;
+      }
+      exitGlobalLauncherMode();
+      return;
+    }
+    renderLauncherView();
+  } catch {
+    // ignore transient status poll errors
+  } finally {
+    launcherCheckInFlight = false;
+  }
+}
+
+function startLauncherTimer() {
+  stopLauncherTimer();
+  if (!state.launcherMode || document.visibilityState !== 'visible') return;
+  launcherTimer = setInterval(() => {
+    if (!state.launcherMode || document.visibilityState !== 'visible') return;
+    void checkLauncherPopoutStatus();
+  }, 6000);
+}
+
+function cleanupLauncherListeners() {
+  if (launcherVisibilityHandler) {
+    document.removeEventListener('visibilitychange', launcherVisibilityHandler);
+    launcherVisibilityHandler = null;
+  }
+  if (launcherFocusHandler) {
+    window.removeEventListener('focus', launcherFocusHandler);
+    launcherFocusHandler = null;
+  }
+}
+
+function enterGlobalLauncherMode(popoutStatus) {
+  if (popoutStatus) state.popoutStatus = popoutStatus;
+  if (isPopoutClosed(state.popoutStatus)) {
+    exitGlobalLauncherMode();
+    return;
+  }
+  state.launcherMode = true;
+  document.getElementById('appShell')?.classList.add('hidden');
+  document.getElementById('globalLauncherView')?.classList.remove('hidden');
+  renderLauncherView();
+  // Stop high-frequency polling & KV countdown in hidden background shell while popout window handles monitoring
+  if (pollTimer) {
+    clearInterval(pollTimer);
+    pollTimer = null;
+  }
+  stopKvCountdownTimer();
+  cleanupLauncherListeners();
+
+  launcherVisibilityHandler = () => {
+    if (!state.launcherMode) return;
+    if (document.visibilityState === 'visible') {
+      void checkLauncherPopoutStatus();
+      startLauncherTimer();
+    } else {
+      stopLauncherTimer();
+    }
+  };
+  launcherFocusHandler = () => {
+    if (!state.launcherMode) return;
+    void checkLauncherPopoutStatus();
+  };
+  document.addEventListener('visibilitychange', launcherVisibilityHandler);
+  window.addEventListener('focus', launcherFocusHandler);
+
+  startLauncherTimer();
+}
+
+function exitGlobalLauncherMode() {
+  state.launcherMode = false;
+  stopLauncherTimer();
+  cleanupLauncherListeners();
   document.getElementById('globalLauncherView')?.classList.add('hidden');
   document.getElementById('appShell')?.classList.remove('hidden');
-  void refreshAll(false, false);
+  void refreshAll(false, false, true);
   restartPollTimer();
-  requestAnimationFrame(() => {
-    positionIndicator('mainSegNav', 'mainSegIndicator');
-    positionIndicator('callsModeNav', 'callsModeIndicator');
-  });
+  startKvCountdownTimer();
+  scheduleIdleModuleChecks();
+  requestAnimationFrame(positionVisibleIndicators);
 }
 
 function startPopoutClientLifecycle() {
   if (!popoutToken || !popoutClientId) return;
 
-  const sendHeartbeat = async () => {
+  const sendHeartbeat = async (force = false) => {
+    const now = Date.now();
+    // When hidden (e.g. minimized), throttle heartbeat to ~10s (server TTL is 18s)
+    if (!force && document.visibilityState !== 'visible' && now - lastHeartbeatAt < 10000) {
+      return;
+    }
+    lastHeartbeatAt = now;
     try {
       const resp = await fetch(`/api/popout/heartbeat?token=${encodeURIComponent(popoutToken)}`, {
         method: 'POST',
@@ -1622,8 +1839,8 @@ function startPopoutClientLifecycle() {
     }
   };
 
-  void sendHeartbeat();
-  heartbeatTimer = setInterval(sendHeartbeat, 1800);
+  void sendHeartbeat(true);
+  heartbeatTimer = setInterval(() => void sendHeartbeat(false), 5000);
 
   let closingSent = false;
   const sendClosing = () => {
@@ -1661,9 +1878,26 @@ function startPopoutClientLifecycle() {
   };
 
   window.addEventListener('resize', scheduleBoundsSave);
-  boundsTimer = setInterval(() => {
-    if (document.visibilityState === 'visible') scheduleBoundsSave();
-  }, 4000);
+  const startBoundsTimer = () => {
+    if (boundsTimer) clearInterval(boundsTimer);
+    if (document.visibilityState !== 'visible') {
+      boundsTimer = null;
+      return;
+    }
+    boundsTimer = setInterval(() => {
+      if (document.visibilityState === 'visible') scheduleBoundsSave();
+    }, 5000);
+  };
+  startBoundsTimer();
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') {
+      void sendHeartbeat(true);
+      startBoundsTimer();
+    } else if (boundsTimer) {
+      clearInterval(boundsTimer);
+      boundsTimer = null;
+    }
+  });
 }
 
 function renderNativePinButton() {
@@ -1856,10 +2090,14 @@ function applyMiniBarOrderWithFlip(nextOrder, selectedMod = miniBarSelectedMod) 
 }
 
 function renderMiniBarStudio() {
+  if (state.isDraggingMiniBar) return;
   const preset = state.config?.popout?.miniBarPreset || 'standard';
   const customW = state.config?.popout?.miniBarCustomWidth || null;
   const order = getMiniBarModules();
   const visibleCount = MINI_BAR_PRESET_COUNTS[preset] || 3;
+  const studioSig = `${getUiLang()}|${preset}|${customW || ''}|${order.join(',')}|${miniBarSelectedMod || ''}`;
+  if (studioSig === lastMiniBarSig) return;
+  lastMiniBarSig = studioSig;
 
   document.querySelectorAll('#miniBarPresetRow .minibar-preset-btn').forEach((btn) => {
     btn.dataset.active = String(btn.dataset.preset === preset);
@@ -2003,6 +2241,7 @@ function renderMiniBarStudio() {
         if (!isDragging && Math.hypot(ev.clientX - startX, ev.clientY - startY) < 4) return;
         if (!isDragging) {
           isDragging = true;
+          state.isDraggingMiniBar = true;
           const rect = chip.getBoundingClientRect();
           offsetX = startX - rect.left;
           offsetY = startY - rect.top;
@@ -2077,6 +2316,7 @@ function renderMiniBarStudio() {
 
         if (isDragging) {
           const finalizeDrop = () => {
+            state.isDraggingMiniBar = false;
             if (ghostEl) {
               ghostEl.remove();
               ghostEl = null;
@@ -2086,11 +2326,13 @@ function renderMiniBarStudio() {
               miniBarSelectedMod = draggedMod;
               if (!state.config.popout) state.config.popout = {};
               state.config.popout.miniBarModules = [...curOrder];
+              lastMiniBarSig = '';
               renderMiniBarStudio();
               if (state.contextData) {
                 const pct = Number(state.contextData.usedPercent) || 0;
                 const cache = Number(state.contextData.latestCacheHitRate) || 0;
                 const tps = Number(state.contextData.avgTps) || 0;
+                lastTitleBarSig = '';
                 updateNativeTitleBarTelemetry(state.contextData, pct, cache, tps);
               }
               void persistConfigPatch({ popout: { miniBarModules: [...curOrder] } }).catch(() => {});
@@ -2171,10 +2413,11 @@ function renderSettings() {
     state.windowPinned = cfg.popout.alwaysOnTop;
     renderNativePinButton();
   }
-  const popOn = Boolean(state.popoutStatus?.running || cfg.popout?.enabled);
+  const popRunning = isPopoutOpen(state.popoutStatus);
+  const popOn = Boolean(popRunning || cfg.popout?.enabled);
   document.getElementById('popoutSwitch').dataset.on = String(popOn);
   const badge = document.getElementById('popoutStateBadge');
-  badge.textContent = state.popoutStatus?.running
+  badge.textContent = popRunning
     ? tr('settings.popout.running', { port: state.popoutStatus.port })
     : popOn
       ? tr('settings.popout.enabled')
@@ -2349,7 +2592,7 @@ async function loadContext(animated = false) {
     state.pinnedConversationId = nextConvId;
   }
 
-  renderSelects();
+  renderSelects('monitor-header', { fromPoll: animated });
   renderContext(animated);
   if (state.launcherMode) renderLauncherView();
   return { sessionChanged };
@@ -2375,7 +2618,7 @@ async function loadCalls(force = false) {
     state.knownCallIds.add(c.callUid);
   }
   state.callsData = data;
-  renderSelects();
+  renderSelects('calls', { fromPoll: !force });
   renderCalls();
   const nowStr = new Date().toLocaleTimeString(getUiLang() === 'en' ? 'en-US' : 'zh-CN', { hour12: false });
   const lbl = document.getElementById('lastUpdatedLabel');
@@ -2397,7 +2640,27 @@ async function loadVault() {
     query: query || undefined,
     kind: state.vaultKind,
   });
+  renderSelects('vault', { fromPoll: true });
   renderVault();
+}
+
+async function loadConfigOnly() {
+  const cfgRes = await callAppTool('app_config_manage', { action: 'get' });
+  const prevLang = getUiLang();
+  if (cfgRes?.config) state.config = cfgRes.config;
+  if (cfgRes?.popoutStatus) {
+    state.popoutStatus = cfgRes.popoutStatus;
+    if (cfgRes.popoutStatus.userClosed) state.userClosedPopoutSession = true;
+  }
+  const nextLang = getUiLang();
+  if (nextLang !== prevLang) {
+    applyUiLanguage(nextLang);
+    return cfgRes;
+  }
+  renderSelects(state.inSettings ? 'settings' : 'monitor-header');
+  if (state.inSettings) renderSettings();
+  if (state.launcherMode) renderLauncherView();
+  return cfgRes;
 }
 
 async function loadConfigAndDoctor() {
@@ -2407,14 +2670,17 @@ async function loadConfigAndDoctor() {
   ]);
   const prevLang = getUiLang();
   if (cfgRes?.config) state.config = cfgRes.config;
-  if (cfgRes?.popoutStatus) state.popoutStatus = cfgRes.popoutStatus;
+  if (cfgRes?.popoutStatus) {
+    state.popoutStatus = cfgRes.popoutStatus;
+    if (cfgRes.popoutStatus.userClosed) state.userClosedPopoutSession = true;
+  }
   if (docRes?.report) state.doctorReport = docRes.report;
   const nextLang = getUiLang();
   if (nextLang !== prevLang) {
     applyUiLanguage(nextLang);
     return;
   }
-  renderSelects();
+  renderSelects(state.inSettings ? 'settings' : 'visible');
   renderSettings();
   if (state.launcherMode) renderLauncherView();
 }
@@ -2424,31 +2690,90 @@ async function persistConfigPatch(patch) {
   if (res?.config) state.config = res.config;
   if (res?.popoutStatus) state.popoutStatus = res.popoutStatus;
   renderSettings();
-  renderSelects();
+  renderSelects('visible');
   return res;
+}
+
+function shouldPausePolling() {
+  if (state.launcherMode) return true;
+  if (document.visibilityState !== 'visible') return true;
+  if (state.surface === 'aux_pane' && isPopoutOpen(state.popoutStatus) && !state.windowFocused) {
+    return true;
+  }
+  return false;
+}
+
+function stopKvCountdownTimer() {
+  if (kvCountdownTimer) {
+    clearInterval(kvCountdownTimer);
+    kvCountdownTimer = null;
+  }
+}
+
+function startKvCountdownTimer() {
+  stopKvCountdownTimer();
+  if (state.launcherMode || document.visibilityState !== 'visible') return;
+  syncKvCountdownUi();
+  kvCountdownTimer = setInterval(() => {
+    if (document.visibilityState === 'visible' && !state.launcherMode) {
+      syncKvCountdownUi();
+    }
+  }, 1000);
+}
+
+function scheduleIdleModuleChecks() {
+  if (idleBadgeCheckScheduled) return;
+  idleBadgeCheckScheduled = true;
+  const runChecks = () => {
+    if (state.launcherMode || document.visibilityState !== 'visible') {
+      idleBadgeCheckScheduled = false;
+      return;
+    }
+    if (!i18nModule?.getStatus?.()) {
+      void i18nModule?.loadStatus(false);
+    }
+    void governanceModule?.loadOverview?.(false);
+  };
+  setTimeout(() => {
+    if (typeof window.requestIdleCallback === 'function') {
+      window.requestIdleCallback(runChecks, { timeout: 2000 });
+    } else {
+      runChecks();
+    }
+  }, 2200);
 }
 
 async function refreshAll(animated = true, manual = false, force = false) {
   if (refreshInFlight && !manual && !force) return;
+  if (!manual && !force) {
+    if (shouldPausePolling()) return;
+    if ((state.activeModule !== 'monitor' || state.inSettings) && !state.windowCollapsed) return;
+  }
   const mySeq = ++refreshSeq;
   refreshInFlight = true;
+  lastRefreshAt = Date.now();
   if (manual) {
     const svg = document.getElementById('refreshSvg');
-    svg.style.transition = 'transform 480ms cubic-bezier(0.22, 1, 0.36, 1)';
-    svg.style.transform = 'rotate(360deg)';
-    setTimeout(() => {
-      svg.style.transition = 'none';
-      svg.style.transform = 'rotate(0deg)';
-    }, 500);
+    if (svg) {
+      svg.style.transition = 'transform 480ms cubic-bezier(0.22, 1, 0.36, 1)';
+      svg.style.transform = 'rotate(360deg)';
+      setTimeout(() => {
+        svg.style.transition = 'none';
+        svg.style.transform = 'rotate(0deg)';
+      }, 500);
+    }
   }
   try {
     await loadContext(animated);
     if (mySeq !== refreshSeq) return;
-    const tasks = [loadCalls(manual || force), loadVault()];
-    if (FEATURE_FLAGS.showQuotaUi) tasks.push(loadQuota());
-    await Promise.allSettled(tasks);
-    if (state.inSettings && mySeq === refreshSeq) {
-      await loadConfigAndDoctor().catch(() => {});
+    const tasks = [];
+    if (!state.windowCollapsed && !state.inSettings && state.activeModule === 'monitor') {
+      if (state.activeTab === 'calls') tasks.push(loadCalls(manual || force));
+      if (state.activeTab === 'vault') tasks.push(loadVault());
+      if (FEATURE_FLAGS.showQuotaUi && state.activeTab === 'quota') tasks.push(loadQuota());
+    }
+    if (tasks.length) {
+      await Promise.allSettled(tasks);
     }
     if (manual && mySeq === refreshSeq) showToast(tr('toast.synced'));
   } catch (err) {
@@ -2469,10 +2794,11 @@ function restartPollTimer() {
     clearInterval(pollTimer);
     pollTimer = null;
   }
-  if (state.launcherMode) return;
+  if (shouldPausePolling()) return;
   const sec = Number(state.config.pollIntervalSec ?? 5);
   if (sec > 0) {
     pollTimer = setInterval(() => {
+      if (shouldPausePolling()) return;
       void refreshAll(true, false);
     }, sec * 1000);
   }
@@ -2548,10 +2874,11 @@ function switchModule(mod, subTab = null) {
   syncConsoleNavState();
 
   if (safeMod === 'monitor') {
-    requestAnimationFrame(() => {
-      positionIndicator('mainSegNav', 'mainSegIndicator');
-      positionIndicator('callsModeNav', 'callsModeIndicator');
-    });
+    renderSelects('visible');
+    if (!state.contextData || Date.now() - lastRefreshAt >= 2000) {
+      void refreshAll(false, false);
+    }
+    requestAnimationFrame(positionVisibleIndicators);
   } else if (safeMod === 'governance') {
     void governanceModule?.activate(subTab);
     requestAnimationFrame(() => governanceModule?.positionSubNav());
@@ -2577,7 +2904,16 @@ function switchTab(tab) {
     btn.dataset.active = String(btn.dataset.tab === safeTab);
   });
   positionIndicator('mainSegNav', 'mainSegIndicator');
-  if (safeTab === 'calls') setTimeout(() => positionIndicator('callsModeNav', 'callsModeIndicator'), 15);
+  if (safeTab === 'calls') {
+    renderSelects('calls');
+    requestAnimationFrame(() => positionIndicator('callsModeNav', 'callsModeIndicator'));
+    if (!state.callsData) void loadCalls(false);
+  } else if (safeTab === 'vault') {
+    renderSelects('vault');
+    if (!state.vaultData) void loadVault();
+  } else if (safeTab === 'quota' && FEATURE_FLAGS.showQuotaUi) {
+    if (!state.quotaData) void loadQuota();
+  }
 }
 
 function toggleSettingsView() {
@@ -2593,6 +2929,8 @@ function toggleSettingsView() {
   document.getElementById('module-settings')?.classList.remove('hidden');
   document.getElementById('panel-settings')?.classList.remove('hidden');
   syncConsoleNavState();
+  renderSelects('settings');
+  renderSettings();
   void loadConfigAndDoctor();
 }
 
@@ -2604,27 +2942,17 @@ function exitSettingsView() {
   document.getElementById('module-appearance')?.classList.toggle('hidden', state.activeModule !== 'appearance');
   document.getElementById('module-i18n')?.classList.toggle('hidden', state.activeModule !== 'i18n');
   syncConsoleNavState();
-  requestAnimationFrame(() => {
-    if (state.activeModule === 'monitor') {
-      positionIndicator('mainSegNav', 'mainSegIndicator');
-      positionIndicator('callsModeNav', 'callsModeIndicator');
-    } else if (state.activeModule === 'governance') {
-      governanceModule?.positionSubNav();
-    } else if (state.activeModule === 'appearance') {
-      appearanceModule?.positionSubNav();
-    } else {
-      i18nModule?.positionSubNav();
-    }
-  });
+  requestAnimationFrame(positionVisibleIndicators);
 }
 
 function pulseTargetEl(el) {
   if (!el) return;
   el.scrollIntoView({ behavior: 'smooth', block: 'center' });
   el.classList.remove('jump-highlight-pulse');
-  void el.offsetWidth;
-  el.classList.add('jump-highlight-pulse');
-  setTimeout(() => el.classList.remove('jump-highlight-pulse'), 1600);
+  requestAnimationFrame(() => {
+    el.classList.add('jump-highlight-pulse');
+    setTimeout(() => el.classList.remove('jump-highlight-pulse'), 1600);
+  });
 }
 
 async function handleAlertJump(alertIdx) {
@@ -2752,9 +3080,10 @@ async function handleAlertJump(alertIdx) {
         const anatomy = row.nextElementSibling;
         if (anatomy && anatomy.classList.contains('call-anatomy-row')) {
           anatomy.classList.remove('jump-highlight-pulse');
-          void anatomy.offsetWidth;
-          anatomy.classList.add('jump-highlight-pulse');
-          setTimeout(() => anatomy.classList.remove('jump-highlight-pulse'), 1600);
+          requestAnimationFrame(() => {
+            anatomy.classList.add('jump-highlight-pulse');
+            setTimeout(() => anatomy.classList.remove('jump-highlight-pulse'), 1600);
+          });
         }
       }
     });
@@ -2762,11 +3091,19 @@ async function handleAlertJump(alertIdx) {
 }
 
 function openModal(id) {
-  document.getElementById(id).dataset.open = 'true';
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.dataset.open = 'true';
+  if (id === 'addMemModal') renderSelects('vault');
 }
 
 function closeModal(id) {
-  document.getElementById(id).dataset.open = 'false';
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.dataset.open = 'false';
+  if (id === 'appRotationPoolModal') {
+    appearanceModule?.onPoolModalClosed?.();
+  }
 }
 
 function formatSourceLayerLabel(layer) {
@@ -3161,6 +3498,7 @@ function bindEvents() {
       .filter(Boolean);
     triggerBtns.forEach((b) => { b.disabled = true; });
     try {
+      state.userClosedPopoutSession = false;
       const res = await callAppTool('app_config_manage', {
         action: 'open_popout',
         forceNew,
@@ -3170,6 +3508,7 @@ function bindEvents() {
       if (res?.popoutStatus) state.popoutStatus = res.popoutStatus;
       renderSettings();
       if (state.launcherMode) renderLauncherView();
+      restartPollTimer();
       const st = res?.popoutStatus;
       if (st?.reused) {
         showToast(tr('toast.popoutFocused', { port: st.port }));
@@ -3233,7 +3572,12 @@ function bindEvents() {
       const res = await callAppTool('app_config_manage', { action: 'close_popout' });
       if (res?.config) state.config = res.config;
       if (res?.popoutStatus) state.popoutStatus = res.popoutStatus;
-      renderLauncherView();
+      state.userClosedPopoutSession = true;
+      if (isPopoutClosed(state.popoutStatus)) {
+        exitGlobalLauncherMode();
+      } else {
+        renderLauncherView();
+      }
       renderSettings();
       showToast('已关闭独立悬浮窗并释放本地端口');
     })();
@@ -4016,30 +4360,70 @@ async function init() {
     renderCustomSelect,
     onOpenSettings: toggleSettingsView,
     onGoI18nPatch: () => switchModule('i18n', 'status'),
+    popoutToken,
   });
   appearanceModule.init();
   bindEvents();
   applyStaticTranslations(document, getUiLang());
   syncConsoleNavState();
-  renderSelects();
-  requestAnimationFrame(() => {
-    positionIndicator('mainSegNav', 'mainSegIndicator');
-    positionIndicator('callsModeNav', 'callsModeIndicator');
-    governanceModule?.positionSubNav();
-    appearanceModule?.positionSubNav();
-    i18nModule?.positionSubNav();
-  });
+  renderSelects('visible');
+  requestAnimationFrame(positionVisibleIndicators);
 
+  let resizeRafId = 0;
   const ro = new ResizeObserver(() => {
-    positionIndicator('mainSegNav', 'mainSegIndicator');
-    positionIndicator('callsModeNav', 'callsModeIndicator');
-    positionIndicator('capsuleModeNav', 'capsuleModeIndicator');
-    governanceModule?.positionSubNav();
-    appearanceModule?.positionSubNav();
-    i18nModule?.positionSubNav();
-    if (state.openSelectId) clampOpenSelectMenus();
+    if (resizeRafId) return;
+    resizeRafId = requestAnimationFrame(() => {
+      resizeRafId = 0;
+      positionVisibleIndicators();
+      if (state.openSelectId) clampOpenSelectMenus();
+    });
   });
   ro.observe(document.getElementById('consoleWorkspace') || document.getElementById('appShell'));
+
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') {
+      if (!state.launcherMode) {
+        startKvCountdownTimer();
+        restartPollTimer();
+        if (
+          Date.now() - lastRefreshAt >= 2000 &&
+          (state.activeModule === 'monitor' || state.windowCollapsed) &&
+          !state.inSettings &&
+          !shouldPausePolling()
+        ) {
+          void refreshAll(true, false);
+        }
+      }
+    } else {
+      if (pollTimer) {
+        clearInterval(pollTimer);
+        pollTimer = null;
+      }
+      stopKvCountdownTimer();
+    }
+  });
+
+  window.addEventListener('focus', () => {
+    state.windowFocused = true;
+    if (!state.launcherMode && document.visibilityState === 'visible') {
+      restartPollTimer();
+      if (
+        state.surface === 'aux_pane' &&
+        Date.now() - lastRefreshAt >= 2000 &&
+        state.activeModule === 'monitor' &&
+        !state.inSettings
+      ) {
+        void refreshAll(true, false);
+      }
+    }
+  });
+
+  window.addEventListener('blur', () => {
+    state.windowFocused = false;
+    if (state.surface === 'aux_pane' && isPopoutOpen(state.popoutStatus)) {
+      restartPollTimer();
+    }
+  });
 
   if (!popoutToken) {
     mcpApp = new App({ name: 'Antigravity Hub', version: APP_VERSION }, {});
@@ -4148,10 +4532,17 @@ async function init() {
     startPopoutClientLifecycle();
   }
 
-  await loadConfigAndDoctor().catch(() => {});
+  // First-paint RPC #1: config & popout status only (doctor is lazy-loaded in Settings)
+  await loadConfigOnly().catch(() => {});
 
-  // Left sidebar (global) auto-launches floating OS window when enabled
-  if (state.surface === 'global' && state.config.popout?.autoLaunchFromSidebar !== false) {
+  // Left sidebar (global) auto-launches floating OS window when enabled and NOT explicitly closed by user
+  const shouldAutoLaunchSidebarPopout =
+    state.surface === 'global' &&
+    state.config.popout?.autoLaunchFromSidebar !== false &&
+    !state.popoutStatus?.userClosed &&
+    !state.userClosedPopoutSession;
+
+  if (shouldAutoLaunchSidebarPopout) {
     try {
       const res = await callAppTool('app_config_manage', {
         action: 'open_popout',
@@ -4160,33 +4551,26 @@ async function init() {
       });
       if (res?.config) state.config = res.config;
       if (res?.popoutStatus) state.popoutStatus = res.popoutStatus;
-      if (res?.popoutStatus?.launched) {
+      if (res?.popoutStatus?.launched && isPopoutOpen(res.popoutStatus) && !res.popoutStatus.userClosed) {
         // Fetch once so launcher card displays current followed conversation name
         await loadContext(false).catch(() => {});
         enterGlobalLauncherMode(res.popoutStatus);
         return;
       }
-      showToast('未检测到 Edge/Chrome，已切换为当前页内展示');
+      if (!res?.popoutStatus?.userClosed) {
+        showToast('未检测到 Edge/Chrome，已切换为当前页内展示');
+      }
     } catch {
       // Fall back cleanly to embedded view if popout launch fails
     }
   }
 
-  await refreshAll(false, false);
-  void i18nModule?.loadStatus(false);
-  void governanceModule?.loadOverview(false);
+  // First-paint RPC #2: context breakdown only (calls & vault lazy-load on tab switch)
+  await refreshAll(false, false, true);
   restartPollTimer();
-  syncKvCountdownUi();
-  setInterval(() => {
-    if (document.visibilityState === 'visible') syncKvCountdownUi();
-  }, 1000);
-  requestAnimationFrame(() => {
-    positionIndicator('mainSegNav', 'mainSegIndicator');
-    positionIndicator('callsModeNav', 'callsModeIndicator');
-    governanceModule?.positionSubNav();
-    appearanceModule?.positionSubNav();
-    i18nModule?.positionSubNav();
-  });
+  startKvCountdownTimer();
+  scheduleIdleModuleChecks();
+  requestAnimationFrame(positionVisibleIndicators);
 }
 
 void init();

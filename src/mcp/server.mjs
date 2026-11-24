@@ -35,7 +35,7 @@ export const APP_RESOURCE_URI = 'ui://context-cache/dashboard.html';
 export const APP_RESOURCE_MIME = 'text/html;profile=mcp-app';
 export const SERVER_INFO = {
   name: 'context-cache-server',
-  version: '1.5.4',
+  version: '1.5.5-beta.1',
 };
 
 const APP_ONLY_META = { ui: { visibility: ['app'] } };
@@ -399,6 +399,19 @@ export const TOOL_DEFINITIONS = [
   },
 ];
 
+const WALLPAPER_MIME_BY_EXT = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.webp': 'image/webp',
+  '.avif': 'image/avif',
+  '.svg': 'image/svg+xml',
+};
+
+const MAX_WALLPAPER_STREAM_BYTES = 15 * 1024 * 1024;
+const uiHtmlCache = new Map();
+const MAX_UI_HTML_CACHE = 4;
+
 function resolveUiHtmlPath(options = {}) {
   const candidates = [
     options.uiHtmlPath,
@@ -413,10 +426,56 @@ function resolveUiHtmlPath(options = {}) {
 
 function readUiHtml(options = {}) {
   const htmlPath = resolveUiHtmlPath(options);
-  if (fs.existsSync(htmlPath)) {
-    return fs.readFileSync(htmlPath, 'utf8');
+  try {
+    const stat = fs.statSync(htmlPath);
+    const cached = uiHtmlCache.get(htmlPath);
+    if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
+      return cached.html;
+    }
+    const html = fs.readFileSync(htmlPath, 'utf8');
+    if (uiHtmlCache.size >= MAX_UI_HTML_CACHE && !uiHtmlCache.has(htmlPath)) {
+      const oldestKey = uiHtmlCache.keys().next().value;
+      if (oldestKey !== undefined) uiHtmlCache.delete(oldestKey);
+    }
+    uiHtmlCache.set(htmlPath, { mtimeMs: stat.mtimeMs, size: stat.size, html });
+    return html;
+  } catch {
+    uiHtmlCache.delete(htmlPath);
+    return `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"/><title>Context Cache</title></head><body><div style="font-family:system-ui,sans-serif;padding:24px;"><h3>UI 尚未构建</h3><p>请在源码目录执行 <code>npm run build:ui</code> 或 <code>npm run deploy</code>。</p></div></body></html>`;
   }
-  return `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"/><title>Context Cache</title></head><body><div style="font-family:system-ui,sans-serif;padding:24px;"><h3>UI 尚未构建</h3><p>请在源码目录执行 <code>npm run build:ui</code> 或 <code>npm run deploy</code>。</p></div></body></html>`;
+}
+
+function resolveSafeWallpaper(rawId, options = {}) {
+  const id = String(rawId || '').trim();
+  if (!id || id.includes('/') || id.includes('\\') || id.includes('..') || id.includes('\0')) {
+    return null;
+  }
+  const fileName = id.startsWith('lib:') ? id.slice(4) : id;
+  if (!fileName || fileName.includes('/') || fileName.includes('\\') || fileName.includes('..') || fileName.includes('\0')) {
+    return null;
+  }
+  const ext = path.extname(fileName).toLowerCase();
+  const mime = WALLPAPER_MIME_BY_EXT[ext];
+  if (!mime) return null;
+
+  const { wallpapersDir } = getDataPaths(options);
+  const resolvedRoot = path.resolve(wallpapersDir);
+  const targetPath = path.resolve(resolvedRoot, fileName);
+  const rel = path.relative(resolvedRoot, targetPath);
+  if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) return null;
+
+  try {
+    if (!fs.existsSync(targetPath)) return null;
+    const realRoot = fs.realpathSync(resolvedRoot);
+    const realTarget = fs.realpathSync(targetPath);
+    const realRel = path.relative(realRoot, realTarget);
+    if (!realRel || realRel.startsWith('..') || path.isAbsolute(realRel)) return null;
+    const stat = fs.statSync(realTarget);
+    if (!stat.isFile() || stat.size <= 0 || stat.size > MAX_WALLPAPER_STREAM_BYTES) return null;
+    return { filePath: realTarget, mime };
+  } catch {
+    return null;
+  }
 }
 
 function toolOk(text, structuredContent) {
@@ -507,19 +566,36 @@ export function createMcpDispatcher(options = {}) {
     startupAutoLaunchTimer.unref?.();
   };
   const defaultWorkspace = options.projectDir || process.env.CONTEXT_CACHE_WORKSPACE || process.cwd();
+  const ACTIVE_CONV_TTL_MS = 3_000;
+  let activeConvCache = { value: null, expiresAt: 0 };
+  const getCachedActiveConversationId = () => {
+    const now = Date.now();
+    if (now < activeConvCache.expiresAt) {
+      return activeConvCache.value;
+    }
+    const target = resolveTargetSession(
+      {
+        followActive: true,
+        fallbackProjectDir: defaultWorkspace,
+      },
+      options
+    );
+    const convId = target.conversationId || null;
+    activeConvCache = { value: convId, expiresAt: now + ACTIVE_CONV_TTL_MS };
+    return convId;
+  };
+  const invalidateActiveConvCache = (nextConvId = undefined) => {
+    if (nextConvId !== undefined) {
+      activeConvCache = { value: nextConvId || null, expiresAt: Date.now() + ACTIVE_CONV_TTL_MS };
+    } else {
+      activeConvCache = { value: null, expiresAt: 0 };
+    }
+  };
   const popout = new PopoutServerManager({
     getHtml: () => readUiHtml(options),
     dataDir: options.dataDir || null,
-    getActiveConversationId: () => {
-      const target = resolveTargetSession(
-        {
-          followActive: true,
-          fallbackProjectDir: defaultWorkspace,
-        },
-        options
-      );
-      return target.conversationId || null;
-    },
+    getActiveConversationId: getCachedActiveConversationId,
+    resolveWallpaper: (id) => resolveSafeWallpaper(id, options),
     handleAppTool: async (name, args) => {
       const res = await callTool(name, args);
       return res;
@@ -552,6 +628,7 @@ export function createMcpDispatcher(options = {}) {
               },
               options
             );
+            invalidateActiveConvCache(explicitConvId);
           }
           const ctx = inspectContext(
             {
@@ -798,7 +875,7 @@ export function createMcpDispatcher(options = {}) {
           if (args.action === 'update') {
             const next = saveConfig(args.patch || {}, options);
             if (args.patch?.popout && Object.prototype.hasOwnProperty.call(args.patch.popout, 'enabled') && !next.popout?.enabled) {
-              await popout.stop();
+              await popout.stop({ userClosed: true });
             }
             return toolOk('updated', { config: next, popoutStatus: popout.getStatus() });
           }
@@ -817,7 +894,7 @@ export function createMcpDispatcher(options = {}) {
             return toolOk('launched', { config: loadConfig(options), popoutStatus: status });
           }
           if (args.action === 'close_popout') {
-            const status = await popout.stop();
+            const status = await popout.stop({ userClosed: true });
             const next = saveConfig({ popout: { enabled: false } }, options);
             return toolOk('closed', { config: next, popoutStatus: status });
           }
@@ -835,6 +912,7 @@ export function createMcpDispatcher(options = {}) {
               },
               options
             );
+            invalidateActiveConvCache(convId);
             return toolOk('synced', { activeSession });
           }
           if (args.action === 'restart_antigravity') {

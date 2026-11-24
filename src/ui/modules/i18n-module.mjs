@@ -124,6 +124,24 @@ export function createI18nModule({
 
   let dictSearchTimer = null;
   let jobPollTimer = null;
+  let jobPollPendingVisibility = false;
+
+  function scheduleJobPoll() {
+    if (jobPollTimer) return;
+    if (document.visibilityState !== 'visible') {
+      jobPollPendingVisibility = true;
+      return;
+    }
+    jobPollPendingVisibility = false;
+    jobPollTimer = setTimeout(() => {
+      jobPollTimer = null;
+      if (document.visibilityState !== 'visible') {
+        jobPollPendingVisibility = true;
+        return;
+      }
+      void loadStatus(false);
+    }, 2500);
+  }
 
   function getI18nConfig() {
     const cfg = st.statusData?.config?.i18n || st.statusData?.config || {};
@@ -417,11 +435,14 @@ export function createI18nModule({
       }
     }
 
-    if (jobRunning && !jobPollTimer) {
-      jobPollTimer = setTimeout(() => {
+    if (jobRunning) {
+      scheduleJobPoll();
+    } else {
+      jobPollPendingVisibility = false;
+      if (jobPollTimer) {
+        clearTimeout(jobPollTimer);
         jobPollTimer = null;
-        void loadStatus(false);
-      }, 2500);
+      }
     }
   }
 
@@ -520,7 +541,7 @@ export function createI18nModule({
     }
   }
 
-  function renderRulesPanel() {
+  function renderRulesPanel({ includeUntranslated = false } = {}) {
     const cfg = getI18nConfig();
     const imm = cfg.immunity;
 
@@ -536,7 +557,9 @@ export function createI18nModule({
     setSwitch('i18nMenuLocSwitch', cfg.menuLocalizationEnabled);
     setSwitch('i18nUpdateRemindSwitch', cfg.updateReminderEnabled);
     setSwitch('i18nCollectUntransSwitch', Boolean(cfg.collectUntranslated));
-    void refreshUntranslatedCount();
+    if (includeUntranslated) {
+      void refreshUntranslatedCount();
+    }
 
     const selTa = document.getElementById('i18nCustomSelectors');
     if (selTa && document.activeElement !== selTa) {
@@ -712,7 +735,7 @@ export function createI18nModule({
     if (subTab === 'dict') {
       void loadDictionary();
     } else if (subTab === 'rules') {
-      renderRulesPanel();
+      renderRulesPanel({ includeUntranslated: true });
     }
   }
 
@@ -1071,6 +1094,16 @@ export function createI18nModule({
   function init() {
     bindEvents();
     renderSelects();
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible' && jobPollPendingVisibility) {
+        jobPollPendingVisibility = false;
+        void loadStatus(false);
+      } else if (document.visibilityState !== 'visible' && jobPollTimer) {
+        clearTimeout(jobPollTimer);
+        jobPollTimer = null;
+        jobPollPendingVisibility = true;
+      }
+    });
   }
 
   async function activate(subTab = null) {

@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { execFile } from 'node:child_process';
@@ -7,6 +8,10 @@ import { getDataPaths, formatDisplayPath } from '../paths.mjs';
 export const ALLOWED_IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.avif', '.svg']);
 export const MAX_WALLPAPER_BYTES = 15 * 1024 * 1024; // 15 MiB hard circuit breaker
 const MAX_FOLDER_SCAN = 200;
+const MAX_INLINE_RAW_BYTES = 128 * 1024; // 128 KiB cap for inline raw Base64 fallback
+const THUMB_MAX_WIDTH = 320;
+const MAX_THUMB_CACHE = 64;
+const MAX_THUMB_CACHE_BYTES = 16 * 1024 * 1024; // 16 MiB strict total byte budget
 
 export const EXT_MIME = {
   '.png': 'image/png',
@@ -170,6 +175,10 @@ export function importWallpaperFromBase64({ fileName, base64 }, options = {}) {
   fs.writeFileSync(tmpPath, buf);
   fs.renameSync(tmpPath, targetPath);
 
+  if (buf.length > MAX_INLINE_RAW_BYTES) {
+    scheduleThumbGeneration(targetPath, options);
+  }
+
   return {
     id: `lib:${finalName}`,
     name: finalName,
@@ -208,6 +217,10 @@ export function importWallpaperFromPath(absPath, options = {}) {
   fs.writeFileSync(tmpPath, buf);
   fs.renameSync(tmpPath, targetPath);
 
+  if (buf.length > MAX_INLINE_RAW_BYTES) {
+    scheduleThumbGeneration(targetPath, options);
+  }
+
   return {
     id: `lib:${finalName}`,
     name: finalName,
@@ -237,32 +250,245 @@ export function deleteLibraryWallpaper(fileNameOrId, options = {}) {
     throw new Error('目标壁纸不存在');
   }
   fs.unlinkSync(target);
+  evictThumbCacheKey(target);
   return { ok: true, deleted: raw };
 }
 
 const THUMB_CACHE = new Map();
-const MAX_THUMB_CACHE = 64;
+let thumbCacheTotalBytes = 0;
+const PENDING_THUMB_JOBS = new Set();
+let activeThumbJobs = 0;
+const MAX_CONCURRENT_THUMB_JOBS = 2;
+
+function evictThumbCacheKey(absPath) {
+  const existing = THUMB_CACHE.get(absPath);
+  if (!existing) return;
+  thumbCacheTotalBytes = Math.max(0, thumbCacheTotalBytes - (existing.bytes || 0));
+  THUMB_CACHE.delete(absPath);
+}
+
+function putThumbCache(absPath, entry) {
+  const bytes = Buffer.byteLength(entry.uri, 'utf8');
+  if (bytes > MAX_THUMB_CACHE_BYTES) return;
+  evictThumbCacheKey(absPath);
+  while (
+    THUMB_CACHE.size >= MAX_THUMB_CACHE ||
+    (THUMB_CACHE.size > 0 && thumbCacheTotalBytes + bytes > MAX_THUMB_CACHE_BYTES)
+  ) {
+    const oldestKey = THUMB_CACHE.keys().next().value;
+    if (oldestKey === undefined) break;
+    evictThumbCacheKey(oldestKey);
+  }
+  THUMB_CACHE.set(absPath, { ...entry, bytes });
+  thumbCacheTotalBytes += bytes;
+}
+
+export function clearThumbCache() {
+  THUMB_CACHE.clear();
+  thumbCacheTotalBytes = 0;
+}
+
+export function getThumbCacheStats() {
+  return {
+    entries: THUMB_CACHE.size,
+    totalBytes: thumbCacheTotalBytes,
+    maxEntries: MAX_THUMB_CACHE,
+    maxBytes: MAX_THUMB_CACHE_BYTES,
+  };
+}
+
+function isInTmpDir(filePath) {
+  const tmp = path.resolve(os.tmpdir()).toLowerCase();
+  const p = path.resolve(filePath).toLowerCase();
+  return p === tmp || p.startsWith(`${tmp}${path.sep}`);
+}
+
+function hasResizableImageHeader(absPath) {
+  try {
+    const fd = fs.openSync(absPath, 'r');
+    const hdr = Buffer.alloc(8);
+    try {
+      const n = fs.readSync(fd, hdr, 0, 8, 0);
+      if (n < 4) return false;
+    } finally {
+      fs.closeSync(fd);
+    }
+    // PNG magic: 89 50 4E 47
+    if (hdr[0] === 0x89 && hdr[1] === 0x50 && hdr[2] === 0x4e && hdr[3] === 0x47) return true;
+    // JPEG magic: FF D8 FF
+    if (hdr[0] === 0xff && hdr[1] === 0xd8 && hdr[2] === 0xff) return true;
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+function getDiskThumbPath(absPath, st, options = {}) {
+  if (!options?.dataDir && isInTmpDir(absPath)) return null;
+  const { dataDir } = getDataPaths(options);
+  const thumbsDir = path.join(dataDir, 'runtime', 'thumbs');
+  const hash = crypto
+    .createHash('sha1')
+    .update(`${path.resolve(absPath).toLowerCase()}|${st.size}|${Math.round(st.mtimeMs)}`)
+    .digest('hex')
+    .slice(0, 16);
+  return { thumbsDir, thumbFile: path.join(thumbsDir, `${hash}.jpg`) };
+}
+
+function scheduleThumbGeneration(absPath, options = {}) {
+  if (options?.skipAsyncThumb) return;
+  if (process.platform !== 'win32' && process.platform !== 'darwin') return;
+  if (activeThumbJobs >= MAX_CONCURRENT_THUMB_JOBS) return;
+  let st;
+  try {
+    st = fs.statSync(absPath);
+  } catch {
+    return;
+  }
+  if (st.size <= MAX_INLINE_RAW_BYTES || st.size > MAX_WALLPAPER_BYTES) return;
+  if (!hasResizableImageHeader(absPath)) return;
+
+  const diskLoc = getDiskThumbPath(absPath, st, options);
+  if (!diskLoc) return;
+  if (fs.existsSync(diskLoc.thumbFile)) return;
+  if (PENDING_THUMB_JOBS.has(diskLoc.thumbFile)) return;
+
+  try {
+    ensureDir(diskLoc.thumbsDir);
+  } catch {
+    return;
+  }
+
+  PENDING_THUMB_JOBS.add(diskLoc.thumbFile);
+  activeThumbJobs++;
+  const tmpOut = `${diskLoc.thumbFile}.tmp.${process.pid}.${Date.now()}.jpg`;
+
+  const finish = () => {
+    PENDING_THUMB_JOBS.delete(diskLoc.thumbFile);
+    activeThumbJobs = Math.max(0, activeThumbJobs - 1);
+    try {
+      if (fs.existsSync(tmpOut)) fs.unlinkSync(tmpOut);
+    } catch {
+      // ignore
+    }
+  };
+
+  if (process.platform === 'win32') {
+    const escSrc = path.resolve(absPath).replace(/'/g, "''");
+    const escDst = path.resolve(tmpOut).replace(/'/g, "''");
+    const ps = [
+      'Add-Type -AssemblyName System.Drawing',
+      `$img = [System.Drawing.Image]::FromFile('${escSrc}')`,
+      'try {',
+      `  $maxW = ${THUMB_MAX_WIDTH}`,
+      '  $w = $img.Width; $h = $img.Height',
+      '  if ($w -gt $maxW) { $nh = [Math]::Max(1, [int][Math]::Round($h * ($maxW / [double]$w))); $nw = $maxW } else { $nw = $w; $nh = $h }',
+      '  $bmp = New-Object System.Drawing.Bitmap($nw, $nh)',
+      '  $g = [System.Drawing.Graphics]::FromImage($bmp)',
+      '  $g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic',
+      '  $g.DrawImage($img, 0, 0, $nw, $nh)',
+      '  $codec = [System.Drawing.Imaging.ImageCodecInfo]::GetImageEncoders() | Where-Object { $_.MimeType -eq "image/jpeg" } | Select-Object -First 1',
+      '  $ep = New-Object System.Drawing.Imaging.EncoderParameters(1)',
+      '  $ep.Param[0] = New-Object System.Drawing.Imaging.EncoderParameter([System.Drawing.Imaging.Encoder]::Quality, [long]78)',
+      `  $bmp.Save('${escDst}', $codec, $ep)`,
+      '  $g.Dispose(); $bmp.Dispose()',
+      '} finally { $img.Dispose() }',
+    ].join('; ');
+
+    const child = execFile(
+      'powershell.exe',
+      ['-NoProfile', '-NonInteractive', '-Command', ps],
+      { windowsHide: true, timeout: 15_000, maxBuffer: 256 * 1024 },
+      (err) => {
+        try {
+          if (!err && fs.existsSync(tmpOut)) {
+            const outSt = fs.statSync(tmpOut);
+            if (outSt.size > 0 && outSt.size <= MAX_INLINE_RAW_BYTES) {
+              fs.renameSync(tmpOut, diskLoc.thumbFile);
+            }
+          }
+        } catch {
+          // ignore
+        } finally {
+          finish();
+        }
+      }
+    );
+    child.unref?.();
+    return;
+  }
+
+  const child = execFile(
+    'sips',
+    ['-Z', String(THUMB_MAX_WIDTH), '-s', 'format', 'jpeg', '-s', 'formatOptions', '78', absPath, '--out', tmpOut],
+    { timeout: 15_000 },
+    (err) => {
+      try {
+        if (!err && fs.existsSync(tmpOut)) {
+          const outSt = fs.statSync(tmpOut);
+          if (outSt.size > 0 && outSt.size <= MAX_INLINE_RAW_BYTES) {
+            fs.renameSync(tmpOut, diskLoc.thumbFile);
+          }
+        }
+      } catch {
+        // ignore
+      } finally {
+        finish();
+      }
+    }
+  );
+  child.unref?.();
+}
 
 /**
- * Generate a data-URI thumbnail preview for UI cards with (mtimeMs, size) memory caching.
+ * Generate a bounded lightweight data-URI thumbnail preview for UI cards.
+ * - Strictly bounds memory cache by <= 16 MiB total bytes (LRU eviction).
+ * - Uses <= 320px cached disk thumbnails under runtime/thumbs/ when available.
+ * - Falls back to inline raw Base64 ONLY for small <= 128 KiB files; omits giant multi-MB raw Base64
+ *   (UI uses thumbUrl `/api/wallpaper/<id>` and picks up resized thumbnail once ready).
  */
-export function buildThumbDataUri(absPath, mime) {
+export function buildThumbDataUri(absPath, mime, options = {}) {
   try {
     if (!absPath || !fs.existsSync(absPath)) return null;
     const st = fs.statSync(absPath);
-    if (st.size <= 0 || st.size > 8 * 1024 * 1024) return null;
+    if (st.size <= 0 || st.size > MAX_WALLPAPER_BYTES) return null;
+
     const cached = THUMB_CACHE.get(absPath);
     if (cached && cached.mtimeMs === st.mtimeMs && cached.size === st.size) {
+      // Refresh LRU position
+      THUMB_CACHE.delete(absPath);
+      THUMB_CACHE.set(absPath, cached);
       return cached.uri;
     }
-    const b64 = fs.readFileSync(absPath).toString('base64');
-    const uri = `data:${mime || 'image/png'};base64,${b64}`;
-    if (THUMB_CACHE.size >= MAX_THUMB_CACHE) {
-      const oldestKey = THUMB_CACHE.keys().next().value;
-      if (oldestKey !== undefined) THUMB_CACHE.delete(oldestKey);
+
+    // 1. Check pre-generated lightweight <= 320px disk thumbnail
+    const diskLoc = getDiskThumbPath(absPath, st, options);
+    if (diskLoc && fs.existsSync(diskLoc.thumbFile)) {
+      try {
+        const thumbSt = fs.statSync(diskLoc.thumbFile);
+        if (thumbSt.size > 0 && thumbSt.size <= MAX_INLINE_RAW_BYTES) {
+          const b64 = fs.readFileSync(diskLoc.thumbFile).toString('base64');
+          const uri = `data:image/jpeg;base64,${b64}`;
+          putThumbCache(absPath, { mtimeMs: st.mtimeMs, size: st.size, uri });
+          return uri;
+        }
+      } catch {
+        // fall through
+      }
     }
-    THUMB_CACHE.set(absPath, { mtimeMs: st.mtimeMs, size: st.size, uri });
-    return uri;
+
+    // 2. Small files (<= 128 KiB): safe to inline directly without spawning resizer
+    if (st.size <= MAX_INLINE_RAW_BYTES) {
+      const b64 = fs.readFileSync(absPath).toString('base64');
+      const uri = `data:${mime || 'image/png'};base64,${b64}`;
+      putThumbCache(absPath, { mtimeMs: st.mtimeMs, size: st.size, uri });
+      return uri;
+    }
+
+    // 3. Large files (> 128 KiB): NEVER inline multi-MB raw Base64 into status JSON;
+    //    kick off non-blocking background thumbnail generation for subsequent renders.
+    scheduleThumbGeneration(absPath, options);
+    return null;
   } catch {
     return null;
   }
