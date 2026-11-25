@@ -322,8 +322,12 @@ export function createAppearanceModule({
 
         return `
         <div class="wp-lib-item" data-active="${isActive ? 'true' : 'false'}">
-          <div class="wp-lib-thumb" style="${thumbSrc ? `background-image:url('${esc(thumbSrc)}')` : ''}">
-            ${thumbSrc ? '' : `<span class="text-2xs text-muted mono-num">${esc(extLabel)}</span>`}
+          <div class="wp-lib-thumb">
+            ${
+              thumbSrc
+                ? `<img src="${esc(thumbSrc)}" alt="${esc(item.name)}" loading="lazy" decoding="async" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;" />`
+                : `<span class="text-2xs text-muted mono-num">${esc(extLabel)}</span>`
+            }
             <div class="wp-thumb-top">
               <div class="wp-thumb-badges">
                 ${isDark ? `<span class="wp-slot-tag" data-slot="dark">深色专属</span>` : ''}
@@ -517,8 +521,12 @@ export function createAppearanceModule({
           const thumbSrc = resolveThumbUrl(item);
           return `
           <button type="button" class="wp-pool-item" data-selected="${selected ? 'true' : 'false'}" data-pool-toggle="${esc(item.id)}">
-            <span class="wp-pool-thumb" style="${thumbSrc ? `background-image:url('${esc(thumbSrc)}')` : ''}">
-              ${thumbSrc ? '' : `<span class="text-xs text-muted mono-num">${esc(extLabel)}</span>`}
+            <span class="wp-pool-thumb">
+              ${
+                thumbSrc
+                  ? `<img src="${esc(thumbSrc)}" alt="${esc(item.name)}" loading="lazy" decoding="async" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;" />`
+                  : `<span class="text-xs text-muted mono-num">${esc(extLabel)}</span>`
+              }
               <span class="wp-pool-check">${selected ? '✓' : ''}</span>
             </span>
             <span class="wp-pool-name truncate" title="${esc(item.name)}">${esc(item.name)}</span>

@@ -1,10 +1,18 @@
-import fs from 'node:fs';
 import path from 'node:path';
-import { getAppDataDir, getConfigRoot, formatDisplayPath } from '../paths.mjs';
-import { redactText } from '../redact.mjs';
-import { scanEcosystem } from './scanner.mjs';
-import { runGovernanceLint } from './linters.mjs';
+import { getAppDataDir, getConfigRoot } from '../paths.mjs';
+import { previewAuthorizedFile, safeRealpath } from '../fs-utils.mjs';
+import { scanEcosystem, clearEcosystemInventoryCache } from './scanner.mjs';
 import {
+  runGovernanceLint,
+  computeGovernanceScore,
+  computeBaselinePenalty,
+  tokenizeKeywords,
+  PILLAR_SPECS,
+  CODE_SPECS,
+} from './linters.mjs';
+import {
+  registerGovernanceCacheInvalidator,
+  createHostSnapshot,
   togglePluginEnabled,
   toggleGlobalMcpServer,
   listSnapshots,
@@ -24,9 +32,19 @@ import {
   applyProfile,
 } from './profiles.mjs';
 
+// Ensure all guardrail mutations immediately invalidate the 5s ecosystem inventory cache
+registerGovernanceCacheInvalidator(clearEcosystemInventoryCache);
+
 export {
   scanEcosystem,
+  clearEcosystemInventoryCache,
   runGovernanceLint,
+  computeGovernanceScore,
+  computeBaselinePenalty,
+  tokenizeKeywords,
+  PILLAR_SPECS,
+  CODE_SPECS,
+  createHostSnapshot,
   togglePluginEnabled,
   toggleGlobalMcpServer,
   listSnapshots,
@@ -44,41 +62,31 @@ export {
   applyProfile,
 };
 
-function isAllowedPreviewPath(filePath, projectDir, options = {}) {
-  if (!filePath || typeof filePath !== 'string') return false;
-  const resolved = path.resolve(filePath).toLowerCase();
-  const roots = [
+/**
+ * Read-only, boundary-checked, symlink-safe, secret-blocking, redacted preview
+ * of a rule/skill/manifest/hook file within authorized roots.
+ */
+export function previewGovernanceFile(filePath, projectDir, options = {}) {
+  const rawRoots = [
     getConfigRoot(options),
     getAppDataDir(options),
     projectDir || options.projectDir || process.cwd(),
-  ]
-    .filter(Boolean)
-    .map((r) => path.resolve(r).toLowerCase());
-  return roots.some((root) => resolved === root || resolved.startsWith(`${root}${path.sep}`));
-}
+  ].filter(Boolean);
+  const allowedRoots = [];
+  for (const r of rawRoots) {
+    const resolvedRoot = path.resolve(r);
+    allowedRoots.push(resolvedRoot);
+    const realRoot = safeRealpath(resolvedRoot);
+    if (realRoot.toLowerCase() !== resolvedRoot.toLowerCase()) {
+      allowedRoots.push(realRoot);
+    }
+  }
 
-/**
- * Read-only, redacted preview of a rule/skill/manifest/hook file within authorized roots.
- */
-export function previewGovernanceFile(filePath, projectDir, options = {}) {
-  if (!isAllowedPreviewPath(filePath, projectDir, options)) {
-    throw new Error('拒绝预览超出工作区或 Antigravity 配置边界的文件');
-  }
-  if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
-    throw new Error('目标文件不存在');
-  }
-  const raw = fs.readFileSync(filePath, 'utf8');
-  const MAX_CHARS = 18000;
-  const truncated = raw.length > MAX_CHARS;
-  const content = redactText(truncated ? raw.slice(0, MAX_CHARS) : raw);
-  return {
+  return previewAuthorizedFile({
     filePath,
-    displayPath: formatDisplayPath(filePath),
-    bytes: Buffer.byteLength(raw, 'utf8'),
-    lines: raw ? raw.split(/\r?\n/).length : 0,
-    truncated,
-    content,
-  };
+    allowedRoots,
+    maxChars: 18000,
+  });
 }
 
 export function getGovernanceOverview(params = {}, options = {}) {
@@ -114,23 +122,23 @@ export function handleGovernanceAction(args = {}, options = {}) {
       return previewGovernanceFile(args.filePath, projectDir, options);
     case 'toggle_plugin': {
       const result = togglePluginEnabled(args.pluginId, Boolean(args.enabled), options);
-      return { result, overview: getGovernanceOverview({ projectDir }, options) };
+      return { result, overview: getGovernanceOverview({ projectDir }, { ...options, force: true }) };
     }
     case 'toggle_mcp': {
       const result = toggleGlobalMcpServer(args.serverName, Boolean(args.enabled), options);
-      return { result, overview: getGovernanceOverview({ projectDir }, options) };
+      return { result, overview: getGovernanceOverview({ projectDir }, { ...options, force: true }) };
     }
     case 'set_plugin_pin': {
       const result = setPluginPinned(args.pluginId, Boolean(args.pinned), options);
-      return { result, overview: getGovernanceOverview({ projectDir }, options) };
+      return { result, overview: getGovernanceOverview({ projectDir }, { ...options, force: true }) };
     }
     case 'set_item_category': {
       const result = setItemCategory(args.itemKey, args.category, options);
-      return { result, overview: getGovernanceOverview({ projectDir }, options) };
+      return { result, overview: getGovernanceOverview({ projectDir }, { ...options, force: true }) };
     }
     case 'set_lint_ignore': {
       const result = setLintFindingIgnored(args.findingId, Boolean(args.ignored), options);
-      return { result, overview: getGovernanceOverview({ projectDir }, options) };
+      return { result, overview: getGovernanceOverview({ projectDir }, { ...options, force: true }) };
     }
     case 'list_profiles':
       return { profiles: listProfiles(options) };
@@ -159,7 +167,7 @@ export function handleGovernanceAction(args = {}, options = {}) {
         overrides: args.overrides,
         saveAsName: args.saveAsName,
       });
-      return { result, overview: getGovernanceOverview({ projectDir }, options) };
+      return { result, overview: getGovernanceOverview({ projectDir }, { ...options, force: true }) };
     }
     case 'list_snapshots':
       return { snapshots: listSnapshots(options) };
@@ -167,7 +175,7 @@ export function handleGovernanceAction(args = {}, options = {}) {
       return previewRollback(args.snapshotId, options);
     case 'rollback_snapshot': {
       const result = rollbackSnapshot(args.snapshotId, options);
-      return { result, overview: getGovernanceOverview({ projectDir }, options) };
+      return { result, overview: getGovernanceOverview({ projectDir }, { ...options, force: true }) };
     }
     default:
       throw new Error(`未知治理操作: ${action}`);

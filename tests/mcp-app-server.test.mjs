@@ -58,7 +58,7 @@ function createJsonRpcClient(child) {
   };
 }
 
-test('MCP App Stdio Server serves ui:// single-file HTML, exposes 5 model + 8 app-only tools, and handles all 13 tools cleanly', async () => {
+test('MCP App Stdio Server serves ui:// single-file HTML, exposes 5 model + 11 app-only tools, and handles all 16 tools cleanly', async () => {
   const root = makeTmpDir('cc-mcp-');
   const dataDir = path.join(root, 'data');
   const appDataDir = path.join(root, 'antigravity');
@@ -90,7 +90,7 @@ test('MCP App Stdio Server serves ui:// single-file HTML, exposes 5 model + 8 ap
       clientInfo: { name: 'test-harness', version: '1.0.0' },
     });
     assert.equal(initResp.result.serverInfo.name, 'context-cache-server');
-    assert.equal(initResp.result.serverInfo.version, '1.5.5');
+    assert.equal(initResp.result.serverInfo.version, '1.6.0');
     assert.ok(initResp.result.capabilities.tools);
     assert.ok(initResp.result.capabilities.resources);
     client.notify('notifications/initialized', {});
@@ -118,31 +118,34 @@ test('MCP App Stdio Server serves ui:// single-file HTML, exposes 5 model + 8 ap
     assert.ok(scriptMatch && scriptMatch[1].length > 1000, 'Inline script must exist');
     assert.doesNotThrow(() => new Function(scriptMatch[1]), 'Inline script must be syntactically valid JavaScript');
 
-    // 3. tools/list — verify exact 5 model-visible + 10 app-only isolation
+    // 3. tools/list — verify exact 5 model-visible + 11 app-only isolation (16 total)
     const toolsResp = await client.request('tools/list');
     const tools = toolsResp.result.tools;
-    assert.equal(tools.length, 15);
+    assert.equal(tools.length, 16);
 
     const modelVisible = tools.filter((t) => t._meta?.ui?.visibility?.includes('model'));
     const appOnly = tools.filter((t) => JSON.stringify(t._meta?.ui?.visibility) === JSON.stringify(['app']));
     assert.equal(modelVisible.length, 5);
-    assert.equal(appOnly.length, 10);
+    assert.equal(appOnly.length, 11);
     assert.ok(appOnly.some((t) => t.name === 'app_i18n_manage'));
     assert.ok(appOnly.some((t) => t.name === 'app_governance_manage'));
     assert.ok(appOnly.some((t) => t.name === 'app_appearance_manage'));
+    assert.ok(appOnly.some((t) => t.name === 'app_review_manage'));
 
     const openMon = tools.find((t) => t.name === 'ctx_open_monitor');
     assert.equal(openMon._meta.ui.resourceUri, 'ui://context-cache/dashboard.html');
+    assert.ok(openMon.inputSchema?.properties?.module?.enum?.includes('review'));
     assert.deepEqual(
       openMon._meta['com.google.antigravity/ui'].entrypoints.map((e) => e.type),
       ['aux_pane', 'global']
     );
 
     // 4. Call all 5 model-visible tools
-    const rOpen = await client.request('tools/call', { name: 'ctx_open_monitor', arguments: { tab: 'quota' } });
+    const rOpen = await client.request('tools/call', { name: 'ctx_open_monitor', arguments: { tab: 'quota', module: 'review' } });
     assert.ok(!rOpen.result.isError);
     assert.ok(rOpen.result.structuredContent.context);
     assert.equal(rOpen.result.structuredContent.initialTab, 'context', 'Hidden quota tab should normalize to context');
+    assert.equal(rOpen.result.structuredContent.initialModule, 'review', 'ctx_open_monitor must support module: review');
 
     const rSave = await client.request('tools/call', {
       name: 'ctx_save',
@@ -163,10 +166,27 @@ test('MCP App Stdio Server serves ui:// single-file HTML, exposes 5 model + 8 ap
     assert.ok(!rDoctor.result.isError);
     assert.ok(rDoctor.result.structuredContent.report);
 
-    // 5. Call all 8 app-only tools
+    // 5. Call app-only tools + verify lastRev short-circuit & app_review_manage end-to-end
     const aCtx = await client.request('tools/call', { name: 'app_get_context_breakdown', arguments: {} });
     assert.ok(!aCtx.result.isError);
     assert.ok(Array.isArray(aCtx.result.structuredContent.breakdown));
+    assert.ok(typeof aCtx.result.structuredContent.rev === 'string' && aCtx.result.structuredContent.rev.length > 0);
+
+    const aCtxUnchanged = await client.request('tools/call', {
+      name: 'app_get_context_breakdown',
+      arguments: { lastRev: aCtx.result.structuredContent.rev },
+    });
+    assert.ok(!aCtxUnchanged.result.isError);
+    assert.equal(aCtxUnchanged.result.structuredContent.unchanged, true);
+    assert.equal(aCtxUnchanged.result.structuredContent.rev, aCtx.result.structuredContent.rev);
+
+    const aCtxForced = await client.request('tools/call', {
+      name: 'app_get_context_breakdown',
+      arguments: { lastRev: aCtx.result.structuredContent.rev, force: true },
+    });
+    assert.ok(!aCtxForced.result.isError);
+    assert.equal(aCtxForced.result.structuredContent.unchanged, undefined);
+    assert.ok(Array.isArray(aCtxForced.result.structuredContent.breakdown));
 
     // v1.5.4: read-only redacted asset preview via app_get_context_breakdown(action='preview_asset')
     const wsRulePath = path.join(workspaceDir, 'AGENTS.md');
@@ -191,6 +211,15 @@ test('MCP App Stdio Server serves ui:// single-file HTML, exposes 5 model + 8 ap
     const aCalls = await client.request('tools/call', { name: 'app_get_calls', arguments: {} });
     assert.ok(!aCalls.result.isError);
     assert.ok(Array.isArray(aCalls.result.structuredContent.calls));
+    assert.ok(typeof aCalls.result.structuredContent.rev === 'string' && aCalls.result.structuredContent.rev.length > 0);
+
+    const aCallsUnchanged = await client.request('tools/call', {
+      name: 'app_get_calls',
+      arguments: { lastRev: aCalls.result.structuredContent.rev },
+    });
+    assert.ok(!aCallsUnchanged.result.isError);
+    assert.equal(aCallsUnchanged.result.structuredContent.unchanged, true);
+    assert.equal(aCallsUnchanged.result.structuredContent.rev, aCalls.result.structuredContent.rev);
 
     const aQuota = await client.request('tools/call', { name: 'app_get_quota', arguments: {} });
     assert.ok(!aQuota.result.isError);
@@ -289,6 +318,72 @@ test('MCP App Stdio Server serves ui:// single-file HTML, exposes 5 model + 8 ap
     });
     assert.ok(!aI18nCfg.result.isError);
     assert.ok(aI18nCfg.result.structuredContent.config);
+
+    // 6. End-to-end app_review_manage RPC flow (status -> ingest_report -> set_ignore -> build_fix_prompt -> history)
+    const aRevStatus = await client.request('tools/call', {
+      name: 'app_review_manage',
+      arguments: { action: 'status', projectDir: workspaceDir },
+    });
+    assert.ok(!aRevStatus.result.isError);
+    assert.ok(Array.isArray(aRevStatus.result.structuredContent.availableGates));
+
+    const aRevIngest = await client.request('tools/call', {
+      name: 'app_review_manage',
+      arguments: {
+        action: 'ingest_report',
+        projectDir: workspaceDir,
+        rawReport: JSON.stringify({
+          summary: 'Mock AI Review',
+          findings: [
+            {
+              severity: 'high',
+              category: 'security',
+              file: 'src/demo.mjs',
+              line: 12,
+              title: 'Unvalidated redirect',
+              detail: 'Redirect target comes from user input.',
+              suggestion: 'Validate against allowlist.',
+            },
+          ],
+        }),
+      },
+    });
+    assert.ok(!aRevIngest.result.isError);
+    const revReport = aRevIngest.result.structuredContent.report;
+    assert.ok(revReport?.reportId);
+    assert.equal(revReport.findings.length, 1);
+    const findingId = revReport.findings[0].id;
+
+    const aRevFix = await client.request('tools/call', {
+      name: 'app_review_manage',
+      arguments: {
+        action: 'build_fix_prompt',
+        projectDir: workspaceDir,
+        reportId: revReport.reportId,
+        findingIds: [findingId],
+      },
+    });
+    assert.ok(!aRevFix.result.isError);
+    assert.match(aRevFix.result.structuredContent.prompt, /Unvalidated redirect/);
+
+    const aRevIgnore = await client.request('tools/call', {
+      name: 'app_review_manage',
+      arguments: {
+        action: 'set_ignore',
+        projectDir: workspaceDir,
+        findingId,
+        ignored: true,
+      },
+    });
+    assert.ok(!aRevIgnore.result.isError);
+    assert.equal(aRevIgnore.result.structuredContent.report.findings[0].ignored, true);
+
+    const aRevHist = await client.request('tools/call', {
+      name: 'app_review_manage',
+      arguments: { action: 'history', projectDir: workspaceDir },
+    });
+    assert.ok(!aRevHist.result.isError);
+    assert.ok(aRevHist.result.structuredContent.items.some((it) => it.reportId === revReport.reportId));
   } finally {
     child.kill();
     fs.rmSync(root, { recursive: true, force: true });

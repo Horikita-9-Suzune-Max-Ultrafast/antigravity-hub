@@ -87,6 +87,10 @@ export function getDataPaths(options = {}) {
     wallpapersDir: path.join(dataDir, 'wallpapers'),
     appearanceStateFile: path.join(dataDir, 'appearance', 'state.json'),
     appearanceRuntimeFile: path.join(dataDir, 'appearance', 'runtime-appearance.json'),
+    reviewsDir: path.join(dataDir, 'reviews'),
+    runtimeDir: path.join(dataDir, 'runtime'),
+    hostExeCacheDir: path.join(dataDir, 'runtime', 'host-bin'),
+    localPluginsDir: path.join(dataDir, 'local-plugins'), // Reserved for v1.7.0 R10
   };
 }
 

@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { getDataPaths } from './paths.mjs';
+import { safeStatSig } from './fs-utils.mjs';
 import { ensureDataDirs, readJsonlSafe, scanAllMemoryFiles } from './storage.mjs';
 
 const DB_IDLE_TIMEOUT_MS = 5_000;
@@ -72,9 +73,28 @@ CREATE INDEX IF NOT EXISTS idx_calls_group_ts ON calls(quota_group, ts_ms DESC);
 `;
 
 const DB_POOL = new Map(); // normDbPath -> { db, dbPath, timer, activeDepth }
-const SCHEMA_INITIALIZED_DBS = new Map(); // normDbPath -> { size, mtimeMs }
+const SCHEMA_INITIALIZED_DBS = new Map(); // normDbPath -> { size, birthtimeMs }
 const INDEX_READY_CACHE = new Map(); // normDbPath -> { stats, checkedAt }
+const EMPTY_MEMORIES_SNAPSHOT = new Map(); // normDbPath -> { projectsSig }
+const STMT_CACHE = new WeakMap(); // DatabaseSync -> Map<sql, StatementSync>
 let exitHookRegistered = false;
+
+/**
+ * Per-connection prepared statement cache backed by WeakMap (auto-GC when db closes).
+ */
+export function prepareCached(db, sql) {
+  let map = STMT_CACHE.get(db);
+  if (!map) {
+    map = new Map();
+    STMT_CACHE.set(db, map);
+  }
+  let stmt = map.get(sql);
+  if (!stmt) {
+    stmt = db.prepare(sql);
+    map.set(sql, stmt);
+  }
+  return stmt;
+}
 
 function normDbKey(dbPath) {
   const resolved = path.resolve(dbPath);
@@ -94,8 +114,6 @@ function isRunningInNodeTest() {
 function shouldKeepPooled(dbPath, options = {}) {
   if (options.keepOpen === true || process.env.CONTEXT_CACHE_DB_POOL === '1') return true;
   if (options.keepOpen === false || process.env.CONTEXT_CACHE_DB_POOL === '0') return false;
-  // On Windows, SQLite holds exclusive delete locks while open; legacy node:test suites
-  // delete temp dirs synchronously via fs.unlinkSync/fs.rmSync without calling closeIndexDb().
   if (process.platform === 'win32' && isRunningInNodeTest() && isInsideOsTmpDir(dbPath)) {
     return false;
   }
@@ -125,6 +143,22 @@ function disposePoolEntry(key) {
   }
 }
 
+function computeProjectsDirSignature(projectsDir) {
+  const rootSig = safeStatSig(projectsDir);
+  if (rootSig === '-') return '-';
+  try {
+    const entries = fs.readdirSync(projectsDir, { withFileTypes: true });
+    const parts = [rootSig];
+    for (const e of entries) {
+      if (!e.isDirectory()) continue;
+      parts.push(`${e.name}:${safeStatSig(path.join(projectsDir, e.name, 'memories'))}`);
+    }
+    return parts.join('|');
+  } catch {
+    return rootSig;
+  }
+}
+
 /**
  * Close a pooled SQLite connection (or all pooled connections when dbPath is omitted).
  */
@@ -133,12 +167,14 @@ export function closeIndexDb(dbPath = null) {
     const key = normDbKey(dbPath);
     disposePoolEntry(key);
     INDEX_READY_CACHE.delete(key);
+    EMPTY_MEMORIES_SNAPSHOT.delete(key);
     return;
   }
   for (const key of [...DB_POOL.keys()]) {
     disposePoolEntry(key);
   }
   INDEX_READY_CACHE.clear();
+  EMPTY_MEMORIES_SNAPSHOT.clear();
 }
 
 function scheduleIdleClose(key, entry) {
@@ -198,11 +234,11 @@ export function withIndexDb(options, fn) {
   const poolEnabled = shouldKeepPooled(dbFile, opts);
 
   let entry = DB_POOL.get(key);
-  // If db file was removed externally while pooled, discard stale handle
   if (entry && !fs.existsSync(dbFile)) {
     disposePoolEntry(key);
     SCHEMA_INITIALIZED_DBS.delete(key);
     INDEX_READY_CACHE.delete(key);
+    EMPTY_MEMORIES_SNAPSHOT.delete(key);
     entry = null;
   }
 
@@ -233,10 +269,7 @@ export function withIndexDb(options, fn) {
   }
 }
 
-export function upsertMemoryRow(db, mem) {
-  const tagsStr = Array.isArray(mem.tags) ? mem.tags.join(' ') : '';
-  db.prepare(
-    `INSERT INTO memories (id, project_id, branch, head, kind, title, summary, tags_json, archived, created_at, updated_at, file_path)
+const UPSERT_MEMORY_SQL = `INSERT INTO memories (id, project_id, branch, head, kind, title, summary, tags_json, archived, created_at, updated_at, file_path)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(id) DO UPDATE SET
        project_id = excluded.project_id,
@@ -248,8 +281,14 @@ export function upsertMemoryRow(db, mem) {
        tags_json = excluded.tags_json,
        archived = excluded.archived,
        updated_at = excluded.updated_at,
-       file_path = excluded.file_path`
-  ).run(
+       file_path = excluded.file_path`;
+
+const DELETE_MEMORY_FTS_SQL = 'DELETE FROM memories_fts WHERE id = ?';
+const INSERT_MEMORY_FTS_SQL = 'INSERT INTO memories_fts (id, project_id, title, summary, tags) VALUES (?, ?, ?, ?, ?)';
+
+export function upsertMemoryRow(db, mem) {
+  const tagsStr = Array.isArray(mem.tags) ? mem.tags.join(' ') : '';
+  prepareCached(db, UPSERT_MEMORY_SQL).run(
     mem.id,
     mem.projectId,
     mem.branch || 'main',
@@ -264,19 +303,11 @@ export function upsertMemoryRow(db, mem) {
     mem.filePath || ''
   );
 
-  db.prepare('DELETE FROM memories_fts WHERE id = ?').run(mem.id);
-  db.prepare('INSERT INTO memories_fts (id, project_id, title, summary, tags) VALUES (?, ?, ?, ?, ?)').run(
-    mem.id,
-    mem.projectId,
-    mem.title || '',
-    mem.summary || '',
-    tagsStr
-  );
+  prepareCached(db, DELETE_MEMORY_FTS_SQL).run(mem.id);
+  prepareCached(db, INSERT_MEMORY_FTS_SQL).run(mem.id, mem.projectId, mem.title || '', mem.summary || '', tagsStr);
 }
 
-export function upsertCallRow(db, c) {
-  db.prepare(
-    `INSERT INTO calls (
+const UPSERT_CALL_SQL = `INSERT INTO calls (
       call_uid, conversation_id, root_conversation_id, agent_type, agent_tag,
       step_index, model, created_at, ts_ms, duration_ms, timing_source, ttft_ms,
       input_tokens, cache_read_tokens, output_tokens, context_tokens,
@@ -298,8 +329,10 @@ export function upsertCallRow(db, c) {
       drop_reason = excluded.drop_reason,
       drop_detail = excluded.drop_detail,
       estimated_cost_usd = excluded.estimated_cost_usd,
-      quota_group = excluded.quota_group`
-  ).run(
+      quota_group = excluded.quota_group`;
+
+export function upsertCallRow(db, c) {
+  prepareCached(db, UPSERT_CALL_SQL).run(
     c.callUid,
     c.conversationId,
     c.rootConversationId || c.conversationId,
@@ -336,10 +369,10 @@ export function rebuildIndex(options = {}) {
   const paths = ensureDataDirs(options);
   const key = normDbKey(paths.dbFile);
 
-  // Close any pooled handle before unlinking DB files (required on Windows)
   closeIndexDb(paths.dbFile);
   SCHEMA_INITIALIZED_DBS.delete(key);
   INDEX_READY_CACHE.delete(key);
+  EMPTY_MEMORIES_SNAPSHOT.delete(key);
 
   for (const suffix of ['', '-wal', '-shm']) {
     const f = paths.dbFile + suffix;
@@ -377,6 +410,9 @@ export function rebuildIndex(options = {}) {
     stats: { memories: memories.length, calls: callsIndexed },
     checkedAt: Date.now(),
   });
+  if (memories.length === 0) {
+    EMPTY_MEMORIES_SNAPSHOT.set(key, { projectsSig: computeProjectsDirSignature(paths.projectsDir) });
+  }
 
   return {
     memoriesIndexed: memories.length,
@@ -388,6 +424,7 @@ export function rebuildIndex(options = {}) {
 
 /**
  * Ensure index exists and is populated if truth files exist but DB is empty/missing.
+ * Memoizes `projectsDir` mtime snapshot when `memories === 0` to eliminate perpetual disk scans.
  */
 export function ensureIndexReady(options = {}) {
   const paths = getDataPaths(options);
@@ -402,15 +439,22 @@ export function ensureIndexReady(options = {}) {
   }
   try {
     const stats = withIndexDb(options, (db) => {
-      const m = db.prepare('SELECT COUNT(*) AS n FROM memories').get();
-      const c = db.prepare('SELECT COUNT(*) AS n FROM calls').get();
+      const m = prepareCached(db, 'SELECT COUNT(*) AS n FROM memories').get();
+      const c = prepareCached(db, 'SELECT COUNT(*) AS n FROM calls').get();
       return { memories: m.n, calls: c.n };
     });
     if (stats.memories === 0) {
-      const truthMems = scanAllMemoryFiles(options);
-      if (truthMems.length > 0) {
-        return rebuildIndex(options);
+      const curProjectsSig = computeProjectsDirSignature(paths.projectsDir);
+      const prevEmpty = EMPTY_MEMORIES_SNAPSHOT.get(key);
+      if (!prevEmpty || prevEmpty.projectsSig !== curProjectsSig) {
+        const truthMems = scanAllMemoryFiles(options);
+        if (truthMems.length > 0) {
+          return rebuildIndex(options);
+        }
+        EMPTY_MEMORIES_SNAPSHOT.set(key, { projectsSig: curProjectsSig });
       }
+    } else {
+      EMPTY_MEMORIES_SNAPSHOT.delete(key);
     }
     INDEX_READY_CACHE.set(key, { stats, checkedAt: now });
     return stats;

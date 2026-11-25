@@ -2,36 +2,17 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { getCandidateAppDataDirs } from './paths.mjs';
+import { createLruCache, safeStatSig } from './fs-utils.mjs';
 
 const MIN_VALID_EPOCH_MS = 1_600_000_000_000; // ~2020-09
 const MAX_VALID_EPOCH_MS = 2_500_000_000_000; // ~2049-03
 const MAX_TTFT_MS = 300_000;
 const MAX_MODEL_DURATION_MS = 600_000;
-const MAX_CACHE_ENTRIES = 32;
 
-const nativeMetricsCache = new Map(); // normDbPath -> { sig, map }
+const nativeMetricsCache = createLruCache(32); // normDbPath -> { sig, maxIdx, map }
 
 export function clearNativeStepMetricsCache() {
   nativeMetricsCache.clear();
-}
-
-function safeStatSig(filePath) {
-  try {
-    const st = fs.statSync(filePath);
-    return `${st.size}:${st.mtimeMs}`;
-  } catch {
-    return '-';
-  }
-}
-
-function lruSet(map, key, val) {
-  if (map.has(key)) map.delete(key);
-  map.set(key, val);
-  while (map.size > MAX_CACHE_ENTRIES) {
-    const oldest = map.keys().next().value;
-    if (oldest === undefined) break;
-    map.delete(oldest);
-  }
 }
 
 /**
@@ -91,7 +72,7 @@ function parseProtoFields(buf) {
       const [val, o2] = decodeVarint(buf, off);
       if (val === null) return null;
       off = o2;
-      const numVal = val <= 9007199254740991n ? Number(val) : Number(val);
+      const numVal = Number(val);
       (fields[fieldNum] ||= []).push(numVal);
     } else if (wire === 1) {
       if (off + 8 > buf.length) return null;
@@ -202,7 +183,8 @@ export function parseNativeStepMetadataBlob(blob) {
 /**
  * Load per-step native millisecond TTFT, pure model duration, and exact thinking/content token split
  * from Antigravity's local read-only SQLite conversation store.
- * Fail-open: returns an empty Map on missing DB, lock contention, or unknown format.
+ * Incrementally decodes only newly appended steps (`idx > cached.maxIdx`) when DB/WAL grows,
+ * falling back to full scan if DB was rotated or shrunk.
  */
 export function loadNativeStepMetrics(conversationId, options = {}) {
   const dbPath = findNativeConversationDbPath(conversationId, options);
@@ -215,22 +197,51 @@ export function loadNativeStepMetrics(conversationId, options = {}) {
     return cached.map;
   }
 
-  const map = new Map();
+  let map = new Map();
+  let maxIdx = -1;
   let db = null;
   try {
     db = new DatabaseSync(dbPath, { readOnly: true });
     db.exec('PRAGMA busy_timeout = 500;');
-    const rows = db.prepare('SELECT idx, metadata FROM steps WHERE metadata IS NOT NULL').all();
-    for (const row of rows) {
-      if (row == null || !Number.isFinite(Number(row.idx)) || !row.metadata) continue;
-      const parsed = parseNativeStepMetadataBlob(row.metadata);
-      if (parsed) {
-        map.set(Number(row.idx), parsed);
+
+    let canIncremental = false;
+    if (cached && cached.maxIdx >= 0 && cached.map instanceof Map) {
+      const maxRow = db.prepare('SELECT MAX(idx) AS maxIdx FROM steps WHERE metadata IS NOT NULL').get();
+      if (maxRow && maxRow.maxIdx != null && Number(maxRow.maxIdx) >= cached.maxIdx) {
+        canIncremental = true;
       }
     }
-    lruSet(nativeMetricsCache, key, { sig, map });
+
+    if (canIncremental) {
+      map = new Map(cached.map);
+      maxIdx = cached.maxIdx;
+      const rows = db.prepare('SELECT idx, metadata FROM steps WHERE idx > ? AND metadata IS NOT NULL').all(cached.maxIdx);
+      for (const row of rows) {
+        if (row == null || !Number.isFinite(Number(row.idx)) || !row.metadata) continue;
+        const idxNum = Number(row.idx);
+        const parsed = parseNativeStepMetadataBlob(row.metadata);
+        if (parsed) {
+          map.set(idxNum, parsed);
+          if (idxNum > maxIdx) maxIdx = idxNum;
+        }
+      }
+    } else {
+      const rows = db.prepare('SELECT idx, metadata FROM steps WHERE metadata IS NOT NULL').all();
+      for (const row of rows) {
+        if (row == null || !Number.isFinite(Number(row.idx)) || !row.metadata) continue;
+        const idxNum = Number(row.idx);
+        const parsed = parseNativeStepMetadataBlob(row.metadata);
+        if (parsed) {
+          map.set(idxNum, parsed);
+          if (idxNum > maxIdx) maxIdx = idxNum;
+        }
+      }
+    }
+
+    nativeMetricsCache.set(key, { sig, maxIdx, map });
   } catch {
     // Strictly fail-open: never block telemetry when host DB is absent, locked, or changed
+    if (cached && cached.map instanceof Map) return cached.map;
   } finally {
     if (db) {
       try {

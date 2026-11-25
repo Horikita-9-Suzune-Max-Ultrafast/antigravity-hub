@@ -1,15 +1,34 @@
 import fs from 'node:fs';
+import path from 'node:path';
 import { getDataPaths } from './paths.mjs';
-import { atomicWriteJson } from './storage.mjs';
+import { atomicWriteJsonObj, createLruCache, withFileLockSync } from './fs-utils.mjs';
 
 export const VALID_POLL_INTERVALS = [3, 5, 10, 30, 60, 0];
 export const VALID_UI_LANGUAGES = ['zh-CN', 'en'];
+export const VALID_CURRENCIES = ['CNY', 'USD'];
 export const VALID_MINI_BAR_MODULES = ['context', 'cache', 'kv', 'tps', 'model'];
 export const VALID_MINI_BAR_PRESETS = ['full', 'wide', 'standard', 'compact', 'minimal', 'custom'];
+export const VALID_CONSOLE_MODULES = ['monitor', 'review', 'governance', 'appearance', 'i18n'];
+export const VALID_WINDOW_MODES = ['console', 'minibar', 'orb'];
+
+const CNY_TIMEZONE_RE = /^Asia\/(Shanghai|Chongqing|Harbin|Urumqi|Hong_Kong|Macau|Taipei)/i;
+
+export function detectDefaultCurrency() {
+  try {
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+    return CNY_TIMEZONE_RE.test(tz) ? 'CNY' : 'USD';
+  } catch {
+    return 'USD';
+  }
+}
+
+const configReadCache = createLruCache(16);
 
 export const DEFAULT_CONFIG = {
   version: 1,
   uiLanguage: 'zh-CN',
+  currency: detectDefaultCurrency(),
+  cnyPerUsd: 7.2,
   pollIntervalSec: 5,
   auxAutoOpen: true,
   popout: {
@@ -19,6 +38,8 @@ export const DEFAULT_CONFIG = {
     alwaysOnTop: true,
     size: '460x720',
     position: null,
+    windowMode: 'console', // 'console' | 'minibar' | 'orb'
+    orbPosition: null,     // { x: number, y: number } | null
     miniBarPreset: 'standard',
     miniBarModules: ['context', 'cache', 'kv', 'tps', 'model'],
     miniBarCustomWidth: null,
@@ -172,6 +193,11 @@ export function sanitizeConfig(cfg) {
   } else {
     out.uiLanguage = 'zh-CN';
   }
+  const normalizedCurrency = typeof out.currency === 'string' ? out.currency.trim().toUpperCase() : '';
+  out.currency = VALID_CURRENCIES.includes(normalizedCurrency) ? normalizedCurrency : detectDefaultCurrency();
+  const rawCnyPerUsd = Number(out.cnyPerUsd);
+  out.cnyPerUsd =
+    Number.isFinite(rawCnyPerUsd) && rawCnyPerUsd !== 0 ? Math.max(1, Math.min(50, rawCnyPerUsd)) : 7.2;
   if (!VALID_POLL_INTERVALS.includes(Number(out.pollIntervalSec))) {
     out.pollIntervalSec = 5;
   } else {
@@ -229,6 +255,22 @@ export function sanitizeConfig(cfg) {
   } else {
     out.popout.position = null;
   }
+  if (!VALID_WINDOW_MODES.includes(out.popout.windowMode)) {
+    out.popout.windowMode = 'console';
+  }
+  if (
+    out.popout.orbPosition &&
+    typeof out.popout.orbPosition === 'object' &&
+    Number.isFinite(Number(out.popout.orbPosition.x)) &&
+    Number.isFinite(Number(out.popout.orbPosition.y))
+  ) {
+    out.popout.orbPosition = {
+      x: Math.max(-4000, Math.min(8000, Math.round(Number(out.popout.orbPosition.x)))),
+      y: Math.max(-2000, Math.min(4000, Math.round(Number(out.popout.orbPosition.y)))),
+    };
+  } else {
+    out.popout.orbPosition = null;
+  }
   out.uiBanner.enabled = Boolean(out.uiBanner.enabled);
   out.sessionStartBudgetTokens = Math.max(150, Math.min(490, Number(out.sessionStartBudgetTokens) || 450));
   out.alerts.contextWarningPct = Math.max(50, Math.min(95, Number(out.alerts.contextWarningPct) || 75));
@@ -236,7 +278,7 @@ export function sanitizeConfig(cfg) {
   out.alerts.lowTpsThreshold = Math.max(5, Math.min(100, Number(out.alerts.lowTpsThreshold) || 15));
   out.alerts.lowTpsStreak = Math.max(2, Math.min(10, Number(out.alerts.lowTpsStreak) || 3));
 
-  if (!['monitor', 'governance', 'appearance', 'i18n'].includes(out.console?.defaultModule)) {
+  if (!VALID_CONSOLE_MODULES.includes(out.console?.defaultModule)) {
     out.console = { defaultModule: 'monitor' };
   }
   out.i18n.installDirOverride = typeof out.i18n.installDirOverride === 'string' ? out.i18n.installDirOverride.trim() : '';
@@ -264,23 +306,39 @@ export function sanitizeConfig(cfg) {
 
 export function loadConfig(options = {}) {
   const { configFile } = getDataPaths(options);
+  const resolved = path.resolve(configFile);
   try {
-    if (fs.existsSync(configFile)) {
-      const raw = JSON.parse(fs.readFileSync(configFile, 'utf8'));
-      return sanitizeConfig(raw);
+    const st = fs.statSync(resolved);
+    const cached = configReadCache.get(resolved);
+    if (cached && cached.mtimeMs === st.mtimeMs && cached.size === st.size) {
+      return structuredClone(cached.value);
     }
+    const raw = JSON.parse(fs.readFileSync(resolved, 'utf8'));
+    const sanitized = sanitizeConfig(raw);
+    configReadCache.set(resolved, { mtimeMs: st.mtimeMs, size: st.size, value: sanitized });
+    return structuredClone(sanitized);
   } catch {
-    // Fall back safely to defaults on corrupt config
+    // Fall back safely to defaults on missing or corrupt config
+    configReadCache.delete(resolved);
   }
   return sanitizeConfig(DEFAULT_CONFIG);
 }
 
 export function saveConfig(patch, options = {}) {
-  const current = loadConfig(options);
-  const next = sanitizeConfig(deepMerge(current, patch));
   const { configFile } = getDataPaths(options);
-  atomicWriteJson(configFile, next);
-  return next;
+  const resolved = path.resolve(configFile);
+  return withFileLockSync(resolved, () => {
+    const current = loadConfig(options);
+    const next = sanitizeConfig(deepMerge(current, patch));
+    atomicWriteJsonObj(resolved, next);
+    try {
+      const st = fs.statSync(resolved);
+      configReadCache.set(resolved, { mtimeMs: st.mtimeMs, size: st.size, value: next });
+    } catch {
+      configReadCache.delete(resolved);
+    }
+    return structuredClone(next);
+  });
 }
 
 /**

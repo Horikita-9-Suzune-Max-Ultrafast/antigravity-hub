@@ -1,27 +1,31 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { getCandidateAppDataDirs, findTranscriptPath, formatDisplayPath } from './paths.mjs';
+import { createLruCache, safeRealpath as safeRealpathUtil, safeStatSig } from './fs-utils.mjs';
 
 const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
-const MAX_TRANSCRIPT_CACHE = 64;
-const MAX_ANNOTATION_CACHE = 256;
+const LIST_CONV_TTL_MS = 2_500;
 
-const transcriptCache = new Map(); // normFilePath -> { size, mtimeMs, steps, metaBase, subagentIds }
-const annotationCache = new Map(); // normFilePath -> { size, mtimeMs, parsed }
+const transcriptCache = createLruCache(64); // normFilePath -> { size, offset, mtimeMs, steps, acc }
+const annotationCache = createLruCache(256); // normFilePath -> { size, mtimeMs, parsed }
+const listConversationsCache = createLruCache(16); // cacheKey -> { dirFp, topSigs, expiresAt, result }
+
+let _incrementalReadCount = 0;
+let _fullReadCount = 0;
 
 export function clearTranscriptCache() {
   transcriptCache.clear();
   annotationCache.clear();
+  listConversationsCache.clear();
 }
 
-function lruPut(map, key, val, limit) {
-  if (map.has(key)) map.delete(key);
-  map.set(key, val);
-  while (map.size > limit) {
-    const oldest = map.keys().next().value;
-    if (oldest === undefined) break;
-    map.delete(oldest);
-  }
+export function getTranscriptParseStats() {
+  return { incrementalReads: _incrementalReadCount, fullReads: _fullReadCount };
+}
+
+export function resetTranscriptParseStats() {
+  _incrementalReadCount = 0;
+  _fullReadCount = 0;
 }
 
 function normCacheKey(filePath) {
@@ -29,9 +33,61 @@ function normCacheKey(filePath) {
   return process.platform === 'win32' ? abs.toLowerCase() : abs;
 }
 
+function estimateTextTokensFast(text) {
+  if (!text) return 0;
+  const str = String(text);
+  let cjk = 0;
+  let ascii = 0;
+  for (let i = 0; i < str.length; i++) {
+    const code = str.charCodeAt(i);
+    if (
+      (code >= 0x4e00 && code <= 0x9fff) ||
+      (code >= 0x3400 && code <= 0x4dbf) ||
+      (code >= 0x3000 && code <= 0x303f) ||
+      (code >= 0xff00 && code <= 0xffef)
+    ) {
+      cjk++;
+    } else {
+      ascii++;
+    }
+  }
+  return Math.max(1, Math.ceil(cjk * 0.9 + ascii / 3.8));
+}
+
+function estimateObjCharsFast(val, depth = 0) {
+  if (val == null) return 4;
+  const t = typeof val;
+  if (t === 'string') return val.length + 2;
+  if (t === 'number' || t === 'boolean') return 6;
+  if (depth >= 4) return 16;
+  if (Array.isArray(val)) {
+    let sum = 2;
+    for (let i = 0; i < val.length; i++) {
+      sum += estimateObjCharsFast(val[i], depth + 1) + 1;
+    }
+    return sum;
+  }
+  if (t === 'object') {
+    let sum = 2;
+    for (const k in val) {
+      if (Object.prototype.hasOwnProperty.call(val, k)) {
+        sum += k.length + 3 + estimateObjCharsFast(val[k], depth + 1) + 1;
+      }
+    }
+    return sum;
+  }
+  return 8;
+}
+
+function estimateToolCallsTokensFast(toolCalls) {
+  if (!Array.isArray(toolCalls) || toolCalls.length === 0) return 0;
+  const chars = estimateObjCharsFast(toolCalls, 0);
+  return Math.max(1, Math.ceil(chars / 3.8));
+}
+
 /**
  * Parse a single Antigravity annotation .pbtxt file (<appDataDir>/annotations/<convId>.pbtxt)
- * for official conversation title and last_user_view_time (updated whenever the user clicks a conversation in the UI).
+ * for official conversation title and last_user_view_time.
  */
 export function parseAnnotationPbtxt(rawText) {
   if (!rawText || typeof rawText !== 'string') return { title: '', lastViewMs: 0, archived: false };
@@ -64,13 +120,12 @@ export function readConversationAnnotation(conversationId, options = {}) {
       const key = normCacheKey(p);
       const cached = annotationCache.get(key);
       if (cached && cached.size === st.size && cached.mtimeMs === st.mtimeMs) {
-        lruPut(annotationCache, key, cached, MAX_ANNOTATION_CACHE);
         if (cached.parsed.title || cached.parsed.lastViewMs > 0) return cached.parsed;
         continue;
       }
       const raw = fs.readFileSync(p, 'utf8');
       const parsed = parseAnnotationPbtxt(raw);
-      lruPut(annotationCache, key, { size: st.size, mtimeMs: st.mtimeMs, parsed }, MAX_ANNOTATION_CACHE);
+      annotationCache.set(key, { size: st.size, mtimeMs: st.mtimeMs, parsed });
       if (parsed.title || parsed.lastViewMs > 0) return parsed;
     } catch {
       // fail open if missing or unreadable
@@ -92,7 +147,8 @@ export function normalizeTranscriptStep(raw) {
   const tsMs = createdAt ? Date.parse(createdAt) : NaN;
   const model = String(raw.model ?? raw.model_name ?? raw.modelName ?? '').trim();
 
-  const inputTokens = Number(raw.input_tokens ?? raw.inputTokens ?? raw.usage?.input_tokens ?? raw.usage?.inputTokens ?? 0) || 0;
+  const inputTokens =
+    Number(raw.input_tokens ?? raw.inputTokens ?? raw.usage?.input_tokens ?? raw.usage?.inputTokens ?? 0) || 0;
   const cacheReadTokens =
     Number(
       raw.cache_read_tokens ??
@@ -152,7 +208,6 @@ export function parseTranscriptIncremental(filePath, byteOffset = 0) {
   const stat = fs.statSync(filePath);
   let start = Number(byteOffset) || 0;
   if (start > stat.size) {
-    // File was truncated or rewritten
     start = 0;
   }
   if (start === stat.size) {
@@ -173,7 +228,6 @@ export function parseTranscriptIncremental(filePath, byteOffset = 0) {
   let completeText = text;
   let consumedBytes = length;
 
-  // If the file doesn't end with newline, check if last line is valid JSON; if not, keep cursor before it
   if (lastNewline === -1) {
     try {
       const obj = JSON.parse(text.trim());
@@ -187,7 +241,6 @@ export function parseTranscriptIncremental(filePath, byteOffset = 0) {
     if (tail) {
       try {
         JSON.parse(tail);
-        // Valid complete JSON without trailing newline -> consume all
       } catch {
         completeText = text.slice(0, lastNewline + 1);
         consumedBytes = Buffer.byteLength(completeText, 'utf8');
@@ -215,45 +268,81 @@ export function parseTranscriptIncremental(filePath, byteOffset = 0) {
   };
 }
 
-function computeMetaBase(steps) {
-  let promptLabel = '';
-  let lastModel = '';
-  const stepCount = steps.length;
-  let lastUsedTokens = 0;
+function createEmptyAccumulator() {
+  return {
+    msgRawTokens: 0,
+    toolOutputTokens: 0,
+    loadedSkillPaths: new Set(),
+    latestPlanner: null,
+    metaBase: {
+      promptLabel: '',
+      lastModel: '',
+      stepCount: 0,
+      lastUsedTokens: 0,
+      touchedFiles: [],
+      _touchedFileSet: new Set(),
+    },
+    subagentIdsByParent: new Map(),
+  };
+}
 
-  const firstUser = steps.find((s) => s.type === 'USER_INPUT' && s.content);
-  if (firstUser) {
-    const cleaned = firstUser.content
-      .replace(/<\/?USER_REQUEST>/gi, '')
-      .replace(/\s+/g, ' ')
-      .trim();
-    if (cleaned) {
-      promptLabel = cleaned.slice(0, 48) + (cleaned.length > 48 ? '…' : '');
+function accumulateStepsIntoAcc(acc, deltaSteps) {
+  if (!Array.isArray(deltaSteps) || deltaSteps.length === 0) return;
+  const mb = acc.metaBase;
+  for (const s of deltaSteps) {
+    mb.stepCount++;
+
+    // Fast token estimation without full JSON.stringify(s.toolCalls)
+    const textTok = estimateTextTokensFast(s.content) + estimateToolCallsTokensFast(s.toolCalls);
+    acc.msgRawTokens += textTok;
+    if (s.type !== 'USER_INPUT' && s.type !== 'PLANNER_RESPONSE') {
+      acc.toolOutputTokens += textTok;
     }
-  }
-  const fileSet = new Set();
-  for (const s of steps) {
-    if (s.type === 'PLANNER_RESPONSE') {
-      if (s.model) lastModel = s.model;
-      if (s.inputTokens + s.cacheReadTokens > 0) {
-        lastUsedTokens = s.inputTokens + s.cacheReadTokens;
+
+    if (!mb.promptLabel && s.type === 'USER_INPUT' && s.content) {
+      const cleaned = s.content
+        .replace(/<\/?USER_REQUEST>/gi, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+      if (cleaned) {
+        mb.promptLabel = cleaned.slice(0, 48) + (cleaned.length > 48 ? '…' : '');
       }
+    }
+
+    if (s.type === 'PLANNER_RESPONSE') {
+      if (s.model) mb.lastModel = s.model;
+      if (s.inputTokens + s.cacheReadTokens > 0) {
+        mb.lastUsedTokens = s.inputTokens + s.cacheReadTokens;
+        acc.latestPlanner = s;
+      }
+    }
+
+    if (Array.isArray(s.toolCalls) && s.toolCalls.length > 0) {
       for (const tc of s.toolCalls) {
         const name = String(tc?.name || '').toLowerCase();
-        if (name === 'write_file' || name === 'edit_file' || name === 'replace_file_content') {
+        if (name === 'read_file' || name === 'view_file') {
+          const p = String(tc?.args?.Path || tc?.args?.path || tc?.args?.AbsolutePath || '').replace(/^"|"$/g, '');
+          if (/skill\.md$/i.test(p)) {
+            acc.loadedSkillPaths.add(path.resolve(p).toLowerCase());
+          }
+        } else if (
+          s.type === 'PLANNER_RESPONSE' &&
+          (name === 'write_file' || name === 'edit_file' || name === 'replace_file_content')
+        ) {
           const p = tc?.args?.Path || tc?.args?.path || tc?.args?.TargetFile;
-          if (p) fileSet.add(path.basename(String(p).replace(/^"|"$/g, '')));
+          if (p) {
+            const base = path.basename(String(p).replace(/^"|"$/g, ''));
+            if (!mb._touchedFileSet.has(base)) {
+              mb._touchedFileSet.add(base);
+              if (mb.touchedFiles.length < 8) mb.touchedFiles.push(base);
+            }
+          }
         }
       }
     }
   }
-  return {
-    promptLabel,
-    lastModel,
-    stepCount,
-    lastUsedTokens,
-    touchedFiles: [...fileSet].slice(0, 8),
-  };
+  // Invalidate cached subagent discovery whenever new steps arrive
+  acc.subagentIdsByParent.clear();
 }
 
 function getTranscriptCacheEntry(filePath, statOverride = null) {
@@ -269,27 +358,68 @@ function getTranscriptCacheEntry(filePath, statOverride = null) {
   const key = normCacheKey(filePath);
   const cached = transcriptCache.get(key);
   if (cached && cached.size === stat.size && cached.mtimeMs === stat.mtimeMs) {
-    lruPut(transcriptCache, key, cached, MAX_TRANSCRIPT_CACHE);
     return cached;
   }
-  const { steps } = parseTranscriptIncremental(filePath, 0);
+
+  // Incremental append-only fast path: only read newly appended bytes beyond cached.offset
+  if (cached && stat.size > cached.offset && cached.offset > 0) {
+    _incrementalReadCount++;
+    const inc = parseTranscriptIncremental(filePath, cached.offset);
+    for (let i = 0; i < inc.steps.length; i++) {
+      cached.steps.push(inc.steps[i]);
+    }
+    accumulateStepsIntoAcc(cached.acc, inc.steps);
+    cached.size = stat.size;
+    cached.offset = inc.nextOffset;
+    cached.mtimeMs = stat.mtimeMs;
+    transcriptCache.set(key, cached);
+    return cached;
+  }
+
+  // Full parse (first load, file truncated/rewritten, or offset === 0)
+  _fullReadCount++;
+  const full = parseTranscriptIncremental(filePath, 0);
+  const acc = createEmptyAccumulator();
+  accumulateStepsIntoAcc(acc, full.steps);
   const entry = {
     size: stat.size,
+    offset: full.nextOffset,
     mtimeMs: stat.mtimeMs,
-    steps,
-    metaBase: null,
-    subagentIdsByParent: new Map(),
+    steps: full.steps,
+    acc,
   };
-  lruPut(transcriptCache, key, entry, MAX_TRANSCRIPT_CACHE);
+  transcriptCache.set(key, entry);
   return entry;
 }
 
 /**
- * Parse a full transcript file from byte 0 (with (size, mtimeMs) LRU cache).
+ * Parse a full transcript file (incrementally appends when file grows instead of re-reading from byte 0).
  */
 export function parseTranscriptFull(filePath) {
   const entry = getTranscriptCacheEntry(filePath);
   return entry ? entry.steps : [];
+}
+
+/**
+ * Return both parsed steps and O(1) incrementally accumulated context metrics
+ * (`msgRawTokens`, `toolOutputTokens`, `loadedSkillPaths`, `latestPlanner`, `offset`, `size`).
+ */
+export function getTranscriptAnalysis(filePath, statOverride = null) {
+  const entry = getTranscriptCacheEntry(filePath, statOverride);
+  if (!entry) return null;
+  return {
+    steps: entry.steps,
+    size: entry.size,
+    offset: entry.offset,
+    mtimeMs: entry.mtimeMs,
+    acc: {
+      msgRawTokens: entry.acc.msgRawTokens,
+      toolOutputTokens: entry.acc.toolOutputTokens,
+      loadedSkillPaths: entry.acc.loadedSkillPaths,
+      latestPlanner: entry.acc.latestPlanner,
+      metaBase: entry.acc.metaBase,
+    },
+  };
 }
 
 /**
@@ -308,7 +438,6 @@ export function discoverSubagentIds(steps, parentConversationId = '') {
     });
     if (!hasInvoke) continue;
 
-    // Look in the subsequent 1..6 steps for tool return containing conversationId
     for (let j = i + 1; j < Math.min(steps.length, i + 7); j++) {
       const next = steps[j];
       const text = next.content || '';
@@ -330,19 +459,12 @@ export function discoverSubagentIds(steps, parentConversationId = '') {
 
 function getCachedSubagentIds(entry, parentConversationId) {
   const pid = String(parentConversationId || '').toLowerCase();
-  if (entry.subagentIdsByParent.has(pid)) {
-    return entry.subagentIdsByParent.get(pid);
+  if (entry.acc.subagentIdsByParent.has(pid)) {
+    return entry.acc.subagentIdsByParent.get(pid);
   }
   const discovered = discoverSubagentIds(entry.steps, parentConversationId);
-  entry.subagentIdsByParent.set(pid, discovered);
+  entry.acc.subagentIdsByParent.set(pid, discovered);
   return discovered;
-}
-
-function getCachedMetaBase(entry) {
-  if (!entry.metaBase) {
-    entry.metaBase = computeMetaBase(entry.steps);
-  }
-  return entry.metaBase;
 }
 
 /**
@@ -360,7 +482,7 @@ export function extractConversationMeta(filePath, conversationId, options = {}) 
   try {
     const entry = options._cacheEntry || getTranscriptCacheEntry(filePath, options._stat || null);
     if (entry) {
-      const base = getCachedMetaBase(entry);
+      const base = entry.acc.metaBase;
       stepCount = base.stepCount;
       lastModel = base.lastModel;
       lastUsedTokens = base.lastUsedTokens;
@@ -389,16 +511,41 @@ export function extractConversationMeta(filePath, conversationId, options = {}) 
   };
 }
 
+function buildListConversationsDirFp(appDirs) {
+  return appDirs
+    .map((d) => `${d}|b:${safeStatSig(path.join(d, 'brain'))}|a:${safeStatSig(path.join(d, 'annotations'))}`)
+    .join(';;');
+}
+
+function computeTopWatchedSig(watchedFiles) {
+  return watchedFiles.map((f) => `${f}:${safeStatSig(f)}`).join('|');
+}
+
 /**
  * Discover recent Antigravity conversations sorted by most recently updated transcript.
- * Single-pass with LRU transcript caching; avoids parsing old transcripts when limit is small.
+ * Backed by a 2.5s directory + top-file fingerprint cache so inspectContext + getTelemetryReport
+ * in the same refresh cycle share one scan.
  */
 export function listConversations(options = {}) {
   const limit = Math.max(1, Math.min(50, Number(options.limit) || 15));
+  const appDirs = getCandidateAppDataDirs(options);
+  const dirFp = buildListConversationsDirFp(appDirs);
+  const cacheKey = `${appDirs.map((d) => normCacheKey(d)).join('|')}|lim:${limit}|sub:${Boolean(options.includeSubagents)}|rsub:${Boolean(options.includeRecentSubagents)}`;
+  const now = Date.now();
+
+  if (!options.force) {
+    const cached = listConversationsCache.get(cacheKey);
+    if (cached && now < cached.expiresAt && cached.dirFp === dirFp) {
+      if (computeTopWatchedSig(cached.watchedFiles) === cached.topSigs) {
+        return cached.result;
+      }
+    }
+  }
+
   const candidates = [];
   const seen = new Set();
 
-  for (const appDir of getCandidateAppDataDirs(options)) {
+  for (const appDir of appDirs) {
     const brainDir = path.join(appDir, 'brain');
     if (!fs.existsSync(brainDir)) continue;
     let entries = [];
@@ -421,6 +568,7 @@ export function listConversations(options = {}) {
         candidates.push({
           conversationId: convId,
           transcriptPath: tPath,
+          appDir,
           stat,
           annotation: ann,
           mtimeMs: stat.mtimeMs,
@@ -436,8 +584,6 @@ export function listConversations(options = {}) {
 
   candidates.sort((a, b) => b.activityMs - a.activityMs || b.mtimeMs - a.mtimeMs);
 
-  // Single-pass lazy parsing: only parse enough top candidates to discover subagent parents
-  // and build metadata without re-parsing files or parsing 20 old files when limit is small.
   const subScanWindow =
     limit <= 3
       ? Math.min(candidates.length, Math.max(limit + 2, 3))
@@ -500,6 +646,19 @@ export function listConversations(options = {}) {
     if (results.length >= limit) break;
   }
 
+  const watchedFiles = [];
+  for (const c of candidates.slice(0, 3)) {
+    watchedFiles.push(c.transcriptPath);
+    watchedFiles.push(path.join(c.appDir, 'annotations', `${c.conversationId}.pbtxt`));
+  }
+  listConversationsCache.set(cacheKey, {
+    dirFp,
+    watchedFiles,
+    topSigs: computeTopWatchedSig(watchedFiles),
+    expiresAt: now + LIST_CONV_TTL_MS,
+    result: results,
+  });
+
   return results;
 }
 
@@ -512,31 +671,18 @@ const FILE_MUTATION_TOOLS = new Set([
   'create_file',
 ]);
 
-function safeRealpath(p) {
-  const abs = path.resolve(p);
-  try {
-    if (fs.existsSync(abs)) {
-      return typeof fs.realpathSync.native === 'function' ? fs.realpathSync.native(abs) : fs.realpathSync(abs);
-    }
-  } catch {
-    // ignore
-  }
-  return abs;
-}
-
 function normalizeWorkspaceRelPath(rawPath, projectDir) {
   const cleaned = String(rawPath || '').trim().replace(/^"|"$/g, '');
   if (!cleaned) return '';
   if (projectDir) {
     try {
-      const absTarget = safeRealpath(cleaned);
-      const absRoot = safeRealpath(projectDir);
+      const absTarget = safeRealpathUtil(cleaned);
+      const absRoot = safeRealpathUtil(projectDir);
       let rel = path.relative(absRoot, absTarget);
       if (rel && !rel.startsWith('..') && !path.isAbsolute(rel)) {
         return rel.replace(/\\/g, '/');
       }
-      // Fallback for non-existent target file whose parent dir exists (e.g., deleted/virtual file on Windows 8.3 path)
-      const parentReal = safeRealpath(path.dirname(cleaned));
+      const parentReal = safeRealpathUtil(path.dirname(cleaned));
       rel = path.relative(absRoot, path.join(parentReal, path.basename(cleaned)));
       if (rel && !rel.startsWith('..') && !path.isAbsolute(rel)) {
         return rel.replace(/\\/g, '/');
@@ -565,7 +711,10 @@ function resolveBrainDirFromTranscript(transcriptPath) {
   if (!transcriptPath) return '';
   const abs = path.resolve(transcriptPath);
   const parent = path.dirname(abs);
-  if (path.basename(parent).toLowerCase() === 'logs' && path.basename(path.dirname(parent)).toLowerCase() === '.system_generated') {
+  if (
+    path.basename(parent).toLowerCase() === 'logs' &&
+    path.basename(path.dirname(parent)).toLowerCase() === '.system_generated'
+  ) {
     return path.dirname(path.dirname(parent));
   }
   if (path.basename(path.dirname(parent)).toLowerCase() === 'brain') {
@@ -575,12 +724,12 @@ function resolveBrainDirFromTranscript(transcriptPath) {
 }
 
 /**
- * Extract 0-token handoff context from a conversation's transcript.jsonl:
- * - recent user requests summary
- * - edited / created project files
- * - produced Artifact paths
+ * Extract 0-token handoff context from a conversation's transcript.jsonl.
  */
-export function extractTranscriptHandoffContext(filePath, { projectDir = '', maxRequests = 3, maxFiles = 30, maxArtifacts = 16 } = {}) {
+export function extractTranscriptHandoffContext(
+  filePath,
+  { projectDir = '', maxRequests = 3, maxFiles = 30, maxArtifacts = 16 } = {}
+) {
   const empty = {
     latestUserRequest: '',
     recentUserRequests: [],
@@ -629,7 +778,9 @@ export function extractTranscriptHandoffContext(filePath, { projectDir = '', max
     }
     if (s.type === 'PLANNER_RESPONSE' && Array.isArray(s.toolCalls)) {
       for (const tc of s.toolCalls) {
-        const toolName = String(tc?.name || tc?.tool || '').toLowerCase().replace(/^default_api:/, '');
+        const toolName = String(tc?.name || tc?.tool || '')
+          .toLowerCase()
+          .replace(/^default_api:/, '');
         if (!FILE_MUTATION_TOOLS.has(toolName)) continue;
         const args = tc?.args && typeof tc.args === 'object' ? tc.args : {};
         const targetPath = args.Path || args.path || args.TargetFile || args.filePath || args.file_path;
@@ -649,7 +800,6 @@ export function extractTranscriptHandoffContext(filePath, { projectDir = '', max
     }
   }
 
-  // Also discover top-level markdown artifacts inside brain/<convId>/ (e.g. implementation_plan.md, walkthrough.md)
   if (brainDir && fs.existsSync(brainDir)) {
     try {
       const entries = fs.readdirSync(brainDir, { withFileTypes: true });
