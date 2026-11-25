@@ -119,7 +119,7 @@ test('Read-only local folder scan, rotation, runtime JSON compile, and CLI emerg
   }
 });
 
-test('Extended fail-open renderer & main runtime scripts execute IPC handlers cleanly', () => {
+test('Extended fail-open renderer & main runtime scripts execute IPC handlers cleanly', async () => {
   const env = makeTempEnv();
   try {
     const imgPath = path.join(env.folderDir, 'mountain.png');
@@ -165,10 +165,10 @@ test('Extended fail-open renderer & main runtime scripts execute IPC handlers cl
     assert.equal(appRes.config.preset, null);
     assert.equal(appRes.config.activeWallpaperPath, imgPath);
 
-    const imgRes = handlers.get('agy-hub:read-wallpaper')(null, imgPath);
+    const imgRes = await handlers.get('agy-hub:read-wallpaper')(null, imgPath);
     assert.equal(imgRes.ok, true);
     assert.equal(imgRes.mime, 'image/png');
-    assert.ok(imgRes.base64.length > 10);
+    assert.ok(imgRes.bytes instanceof Uint8Array && imgRes.bytes.byteLength > 10);
 
     const recRes = handlers.get('agy-hub:record-untranslated')(null, ['Sample Untranslated UI']);
     assert.equal(recRes.ok, true);

@@ -4,7 +4,7 @@
 
 **Modular Native Control Center (MCP App) for Google Antigravity: Context Cache & Monitor, Ecosystem & Harness Governance, Local Wallpaper Engine, and Zero-Dep Chinese Localization**
 
-[![Version: v1.5.4](https://img.shields.io/badge/Version-v1.5.4-0ea5e9.svg)](https://github.com/Horikita-9-Suzune-Max-Ultrafast/antigravity-hub/releases/tag/v1.5.4)
+[![Version: v1.5.5](https://img.shields.io/badge/Version-v1.5.5-0ea5e9.svg)](https://github.com/Horikita-9-Suzune-Max-Ultrafast/antigravity-hub/releases/tag/v1.5.5)
 [![Antigravity 2.35.1 Update Verified](https://img.shields.io/badge/Antigravity%202.35.1-Update%20Verified-10b981.svg)](#battle-tested-official-update-survival-proof)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 [![Node.js >= 24](https://img.shields.io/badge/Node.js-%3E%3D24-339933.svg)](https://nodejs.org/)
@@ -18,7 +18,7 @@
 
 - [Four Core Modules at a Glance](#four-core-modules-at-a-glance)
 - [Battle-Tested: Official Update Survival Proof](#battle-tested-official-update-survival-proof)
-- [What's New in v1.5.4](#whats-new-in-v154)
+- [What's New in v1.5.5](#whats-new-in-v155)
 - [Quick Start (3-Step Prebuilt Bundle)](#quick-start)
 - [Key Features](#key-features)
 - [Architecture & Design Principles](#architecture--design-principles)
@@ -61,13 +61,24 @@ We intentionally ran a live, in-place official upgrade to **Antigravity `2.35.1`
 
 ---
 
-## What's New in v1.5.4
+## What's New in v1.5.5
+
+- **GPU 99% Spike Elimination & Instant Popout Close Sync (v1.5.5)**: Removed all CSS `backdrop-filter` rules, infinite 60fps animations, forced `offsetWidth` reflows, and 5s window-bounds polling; gated the 1s KV countdown timer to active countdowns only, added `lowPowerMode` for wallpapers, and slimmed the single-file UI bundle to `< 700 KiB`. Closing the floating window or exiting the WebView2 host flips to offline state immediately (`0ms`) and releases the ephemeral port.
+- **Viewport-Clamped Floating Menus & Responsive Titlebar Fit (v1.5.5)**: All select dropdowns and KV help popovers now use viewport `position: fixed` clamping (re-clamping on resize, auto-closing on workspace scroll, and closing on `Escape`). The expanded native titlebar degrades gracefully (`model -> shortModel -> hide model -> hide TPS`) while keeping `Antigravity Hub` uncrushed. Live Calls caps initial rows to 120 with a one-click **Show all** toggle (auto-expanding on alert jumps).
+- **TPS Timing Engine v2 Overhaul (v1.5.5)**: Deleted the broken `cur - prev` fallback branch (eliminating `800–29,404 tok/s` spikes), excluded `USER_INPUT`/`SYSTEM_MESSAGE` pause gaps (eliminating `0.7 tok/s` false lows), scanned full multi-tool streaming group spans (`hybrid_tool_split`), and tightened `hook_ms` matching (`<= 5s`) with a lower-bound guard. Conservative fallbacks are tagged `estimated` and excluded from `avgTps` and low-TPS alerts when real-timed steps exist; added `doctor --repair --resync-telemetry` for lossless historical recomputation and compaction.
+- **True `app.asar` Version Detection & Anti-Downgrade Guard (v1.5.5)**: Localization now prioritizes `package.json` inside `app.asar` over Electron's version file (preserving `electronVersion` and backward-compatible legacy metadata so patched users never get false update alerts). Both apply and restore paths validate `.bak` versions and lock stale backups or already-clean `app.asar` files to prevent accidental downgrade.
+- **Atomic SQLite WAL Rebuild & Backend Security Hardening (v1.5.5)**: `rebuildIndex()` now executes `DELETE FROM` inside `BEGIN IMMEDIATE ... COMMIT` (eliminating empty-DB race windows under concurrent polling), `doctor` displays deduplicated vs. raw call counts (`dbCalls/truthUniqueCalls (raw)`), `scanMcpTools()` adds a 5s fast-TTL memory short-circuit, and popout HTTP token verification uses constant-time `crypto.timingSafeEqual`.
+
+<details>
+<summary><strong>Previous Highlights (v1.5.4)</strong></summary>
 
 - **Click-Through Asset Inspector Modal (v1.5.4)**: Click any mounted rule, skill, or custom agent card to inspect its read-only redacted source (strict root whitelist + symlink protection + secret redaction, with copy-path and open-file actions). Click any MCP server to view its full tool breakdown table, per-tool token bar, and jump straight to Governance.
 - **One-Click Alert Jump-to-Step (v1.5.4)**: Every alert row is clickable—clicking a cache-drop, low-TPS, or sub-agent alert collapses the banner, switches to **Calls**, scrolls directly to the offending step, expands its anatomy drawer, and pulses a highlight; high-context alerts jump directly to the breakdown section.
 - **3-Source Auto-Aggregated Handoff Capsule (v1.5.4)**: Zero-token aggregation across Vault decisions, active `transcript.jsonl` (recent user requests, edited files, produced Artifacts), and live Git changes (`M`/`A`/`?`) + last 2 commits. Choose **Compact (500t) / Standard (1200t) / Full (2500t)** with live recalculation, inline editable Active Goal & Next Action, and per-item checkboxes.
-- **Radix Mini Bar Chips & Unified Visual Polish (v1.5.3 → v1.5.4)**: Native Windows frameless floating window with startup auto-launch, follow-cursor FLIP drag reordering, and 5 length presets. v1.5.4 assigns light/dark-adaptive Radix UI Colors semantic chips to all 5 mini bar modules (Context, TPS, KV Countdown, Model, Cache Hit) and eliminates all unstyled native `<button>` elements.
+- **Radix Mini Bar Chips & Unified Visual Polish (v1.5.3 → v1.5.4)**: Native Windows frameless floating window with startup auto-launch, follow-cursor FLIP drag reordering, and 5 length presets. Assigns light/dark-adaptive Radix UI Colors semantic chips to all 5 mini bar modules and eliminates all unstyled native `<button>` elements.
 - **Focused Local Wallpaper Library (v1.5.4)**: Removed built-in gradient presets to keep the gallery clean; legacy configs pointing to removed preset IDs silently fall back to the first local wallpaper or disabled state with zero errors.
+
+</details>
 
 > [!NOTE]
 > **Known Host Boundaries**
@@ -86,16 +97,16 @@ We intentionally ran a live, in-place official upgrade to **Antigravity `2.35.1`
 
 ### Option A: Prebuilt Release Bundle (Recommended, 3 Steps, Zero `npm install`)
 
-1. Download `context-cache-v1.5.4-plugin.zip` (~433 KiB, readable `.mjs` source + pre-bundled single-file UI, zero `node_modules`) from [Releases](https://github.com/Horikita-9-Suzune-Max-Ultrafast/antigravity-hub/releases/latest).
+1. Download `context-cache-v1.5.5-plugin.zip` (readable `.mjs` source + pre-bundled single-file UI, zero `node_modules`) from [Releases](https://github.com/Horikita-9-Suzune-Max-Ultrafast/antigravity-hub/releases/latest).
 2. Extract into `~/.gemini/config/plugins/` so `plugin.json` lives at `~/.gemini/config/plugins/context-cache/plugin.json`:
    - **Windows PowerShell**:
      ```powershell
-     Expand-Archive -Path .\context-cache-v1.5.4-plugin.zip -DestinationPath "$env:USERPROFILE\.gemini\config\plugins" -Force
+     Expand-Archive -Path .\context-cache-v1.5.5-plugin.zip -DestinationPath "$env:USERPROFILE\.gemini\config\plugins" -Force
      ```
    - **macOS / Linux**:
      ```bash
      mkdir -p ~/.gemini/config/plugins
-     unzip -o context-cache-v1.5.4-plugin.zip -d ~/.gemini/config/plugins
+     unzip -o context-cache-v1.5.5-plugin.zip -d ~/.gemini/config/plugins
      ```
 3. Antigravity discovers and loads the plugin automatically (no restart required):
    - **Left Sidebar**: Open **`Antigravity Hub`** for the full-page console;
@@ -112,7 +123,7 @@ cd antigravity-hub
 # 2. Install dev-only UI build tools (never copied into deployed bundle)
 npm install
 
-# 3. Run full 15-file automated test suite (41 test cases, isolated temp dirs)
+# 3. Run full 18-file automated test suite (63 test cases, isolated temp dirs)
 npm test
 
 # 4. Build single-file MCP App UI and deploy to ~/.gemini/config/plugins/context-cache
@@ -214,9 +225,10 @@ node --no-warnings bin/ctx.mjs search "cache drop"
 node --no-warnings bin/ctx.mjs calls
 node --no-warnings bin/ctx.mjs quota
 
-# Run diagnostics / self-healing repair (rebuild FTS5 index + reset circuit breaker)
+# Run diagnostics / self-healing repair (rebuild FTS5 index + reset circuit breaker; add --resync-telemetry to recompute historical TPS)
 node --no-warnings bin/ctx.mjs doctor
 node --no-warnings scripts/doctor.mjs --repair
+node --no-warnings bin/ctx.mjs doctor --repair --resync-telemetry
 
 # Export sanitized backup to ~/.context-cache/exports/
 node --no-warnings bin/ctx.mjs export
@@ -245,7 +257,7 @@ node --no-warnings bin/ctx.mjs i18n restore
 
 ### Smooth Upgrade
 - **In-App One-Click Update (v1.5.4+ Recommended)**: Open **Settings → Maintenance & Actions**, click **Check Updates**, then click **Update Now (SHA-256)** to verify checksums, atomically swap the plugin directory (auto-rollback on lock/error), and safely restart Antigravity.
-- **Prebuilt Bundle Manual Extract**: Download the latest `context-cache-v1.5.4-plugin.zip` and extract over `~/.gemini/config/plugins`. All vault memories, wallpapers, custom dictionaries, governance preferences, and snapshots live in `%USERPROFILE%\.context-cache` with **zero data loss**.
+- **Prebuilt Bundle Manual Extract**: Download the latest `context-cache-v1.5.5-plugin.zip` and extract over `~/.gemini/config/plugins`. All vault memories, wallpapers, custom dictionaries, governance preferences, and snapshots live in `%USERPROFILE%\.context-cache` with **zero data loss**.
 - **Source Users**: Run `git pull && npm run deploy`.
 
 ### Clean Uninstall & Lossless Rollback
@@ -322,7 +334,7 @@ context-cache/
 │       └── modules/                     # appearance-module / governance-module / i18n-module
 ├── plugin/                              # Antigravity plugin manifest, hooks, rules, skills & logo
 ├── scripts/                             # deploy.mjs, pack-release.mjs & doctor.mjs
-├── tests/                               # 15 automated test suites (41 E2E / unit / resilience test cases)
+├── tests/                               # 18 automated test suites (63 E2E / unit / resilience test cases)
 ├── LICENSE                              # MIT License
 ├── README.md                            # Simplified Chinese documentation
 ├── README.en.md                         # English documentation

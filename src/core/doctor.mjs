@@ -16,6 +16,12 @@ export function runDoctor(options = {}) {
   // 1. Truth sources
   const truthMemories = scanAllMemoryFiles(options);
   const truthCalls = readJsonlSafe(paths.callsLogFile);
+  const truthRawCallLines = truthCalls.length;
+  const uniqueCallUids = new Set();
+  for (const c of truthCalls) {
+    if (c && c.callUid) uniqueCallUids.add(c.callUid);
+  }
+  const truthUniqueCalls = uniqueCallUids.size;
 
   // 2. SQLite WAL + FTS5 index status
   let dbMemories = 0;
@@ -122,7 +128,9 @@ export function runDoctor(options = {}) {
       ok: dbOk,
       truthMemories: truthMemories.length,
       dbMemories,
-      truthCalls: truthCalls.length,
+      truthCalls: truthRawCallLines,
+      truthUniqueCalls,
+      truthRawCallLines,
       dbCalls,
     },
     deployment: {
@@ -180,14 +188,23 @@ export function exportBackup(options = {}) {
 }
 
 /**
- * Self-healing repair: rebuild SQLite WAL+FTS5 index from truth sources & reset circuit breaker.
+ * Self-healing repair: optionally resync historical telemetry, rebuild SQLite WAL+FTS5 index
+ * from truth sources & reset circuit breaker.
  */
-export function repairLocalState(options = {}) {
-  const rebuild = rebuildIndex(options);
+export async function repairLocalState(options = {}) {
+  let telemetryResync = null;
+  if (options.resyncTelemetry) {
+    const mod = await import('./telemetry.mjs');
+    if (typeof mod.resyncAllHistoricalTelemetry === 'function') {
+      telemetryResync = await mod.resyncAllHistoricalTelemetry(options);
+    }
+  }
+  const rebuild = telemetryResync?.rebuild || rebuildIndex(options);
   const circuit = resetCircuitBreaker(options);
   const report = runDoctor(options);
   return {
     repaired: true,
+    ...(telemetryResync ? { telemetryResync } : {}),
     rebuild,
     circuit,
     report,

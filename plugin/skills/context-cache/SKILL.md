@@ -1,13 +1,13 @@
 ---
 name: context-cache
 description: >-
-  Deep operations handbook for Antigravity Hub (context-cache v1.5.4): 3-source
+  Deep operations handbook for Antigravity Hub (context-cache v1.5.5): 3-source
   budgeted handoff capsules, mounted asset inspection, prefix-cache drop diagnosis,
   ecosystem governance snapshots, local wallpaper & localization recovery, and
   anti-fragile Doctor repair.
 ---
 
-# Antigravity Hub Operations Handbook (v1.5.4)
+# Antigravity Hub Operations Handbook (v1.5.5)
 
 ## 1. 3-Source Handoff Capsule Workflow (Context > 75%)
 
@@ -29,7 +29,7 @@ description: >-
 
 - **Governance Rollback**: Every profile switch or toggle captures an immutable snapshot first. Roll back anytime from **生态治理 → 快照** or CLI `node --no-warnings bin/ctx.mjs gov rollback`.
 - **Wallpaper Emergency Off**: Local wallpaper engine introduces zero new ASAR injection points; disable instantly in UI or via `node --no-warnings bin/ctx.mjs wallpaper off`.
-- **Localization Restore**: Pure Node.js streaming ASAR patcher preserves a verified clean `app.asar` backup; restore anytime in **界面汉化** or via `node --no-warnings bin/ctx.mjs i18n restore`.
+- **Localization Restore**: Pure Node.js streaming ASAR patcher reads the real `app.asar` `package.json` version and enforces an anti-downgrade guard against stale `.bak` files; restore anytime in **界面汉化** or via `node --no-warnings bin/ctx.mjs i18n restore`.
 
 ## 4. Antigravity Update Recovery (`Doctor`)
 
@@ -37,5 +37,5 @@ All truth sources live outside the plugin and target repos in `%USERPROFILE%\.co
 
 If an Antigravity update changes hook payload schemas:
 1. Hooks automatically fall back (camelCase/snake_case), record redacted entries in `diagnostics/schema-drift.jsonl`, and Fail-Open with `{}` (circuit breaker trips after 3 consecutive errors).
-2. Run `ctx_doctor` with `repair: true` (or CLI `npm run doctor -- --repair` / `node --no-warnings bin/ctx.mjs doctor --repair`) to rebuild SQLite FTS5 from truth sources, reset the circuit breaker, and verify zero `node_modules` deployment integrity.
+2. Run `ctx_doctor` with `repair: true` (or CLI `npm run doctor -- --repair` / `node --no-warnings bin/ctx.mjs doctor --repair`) to atomically rebuild SQLite FTS5 from truth sources, reset the circuit breaker, and verify zero `node_modules` deployment integrity. Append `--resync-telemetry` to recompute and compact historical TPS telemetry from local transcripts.
 3. Export a sanitized backup anytime from **插件设置 → 导出备份** or `node --no-warnings bin/ctx.mjs export`.

@@ -5,14 +5,41 @@ import { atomicWriteJson, ensureDataDirs, readJsonSafe } from './storage.mjs';
 import { parseAnnotationPbtxt } from './transcript-parser.mjs';
 
 const MAX_REGISTRY_ENTRIES = 100;
+const PEEK_ANNOTATION_TTL_MS = 3_000;
+const PEEK_ANNOTATION_CACHE = new Map(); // cacheKey -> { fingerprint, bestFullPath, bestMtimeMs, result, expiresAt }
+
+export function clearSessionTrackerCache() {
+  PEEK_ANNOTATION_CACHE.clear();
+}
+
+function safeMtimeMs(p) {
+  try {
+    return fs.statSync(p).mtimeMs;
+  } catch {
+    return -1;
+  }
+}
 
 /**
  * Ultra-fast (<0.2ms) check of the top newest <appDataDir>/annotations/<convId>.pbtxt files
  * to detect pure UI clicks in Antigravity's conversation sidebar without parsing transcripts.
+ * Cached for 3s and invalidated immediately when any annotations dir mtime (or top file mtime) changes.
  */
 export function peekLatestViewedAnnotation(options = {}) {
+  const appDirs = getCandidateAppDataDirs(options);
+  const cacheKey = appDirs.map((d) => path.resolve(d).toLowerCase()).join('|');
+  const dirFp = appDirs.map((d) => safeMtimeMs(path.join(d, 'annotations'))).join(',');
+  const now = Date.now();
+
+  const cached = PEEK_ANNOTATION_CACHE.get(cacheKey);
+  if (cached && now < cached.expiresAt && cached.fingerprint === dirFp) {
+    if (!cached.bestFullPath || safeMtimeMs(cached.bestFullPath) === cached.bestMtimeMs) {
+      return cached.result;
+    }
+  }
+
   const candidates = [];
-  for (const appDir of getCandidateAppDataDirs(options)) {
+  for (const appDir of appDirs) {
     const annDir = path.join(appDir, 'annotations');
     if (!fs.existsSync(annDir)) continue;
     let files = [];
@@ -34,10 +61,21 @@ export function peekLatestViewedAnnotation(options = {}) {
     }
   }
 
-  if (candidates.length === 0) return null;
+  if (candidates.length === 0) {
+    PEEK_ANNOTATION_CACHE.set(cacheKey, {
+      fingerprint: dirFp,
+      bestFullPath: '',
+      bestMtimeMs: -1,
+      result: null,
+      expiresAt: now + PEEK_ANNOTATION_TTL_MS,
+    });
+    return null;
+  }
   candidates.sort((a, b) => b.mtimeMs - a.mtimeMs);
 
   let best = null;
+  let bestFullPath = '';
+  let bestMtimeMs = -1;
   for (const c of candidates.slice(0, 5)) {
     const tPath = findTranscriptPath(c.convId, { ...options, appDataDir: c.appDir });
     if (!tPath) continue;
@@ -51,11 +89,25 @@ export function peekLatestViewedAnnotation(options = {}) {
           lastViewMs: viewMs,
           transcriptPath: tPath,
         };
+        bestFullPath = c.fullPath;
+        bestMtimeMs = c.mtimeMs;
       }
     } catch {
       // ignore
     }
   }
+
+  if (PEEK_ANNOTATION_CACHE.size > 32) {
+    const oldest = PEEK_ANNOTATION_CACHE.keys().next().value;
+    if (oldest !== undefined) PEEK_ANNOTATION_CACHE.delete(oldest);
+  }
+  PEEK_ANNOTATION_CACHE.set(cacheKey, {
+    fingerprint: dirFp,
+    bestFullPath,
+    bestMtimeMs,
+    result: best,
+    expiresAt: now + PEEK_ANNOTATION_TTL_MS,
+  });
   return best;
 }
 

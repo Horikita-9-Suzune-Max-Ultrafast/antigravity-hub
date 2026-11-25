@@ -1,7 +1,12 @@
 import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { getDataPaths } from './paths.mjs';
 import { ensureDataDirs, readJsonlSafe, scanAllMemoryFiles } from './storage.mjs';
+
+const DB_IDLE_TIMEOUT_MS = 5_000;
+const INDEX_READY_TTL_MS = 5_000;
 
 const SCHEMA_SQL = `
 PRAGMA journal_mode = WAL;
@@ -66,22 +71,164 @@ CREATE INDEX IF NOT EXISTS idx_calls_ts ON calls(ts_ms DESC);
 CREATE INDEX IF NOT EXISTS idx_calls_group_ts ON calls(quota_group, ts_ms DESC);
 `;
 
-export function openIndexDb(options = {}) {
-  const paths = ensureDataDirs(options);
-  const db = new DatabaseSync(paths.dbFile);
-  db.exec(SCHEMA_SQL);
+const DB_POOL = new Map(); // normDbPath -> { db, dbPath, timer, activeDepth }
+const SCHEMA_INITIALIZED_DBS = new Map(); // normDbPath -> { size, mtimeMs }
+const INDEX_READY_CACHE = new Map(); // normDbPath -> { stats, checkedAt }
+let exitHookRegistered = false;
+
+function normDbKey(dbPath) {
+  const resolved = path.resolve(dbPath);
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+}
+
+function isInsideOsTmpDir(filePath) {
+  const tmp = path.resolve(os.tmpdir()).toLowerCase();
+  const target = path.resolve(filePath).toLowerCase();
+  return target === tmp || target.startsWith(`${tmp}${path.sep}`);
+}
+
+function isRunningInNodeTest() {
+  return Boolean(process.env.NODE_TEST_CONTEXT) || process.execArgv.some((a) => a === '--test');
+}
+
+function shouldKeepPooled(dbPath, options = {}) {
+  if (options.keepOpen === true || process.env.CONTEXT_CACHE_DB_POOL === '1') return true;
+  if (options.keepOpen === false || process.env.CONTEXT_CACHE_DB_POOL === '0') return false;
+  // On Windows, SQLite holds exclusive delete locks while open; legacy node:test suites
+  // delete temp dirs synchronously via fs.unlinkSync/fs.rmSync without calling closeIndexDb().
+  if (process.platform === 'win32' && isRunningInNodeTest() && isInsideOsTmpDir(dbPath)) {
+    return false;
+  }
+  return true;
+}
+
+function registerExitCleanup() {
+  if (exitHookRegistered) return;
+  exitHookRegistered = true;
+  process.once('exit', () => {
+    closeIndexDb();
+  });
+}
+
+function disposePoolEntry(key) {
+  const entry = DB_POOL.get(key);
+  if (!entry) return;
+  if (entry.timer) {
+    clearTimeout(entry.timer);
+    entry.timer = null;
+  }
+  DB_POOL.delete(key);
+  try {
+    entry.db.close();
+  } catch {
+    // ignore close error
+  }
+}
+
+/**
+ * Close a pooled SQLite connection (or all pooled connections when dbPath is omitted).
+ */
+export function closeIndexDb(dbPath = null) {
+  if (dbPath) {
+    const key = normDbKey(dbPath);
+    disposePoolEntry(key);
+    INDEX_READY_CACHE.delete(key);
+    return;
+  }
+  for (const key of [...DB_POOL.keys()]) {
+    disposePoolEntry(key);
+  }
+  INDEX_READY_CACHE.clear();
+}
+
+function scheduleIdleClose(key, entry) {
+  if (entry.timer) {
+    clearTimeout(entry.timer);
+    entry.timer = null;
+  }
+  entry.timer = setTimeout(() => {
+    entry.timer = null;
+    if (entry.activeDepth <= 0) {
+      disposePoolEntry(key);
+    }
+  }, DB_IDLE_TIMEOUT_MS);
+  entry.timer.unref?.();
+}
+
+function openFreshDb(dbFile, skipDdlIfInitialized = false) {
+  const key = normDbKey(dbFile);
+  const existed = fs.existsSync(dbFile);
+  const db = new DatabaseSync(dbFile);
+  let needSchema = true;
+  if (skipDdlIfInitialized && existed) {
+    const initMeta = SCHEMA_INITIALIZED_DBS.get(key);
+    try {
+      const st = fs.statSync(dbFile);
+      if (initMeta && st.size > 0 && st.birthtimeMs === initMeta.birthtimeMs) {
+        needSchema = false;
+      }
+    } catch {
+      needSchema = true;
+    }
+  }
+  if (needSchema) {
+    db.exec(SCHEMA_SQL);
+    try {
+      const st = fs.statSync(dbFile);
+      SCHEMA_INITIALIZED_DBS.set(key, { birthtimeMs: st.birthtimeMs, size: st.size });
+    } catch {
+      // ignore
+    }
+  } else {
+    db.exec('PRAGMA busy_timeout = 3000;');
+  }
   return db;
 }
 
+export function openIndexDb(options = {}) {
+  const paths = ensureDataDirs(options);
+  return openFreshDb(paths.dbFile, false);
+}
+
 export function withIndexDb(options, fn) {
-  const db = openIndexDb(options);
+  const opts = options || {};
+  const paths = ensureDataDirs(opts);
+  const dbFile = paths.dbFile;
+  const key = normDbKey(dbFile);
+  const poolEnabled = shouldKeepPooled(dbFile, opts);
+
+  let entry = DB_POOL.get(key);
+  // If db file was removed externally while pooled, discard stale handle
+  if (entry && !fs.existsSync(dbFile)) {
+    disposePoolEntry(key);
+    SCHEMA_INITIALIZED_DBS.delete(key);
+    INDEX_READY_CACHE.delete(key);
+    entry = null;
+  }
+
+  let createdHere = false;
+  if (!entry) {
+    registerExitCleanup();
+    const db = openFreshDb(dbFile, !poolEnabled);
+    entry = { db, dbPath: dbFile, timer: null, activeDepth: 0 };
+    DB_POOL.set(key, entry);
+    createdHere = true;
+  } else if (entry.timer) {
+    clearTimeout(entry.timer);
+    entry.timer = null;
+  }
+
+  entry.activeDepth++;
   try {
-    return fn(db);
+    return fn(entry.db);
   } finally {
-    try {
-      db.close();
-    } catch {
-      // ignore close error
+    entry.activeDepth = Math.max(0, entry.activeDepth - 1);
+    if (entry.activeDepth === 0) {
+      if (poolEnabled) {
+        scheduleIdleClose(key, entry);
+      } else if (createdHere) {
+        disposePoolEntry(key);
+      }
     }
   }
 }
@@ -185,6 +332,12 @@ export function upsertCallRow(db, c) {
 export function rebuildIndex(options = {}) {
   const started = Date.now();
   const paths = ensureDataDirs(options);
+  const key = normDbKey(paths.dbFile);
+
+  // Close any pooled handle before unlinking DB files (required on Windows)
+  closeIndexDb(paths.dbFile);
+  SCHEMA_INITIALIZED_DBS.delete(key);
+  INDEX_READY_CACHE.delete(key);
 
   for (const suffix of ['', '-wal', '-shm']) {
     const f = paths.dbFile + suffix;
@@ -199,9 +352,9 @@ export function rebuildIndex(options = {}) {
   const calls = readJsonlSafe(paths.callsLogFile);
 
   withIndexDb(options, (db) => {
-    db.exec('DELETE FROM memories; DELETE FROM memories_fts; DELETE FROM calls;');
     db.exec('BEGIN IMMEDIATE');
     try {
+      db.exec('DELETE FROM memories; DELETE FROM memories_fts; DELETE FROM calls;');
       for (const mem of memories) {
         upsertMemoryRow(db, mem);
       }
@@ -217,9 +370,15 @@ export function rebuildIndex(options = {}) {
     }
   });
 
+  const callsIndexed = calls.filter((c) => c && c.callUid).length;
+  INDEX_READY_CACHE.set(key, {
+    stats: { memories: memories.length, calls: callsIndexed },
+    checkedAt: Date.now(),
+  });
+
   return {
     memoriesIndexed: memories.length,
-    callsIndexed: calls.filter((c) => c && c.callUid).length,
+    callsIndexed,
     elapsedMs: Date.now() - started,
     dbFile: paths.dbFile,
   };
@@ -233,6 +392,12 @@ export function ensureIndexReady(options = {}) {
   if (!fs.existsSync(paths.dbFile)) {
     return rebuildIndex(options);
   }
+  const key = normDbKey(paths.dbFile);
+  const now = Date.now();
+  const cached = INDEX_READY_CACHE.get(key);
+  if (cached && now - cached.checkedAt < INDEX_READY_TTL_MS) {
+    return cached.stats;
+  }
   try {
     const stats = withIndexDb(options, (db) => {
       const m = db.prepare('SELECT COUNT(*) AS n FROM memories').get();
@@ -245,6 +410,7 @@ export function ensureIndexReady(options = {}) {
         return rebuildIndex(options);
       }
     }
+    INDEX_READY_CACHE.set(key, { stats, checkedAt: now });
     return stats;
   } catch {
     return rebuildIndex(options);

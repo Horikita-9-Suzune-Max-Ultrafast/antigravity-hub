@@ -11,6 +11,8 @@ import {
   importWallpaperFromPath,
   deleteLibraryWallpaper,
   buildThumbDataUri,
+  clearThumbCache,
+  getThumbCacheStats,
   pickLocalFolderNative,
 } from './library.mjs';
 
@@ -22,6 +24,9 @@ export {
   importWallpaperFromBase64,
   importWallpaperFromPath,
   deleteLibraryWallpaper,
+  buildThumbDataUri,
+  clearThumbCache,
+  getThumbCacheStats,
   pickLocalFolderNative,
 };
 
@@ -41,6 +46,7 @@ export const DEFAULT_APPEARANCE_STATE = {
   glassOpacity: 0.86, // legacy compatibility
   fit: 'cover', // 'cover' | 'contain' | 'center'
   protectCodeReadability: true,
+  lowPowerMode: false,
   rotationMode: 'off', // 'off' | 'startup' | 'interval'
   rotationMinutes: 30, // 1 ~ 1440
   rotationSource: 'all', // 'all' | 'library' | 'folder'
@@ -57,6 +63,7 @@ const VISUAL_ONLY_KEYS = new Set([
   'glassOpacity',
   'fit',
   'protectCodeReadability',
+  'lowPowerMode',
 ]);
 
 function ensureDir(dir) {
@@ -174,6 +181,7 @@ export function normalizeAppearanceState(raw = {}) {
     glassOpacity: Number(clamp(src.glassOpacity, 0.55, 0.98, DEFAULT_APPEARANCE_STATE.glassOpacity).toFixed(2)),
     fit,
     protectCodeReadability: src.protectCodeReadability !== false,
+    lowPowerMode: Boolean(src.lowPowerMode),
     rotationMode,
     rotationMinutes: Math.round(clamp(src.rotationMinutes, 1, 1440, DEFAULT_APPEARANCE_STATE.rotationMinutes)),
     rotationSource,
@@ -283,6 +291,7 @@ export function compileRuntimeAppearance(options = {}, stateOverride = null, com
     glassOpacity: state.glassOpacity,
     fit: state.fit,
     protectCodeReadability: state.protectCodeReadability,
+    lowPowerMode: state.lowPowerMode,
     rotationMode: state.rotationMode,
     rotationMinutes: state.rotationMinutes,
     rotationSource: state.rotationSource,
@@ -354,7 +363,8 @@ export function getAppearanceStatus(options = {}) {
     presets: WALLPAPER_PRESETS,
     library: libItems.map((it) => ({
       ...it,
-      thumb: buildThumbDataUri(it.filePath, it.mime),
+      thumb: buildThumbDataUri(it.filePath, it.mime, options),
+      thumbUrl: `/api/wallpaper/${encodeURIComponent(it.id)}`,
     })),
     folder: {
       ok: folderRes.ok,

@@ -270,7 +270,7 @@ export function createGovernanceModule({
                 </div>
                 <div class="text-xs text-fg leading-relaxed break-words">${esc(f.message)}</div>
                 ${rem.summary ? `<div class="text-xs text-muted leading-relaxed break-words">建议：${esc(rem.summary)}</div>` : ''}
-                ${f.file ? `<div class="text-[11px] text-muted mono-num truncate">${esc(f.file)}</div>` : ''}
+                ${f.file ? `<div class="text-xs text-muted mono-num truncate">${esc(f.file)}</div>` : ''}
               </div>
               <div class="shrink-0 flex flex-wrap items-center gap-1.5 pt-0.5">
                 ${btns.join('')}
@@ -529,13 +529,13 @@ export function createGovernanceModule({
         <div class="px-5 py-3 flex items-center justify-between gap-3 ${item.active ? '' : 'opacity-60'}">
           <div class="min-w-0 space-y-0.5">
             <div class="flex flex-wrap items-center gap-1.5">
-              <span class="agy-pill mono-num text-[11px]">P${item.priority}</span>
-              <span class="agy-pill text-[11px]">${esc(item.kind)}</span>
+              <span class="agy-pill mono-num text-xs">P${item.priority}</span>
+              <span class="agy-pill text-xs">${esc(item.kind)}</span>
               <span class="text-xs font-medium text-fg truncate">${esc(item.name)}</span>
               ${item.warnTag ? `<span class="gov-sev-badge" data-sev="warn">${esc(item.warnTag)}</span>` : ''}
-              ${!item.active && !item.shadowedBy ? `<span class="agy-pill text-[11px] text-muted">未激活</span>` : ''}
+              ${!item.active && !item.shadowedBy ? `<span class="agy-pill text-xs text-muted">未激活</span>` : ''}
             </div>
-            <div class="text-[11px] text-muted truncate">${esc(item.sub)}</div>
+            <div class="text-xs text-muted truncate">${esc(item.sub)}</div>
           </div>
           <div class="shrink-0 flex items-center gap-2">
             ${item.tokens > 0 ? `<span class="text-xs mono-num text-muted">~${fmtK(item.tokens)}t</span>` : ''}
@@ -634,9 +634,9 @@ export function createGovernanceModule({
               <div class="min-w-0 space-y-0.5">
                 <div class="flex flex-wrap items-center gap-1.5">
                   <span class="text-xs font-medium text-fg mono-num truncate">${esc(sn.reason)}</span>
-                  ${sn.baseline ? `<span class="agy-pill text-[11px] text-success" style="border-color: var(--success);">永久基线</span>` : ''}
+                  ${sn.baseline ? `<span class="agy-pill text-xs text-success" style="border-color: var(--success);">永久基线</span>` : ''}
                 </div>
-                <div class="text-[11px] text-muted mono-num truncate">${fmtTime(sn.createdAt)} | ${esc(sn.id)}</div>
+                <div class="text-xs text-muted mono-num truncate">${fmtTime(sn.createdAt)} | ${esc(sn.id)}</div>
               </div>
               <button type="button" class="agy-btn agy-btn-secondary agy-btn-sm text-xs shrink-0" data-gov-rollback="${esc(sn.id)}" ${sn.available ? '' : 'disabled'}>
                 预览回滚

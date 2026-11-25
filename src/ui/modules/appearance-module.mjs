@@ -50,12 +50,14 @@ export function createAppearanceModule({
   renderCustomSelect,
   onOpenSettings,
   onGoI18nPatch,
+  popoutToken = null,
 }) {
   const state = {
     activeSubTab: 'gallery', // 'gallery' | 'tuning' | 'rotation'
     loaded: false,
     busy: false,
     data: null,
+    poolGridRendered: false,
     // Draft state for rotation pool modal
     poolDraft: {
       source: 'all',
@@ -72,7 +74,24 @@ export function createAppearanceModule({
     sliderInFlight: false,
     sliderThrottleTimer: null,
     lastSliderSentAt: 0,
+    folderInputTimer: null,
   };
+
+  function resolveThumbUrl(item) {
+    if (!item) return '';
+    if (popoutToken) {
+      if (item.thumbUrl) {
+        const sep = item.thumbUrl.includes('?') ? '&' : '?';
+        return item.thumbUrl.includes('token=')
+          ? item.thumbUrl
+          : `${item.thumbUrl}${sep}token=${encodeURIComponent(popoutToken)}`;
+      }
+      if (item.id) {
+        return `/api/wallpaper/${encodeURIComponent(item.id)}?token=${encodeURIComponent(popoutToken)}`;
+      }
+    }
+    return item.thumb || '';
+  }
 
   function byId(id) {
     return document.getElementById(id);
@@ -299,11 +318,12 @@ export function createAppearanceModule({
           s.enabled && s.mode === 'image' && s.separateThemeWallpapers && (isDark || isLight);
         const isActive = isUniversalActive || isThemedActive;
         const extLabel = String(item.ext || '').replace(/^\./, '') || 'IMG';
+        const thumbSrc = resolveThumbUrl(item);
 
         return `
         <div class="wp-lib-item" data-active="${isActive ? 'true' : 'false'}">
-          <div class="wp-lib-thumb" style="${item.thumb ? `background-image:url('${item.thumb}')` : ''}">
-            ${item.thumb ? '' : `<span class="text-2xs text-muted mono-num">${esc(extLabel)}</span>`}
+          <div class="wp-lib-thumb" style="${thumbSrc ? `background-image:url('${esc(thumbSrc)}')` : ''}">
+            ${thumbSrc ? '' : `<span class="text-2xs text-muted mono-num">${esc(extLabel)}</span>`}
             <div class="wp-thumb-top">
               <div class="wp-thumb-badges">
                 ${isDark ? `<span class="wp-slot-tag" data-slot="dark">深色专属</span>` : ''}
@@ -376,6 +396,13 @@ export function createAppearanceModule({
     if (themeSw) {
       themeSw.dataset.on = String(Boolean(s.separateThemeWallpapers));
       themeSw.setAttribute('aria-checked', String(Boolean(s.separateThemeWallpapers)));
+    }
+
+    const lowPowerSw = byId('appLowPowerSwitch');
+    if (lowPowerSw) {
+      const lowOn = Boolean(s.lowPowerMode);
+      lowPowerSw.dataset.on = String(lowOn);
+      lowPowerSw.setAttribute('aria-checked', String(lowOn));
     }
   }
 
@@ -461,11 +488,67 @@ export function createAppearanceModule({
     const folderInput = byId('appFolderInput');
     if (folderInput) folderInput.value = state.poolDraft.folderPath;
 
-    renderPoolModal();
+    state.poolGridRendered = false;
+    renderPoolModal(true);
     openModal?.('appRotationPoolModal');
   }
 
-  function renderPoolModal() {
+  function onPoolModalClosed() {
+    clearTimeout(state.folderInputTimer);
+    state.folderInputTimer = null;
+    state.poolGridRendered = false;
+    const grid = byId('appPoolLibraryGrid');
+    if (grid) grid.innerHTML = '';
+  }
+
+  function renderPoolModalGrid() {
+    const d = state.data;
+    const grid = byId('appPoolLibraryGrid');
+    if (!d || !grid) return;
+    const lib = d.library || [];
+    const draft = state.poolDraft;
+    if (!lib.length) {
+      grid.innerHTML = `<div class="wp-lib-empty" style="grid-column:1/-1;padding:16px 12px;">壁纸库暂无图片，请先在「本地壁纸库」中导入。</div>`;
+    } else {
+      grid.innerHTML = lib
+        .map((item) => {
+          const selected = draft.selectedIds.has(item.id);
+          const extLabel = String(item.ext || '').replace(/^\./, '').toUpperCase() || 'IMG';
+          const thumbSrc = resolveThumbUrl(item);
+          return `
+          <button type="button" class="wp-pool-item" data-selected="${selected ? 'true' : 'false'}" data-pool-toggle="${esc(item.id)}">
+            <span class="wp-pool-thumb" style="${thumbSrc ? `background-image:url('${esc(thumbSrc)}')` : ''}">
+              ${thumbSrc ? '' : `<span class="text-xs text-muted mono-num">${esc(extLabel)}</span>`}
+              <span class="wp-pool-check">${selected ? '✓' : ''}</span>
+            </span>
+            <span class="wp-pool-name truncate" title="${esc(item.name)}">${esc(item.name)}</span>
+          </button>`;
+        })
+        .join('');
+    }
+    state.poolGridRendered = true;
+  }
+
+  function syncPoolSelectionInPlace() {
+    const grid = byId('appPoolLibraryGrid');
+    if (!grid) return;
+    const draft = state.poolDraft;
+    grid.querySelectorAll('.wp-pool-item[data-pool-toggle]').forEach((btn) => {
+      const id = btn.dataset.poolToggle;
+      const selected = draft.selectedIds.has(id);
+      const nextAttr = selected ? 'true' : 'false';
+      if (btn.dataset.selected !== nextAttr) {
+        btn.dataset.selected = nextAttr;
+      }
+      const checkEl = btn.querySelector('.wp-pool-check');
+      const nextMark = selected ? '✓' : '';
+      if (checkEl && checkEl.textContent !== nextMark) {
+        checkEl.textContent = nextMark;
+      }
+    });
+  }
+
+  function renderPoolModal(rebuildGrid = false) {
     const d = state.data;
     if (!d) return;
     const lib = d.library || [];
@@ -485,26 +568,10 @@ export function createAppearanceModule({
       libTitle.textContent = `本地壁纸库（已选 ${draft.selectedIds.size} / ${lib.length} 张）`;
     }
 
-    const grid = byId('appPoolLibraryGrid');
-    if (grid) {
-      if (!lib.length) {
-        grid.innerHTML = `<div class="wp-lib-empty" style="grid-column:1/-1;padding:16px 12px;">壁纸库暂无图片，请先在「本地壁纸库」中导入。</div>`;
-      } else {
-        grid.innerHTML = lib
-          .map((item) => {
-            const selected = draft.selectedIds.has(item.id);
-            const extLabel = String(item.ext || '').replace(/^\./, '').toUpperCase() || 'IMG';
-            return `
-            <button type="button" class="wp-pool-item" data-selected="${selected ? 'true' : 'false'}" data-pool-toggle="${esc(item.id)}">
-              <span class="wp-pool-thumb" style="${item.thumb ? `background-image:url('${item.thumb}')` : ''}">
-                ${item.thumb ? '' : `<span class="text-xs text-muted mono-num">${esc(extLabel)}</span>`}
-                <span class="wp-pool-check">${selected ? '✓' : ''}</span>
-              </span>
-              <span class="wp-pool-name truncate" title="${esc(item.name)}">${esc(item.name)}</span>
-            </button>`;
-          })
-          .join('');
-      }
+    if (rebuildGrid || !state.poolGridRendered) {
+      renderPoolModalGrid();
+    } else {
+      syncPoolSelectionInPlace();
     }
 
     const clearBtn = byId('appClearFolderBtn');
@@ -742,6 +809,14 @@ export function createAppearanceModule({
       );
     });
 
+    byId('appLowPowerSwitch')?.addEventListener('click', () => {
+      const cur = Boolean(state.data?.state?.lowPowerMode);
+      void patchConfig(
+        { lowPowerMode: !cur },
+        { light: true, rerender: 'tuning', toastText: !cur ? '已开启低功耗渲染模式' : '已关闭低功耗渲染模式' }
+      );
+    });
+
     byId('appOpenPoolModalBtn')?.addEventListener('click', () => openPoolModal());
 
     byId('appIntervalPresets')?.addEventListener('click', (e) => {
@@ -793,7 +868,11 @@ export function createAppearanceModule({
       state.poolDraft.folderPath = String(e.target.value || '').trim();
       state.poolDraft.folderError = null;
       state.poolDraft.folderDirty = true;
-      renderPoolModal();
+      clearTimeout(state.folderInputTimer);
+      state.folderInputTimer = setTimeout(() => {
+        state.folderInputTimer = null;
+        renderPoolModal(false);
+      }, 250);
     });
 
     byId('appPickFolderBtn')?.addEventListener('click', async () => {
@@ -990,5 +1069,6 @@ export function createAppearanceModule({
     positionSubNav,
     renderSelects,
     handleSelectPick,
+    onPoolModalClosed,
   };
 }

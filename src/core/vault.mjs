@@ -178,6 +178,38 @@ export function archiveMemory(id, options = {}) {
 }
 
 /**
+ * Soft-archive oldest auto-generated Stop checkpoints beyond maxKeep (default 30)
+ * so active memory count stays bounded without deleting Markdown truth files.
+ */
+export function pruneAutoStopCheckpoints(projectId, { maxKeep = 30 } = {}, options = {}) {
+  if (!projectId) return { pruned: 0 };
+  const keep = Math.max(1, Math.min(200, Number(maxKeep) || 30));
+  ensureIndexReady(options);
+  const rows = withIndexDb(options, (db) =>
+    db
+      .prepare(
+        `SELECT id, title, tags_json FROM memories
+         WHERE project_id = ? AND kind = 'checkpoint' AND archived = 0
+         ORDER BY updated_at DESC`
+      )
+      .all(projectId)
+  );
+  const autoStops = rows.filter((r) => {
+    const t = String(r.title || '');
+    const tags = String(r.tags_json || '');
+    return t.startsWith('Stop 自动快照') || tags.includes('"auto-stop"');
+  });
+  if (autoStops.length <= keep) return { pruned: 0 };
+
+  let pruned = 0;
+  for (const old of autoStops.slice(keep)) {
+    const res = archiveMemory(old.id, options);
+    if (res?.archived) pruned++;
+  }
+  return { pruned };
+}
+
+/**
  * List memories for a project (optionally filtered by branch, kind, archived).
  */
 export function listMemories(params = {}, options = {}) {
@@ -339,15 +371,25 @@ export function buildCompactBrief(params = {}, options = {}) {
     return String(b.updatedAt).localeCompare(String(a.updatedAt));
   });
 
-  // Check HEAD staleness
+  // Check HEAD staleness (deduplicated & capped at max 10 unique stale heads per call)
   let maxCommitsAhead = 0;
   let staleCount = 0;
   let diverged = false;
+  const MAX_STALE_HEAD_CHECKS = 10;
   if (git.isGitRepo && git.head !== 'unborn') {
+    const checkedHeads = new Map();
     for (const item of items) {
       if (item.head && item.head !== 'none' && item.head !== git.head) {
         staleCount++;
-        const ahead = getCommitsAhead(git.repoRoot, item.head);
+        const headKey = String(item.head).toLowerCase();
+        if (checkedHeads.has(headKey)) {
+          continue;
+        }
+        if (checkedHeads.size >= MAX_STALE_HEAD_CHECKS) {
+          continue;
+        }
+        const ahead = getCommitsAhead(git.repoRoot, item.head, git.head);
+        checkedHeads.set(headKey, ahead);
         if (ahead === -1) diverged = true;
         else if (ahead > maxCommitsAhead) maxCommitsAhead = ahead;
       }

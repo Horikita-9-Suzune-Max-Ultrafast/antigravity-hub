@@ -7,6 +7,41 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const PROJECT_ROOT = path.resolve(__dirname, '..', '..');
 
+const stubUnusedZodLocalesPlugin = {
+  name: 'stub-unused-zod-locales',
+  setup(build) {
+    build.onLoad({ filter: /[\\/]zod[\\/]v4[\\/]locales[\\/][^\\/]+\.(js|cjs)$/ }, (args) => {
+      const base = path.basename(args.path);
+      if (base === 'en.js' || base === 'en.cjs' || base === 'index.js' || base === 'index.cjs') {
+        return null;
+      }
+      return {
+        contents: 'export default function () { return {}; }\n',
+        loader: 'js',
+      };
+    });
+  },
+};
+
+function minifyHtmlTemplate(html) {
+  const preserved = [];
+  const masked = html.replace(/<(pre|textarea|script|style)\b[^>]*>[\s\S]*?<\/\1>/gi, (match) => {
+    const idx = preserved.push(match) - 1;
+    return `\u0000PRESERVE_${idx}\u0000`;
+  });
+
+  const compacted = masked
+    .replace(/<!--[\s\S]*?-->/g, '')
+    .replace(/>[ \t]*\r?\n[ \t]*</g, '><')
+    .replace(/>[ \t]*\r?\n[ \t]*/g, '>')
+    .replace(/[ \t]*\r?\n[ \t]*</g, '<')
+    .replace(/[ \t]*\r?\n[ \t]*/g, ' ')
+    .replace(/[ \t]{2,}/g, ' ')
+    .trim();
+
+  return compacted.replace(/\u0000PRESERVE_(\d+)\u0000/g, (_, idx) => preserved[Number(idx)]);
+}
+
 export async function buildUi(options = {}) {
   const uiDir = path.join(PROJECT_ROOT, 'src', 'ui');
   const outPath = options.outPath || path.join(PROJECT_ROOT, 'dist', 'dashboard.html');
@@ -20,11 +55,16 @@ export async function buildUi(options = {}) {
     target: ['es2022'],
     minify: true,
     legalComments: 'none',
+    plugins: [stubUnusedZodLocalesPlugin],
   });
 
   const jsCode = bundled.outputFiles[0].text.replace(/<\/script>/gi, '<\\/script>');
-  const cssCode = fs.readFileSync(path.join(uiDir, 'styles.css'), 'utf8').replace(/<\/style>/gi, '<\\/style>');
-  const template = fs.readFileSync(path.join(uiDir, 'index.html'), 'utf8');
+  const rawCss = fs.readFileSync(path.join(uiDir, 'styles.css'), 'utf8');
+  const cssCode = esbuild
+    .transformSync(rawCss, { loader: 'css', minify: true })
+    .code.replace(/<\/style>/gi, '<\\/style>');
+  const rawTemplate = fs.readFileSync(path.join(uiDir, 'index.html'), 'utf8');
+  const template = minifyHtmlTemplate(rawTemplate);
 
   const html = template
     .replace('/* INLINE_STYLES */', () => cssCode)

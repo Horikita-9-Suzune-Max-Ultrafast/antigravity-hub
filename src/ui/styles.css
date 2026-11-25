@@ -926,23 +926,25 @@ button, input, textarea {
   min-width: 100%;
   width: max-content;
   max-width: min(340px, calc(100vw - 16px));
+  max-height: min(320px, calc(100vh - 24px));
+  overflow-y: auto;
+  overscroll-behavior: contain;
   box-sizing: border-box;
   padding: 4px;
   border-radius: 12px;
   background: var(--card);
   border: 1px solid var(--border);
   box-shadow: 0 10px 30px -6px rgba(0, 0, 0, 0.16), 0 2px 6px rgba(0, 0, 0, 0.06);
-  z-index: 60;
-  opacity: 0;
-  transform: translateY(-4px) scale(0.97);
+  z-index: 90;
+  display: none;
   transform-origin: top left;
-  pointer-events: none;
-  transition: opacity 150ms ease, transform 180ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.agy-select-menu[data-fixed="true"] {
+  position: fixed;
 }
 .agy-select-menu[data-open="true"] {
-  opacity: 1;
-  transform: translateY(0) scale(1);
-  pointer-events: auto;
+  display: block;
+  animation: panelEnter 160ms ease-out;
 }
 .agy-select-menu.align-right {
   left: auto;
@@ -1041,12 +1043,10 @@ button, input, textarea {
   transform: rotate(90deg);
 }
 
-/* Governance ignored items frosted collapsible bar */
+/* Governance ignored items collapsible bar (clean Radix surface) */
 .gov-ignored-card {
-  background: color-mix(in srgb, var(--card) 78%, transparent);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
-  border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+  background: color-mix(in srgb, var(--foreground) 2.5%, var(--card));
+  border: 1px solid var(--border);
 }
 .gov-ignored-trigger {
   padding: 11px 18px;
@@ -1141,30 +1141,27 @@ button, input, textarea {
   opacity: 0.36;
 }
 
-/* Live Pulse Indicator */
-@keyframes pulseRing {
-  0% { transform: scale(0.95); opacity: 0.7; }
-  70% { transform: scale(2.1); opacity: 0; }
-  100% { transform: scale(2.1); opacity: 0; }
-}
+/* Live Status Indicator (static restrained ring, zero 60fps compositor frames) */
 .live-halo {
   position: relative;
   display: inline-flex;
+  align-items: center;
+  justify-content: center;
   width: 8px;
   height: 8px;
 }
 .live-halo::before {
   content: "";
   position: absolute;
-  inset: 0;
+  inset: -3px;
   border-radius: 50%;
-  background: var(--success);
-  animation: pulseRing 2.2s cubic-bezier(0.2, 0.8, 0.2, 1) infinite;
+  background: color-mix(in srgb, var(--success) 18%, transparent);
+  border: 1px solid color-mix(in srgb, var(--success) 34%, transparent);
 }
 .live-halo > span {
   position: relative;
-  width: 8px;
-  height: 8px;
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
   background: var(--success);
 }
@@ -1580,24 +1577,23 @@ button, input, textarea {
   transform: scaleY(1.04);
 }
 
-/* Modals */
+/* Modals (closed = display:none for zero compositor layers; clean translucent scrim) */
+@keyframes modalCardEnter {
+  from { opacity: 0; transform: translateY(6px) scale(0.985); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
 .modal-backdrop {
   position: fixed;
   inset: 0;
   z-index: 80;
-  background: rgba(0, 0, 0, 0.36);
-  backdrop-filter: blur(4px);
-  display: flex;
+  background: rgba(0, 0, 0, 0.42);
+  display: none;
   align-items: center;
   justify-content: center;
   padding: 16px;
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 180ms ease;
 }
 .modal-backdrop[data-open="true"] {
-  opacity: 1;
-  pointer-events: auto;
+  display: flex;
 }
 .modal-card {
   width: 100%;
@@ -1606,14 +1602,12 @@ button, input, textarea {
   border: 1px solid var(--border);
   border-radius: 16px;
   box-shadow: 0 20px 50px -12px rgba(0, 0, 0, 0.28);
-  transform: translateY(8px) scale(0.97);
-  transition: transform 220ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 .modal-card.wide {
   max-width: 540px;
 }
 .modal-backdrop[data-open="true"] .modal-card {
-  transform: translateY(0) scale(1);
+  animation: modalCardEnter 200ms ease-out;
 }
 
 /* Fixed-Height Dual-View Handoff Capsule Area (Zero Height Jump) */
@@ -1809,6 +1803,8 @@ body.native-popout .agy-header {
   font-weight: 500;
   color: var(--foreground);
   letter-spacing: -0.01em;
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 .native-titlebar-mini {
   font-size: 12px;
@@ -2241,7 +2237,6 @@ body.window-collapsed .win-resize-e {
   inset: 0;
   z-index: 120;
   background: rgba(0, 0, 0, 0.45);
-  backdrop-filter: blur(2px);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2406,13 +2401,12 @@ body.window-collapsed .win-resize-e {
   border-radius: 999px;
   font-size: 12px;
   font-weight: 500;
-  background: rgba(15, 19, 26, 0.72);
+  background: rgba(15, 19, 26, 0.86);
   color: #f3f4f6;
-  border: 1px solid rgba(255, 255, 255, 0.16);
-  backdrop-filter: blur(4px);
+  border: 1px solid rgba(255, 255, 255, 0.18);
 }
 .wp-slot-tag[data-slot="light"] {
-  background: rgba(255, 251, 235, 0.88);
+  background: rgba(255, 251, 235, 0.94);
   color: #92400e;
   border-color: rgba(217, 119, 6, 0.35);
 }
@@ -2713,7 +2707,9 @@ body.window-collapsed .win-resize-e {
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }
 
@@ -3259,12 +3255,18 @@ body.window-collapsed #titleBarModelBadge {
   top: calc(100% + 8px);
   right: 0;
   width: min(300px, calc(100vw - 32px));
+  max-height: min(260px, calc(100vh - 24px));
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 12px 14px;
   border-radius: 10px;
   border: 1px solid var(--border);
   background: var(--card);
   box-shadow: 0 10px 28px rgba(0, 0, 0, 0.16);
-  z-index: 60;
+  z-index: 90;
+}
+.kv-help-popover[data-fixed="true"] {
+  position: fixed;
 }
 .kv-help-popover-left {
   right: auto;

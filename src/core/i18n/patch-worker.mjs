@@ -12,6 +12,8 @@ import {
   CONSOLE_MAIN_PATH,
   inspectAsarMarkers,
   scanBackups,
+  readAsarPackageVersion,
+  readElectronVersionFile,
 } from './detector.mjs';
 import {
   injectMarkerBlock,
@@ -149,8 +151,29 @@ function updateJobFile(jobFilePath, record) {
   }
 }
 
+function normalizeBaseSemver(v) {
+  if (!v || typeof v !== 'string') return null;
+  const m = v.trim().match(/^v?(\d+\.\d+\.\d+)(?:-(.+))?$/i);
+  if (!m) return null;
+  return { core: m[1], tag: m[2] || '' };
+}
+
+function backupMatchesForThirdParty(backup, currentAsarVersion) {
+  if (backup.matchesCurrentVersion) return true;
+  if (!currentAsarVersion || !backup.appVersion) return false;
+  const cur = normalizeBaseSemver(currentAsarVersion);
+  const bak = normalizeBaseSemver(backup.appVersion);
+  if (!cur || !bak || cur.core !== bak.core) return false;
+  // Block distinct numbered prereleases (e.g. beta.1 vs beta.2), while allowing same-release
+  // patch-tag variants (e.g. 2.35.2 vs 2.35.2-zh-cn or 1.2.4-clean vs 1.2.4-third-party).
+  const hasDigit = (s) => /\d/.test(s);
+  if (hasDigit(cur.tag) && hasDigit(bak.tag) && cur.tag !== bak.tag) return false;
+  return Boolean(cur.tag || bak.tag);
+}
+
 /**
- * Resolve the clean base ASAR for apply without EVER backing up a patched app.asar as clean original.
+ * Resolve the clean base ASAR for apply without EVER backing up a patched app.asar as clean original
+ * or downgrading to a stale older-version .bak.
  */
 function resolveCleanBaseForApply(asarPath, resourcesDir) {
   const consoleBackupPath = path.join(resourcesDir, CONSOLE_BACKUP_NAME);
@@ -158,12 +181,6 @@ function resolveCleanBaseForApply(asarPath, resourcesDir) {
   if (!currentMarkers.valid) {
     throw new Error(`Invalid target app.asar: ${currentMarkers.error || asarPath}`);
   }
-
-  const backups = scanBackups(resourcesDir);
-  const consoleBackup = backups.find((b) => b.name === CONSOLE_BACKUP_NAME && b.valid && b.isCleanOriginal);
-  const otherCleanBackup = backups.find(
-    (b) => b.name !== CONSOLE_BACKUP_NAME && b.valid && b.isCleanOriginal
-  );
 
   // Case 1: Current app.asar is clean original (first-time apply OR after official Antigravity update).
   // Refresh app.asar.agy-console.bak from the current clean app.asar so it matches the installed version.
@@ -176,8 +193,24 @@ function resolveCleanBaseForApply(asarPath, resourcesDir) {
     };
   }
 
+  const currentAsarVersion = readAsarPackageVersion(asarPath);
+  const backups = scanBackups(resourcesDir, currentAsarVersion);
+  const cleanBackups = backups.filter((b) => b.valid && b.isCleanOriginal);
+  const isBackupEligible = (b) =>
+    currentMarkers.hasThirdPartyPatch
+      ? backupMatchesForThirdParty(b, currentAsarVersion)
+      : Boolean(b.matchesCurrentVersion);
+
+  const consoleBackup = cleanBackups.find(
+    (b) => b.name === CONSOLE_BACKUP_NAME && isBackupEligible(b)
+  );
+  const otherCleanBackup = cleanBackups.find(
+    (b) => b.name !== CONSOLE_BACKUP_NAME && isBackupEligible(b)
+  );
+  const hasMismatchedCleanBackup = cleanBackups.length > 0 && !consoleBackup && !otherCleanBackup;
+
   // Case 2: Current app.asar is already patched (either by us or third-party).
-  // NEVER copy current patched app.asar to app.asar.agy-console.bak!
+  // NEVER copy current patched app.asar to app.asar.agy-console.bak, and never downgrade to a stale .bak!
   if (consoleBackup) {
     return {
       baseAsarPath: consoleBackup.path,
@@ -186,7 +219,7 @@ function resolveCleanBaseForApply(asarPath, resourcesDir) {
     };
   }
 
-  // Case 3: No clean console backup, but a clean third-party/generic backup (app.asar.zh-cn.bak / app.asar.bak) exists.
+  // Case 3: No matching clean console backup, but a matching clean third-party/generic backup exists.
   if (otherCleanBackup) {
     atomicCopyFile(otherCleanBackup.path, consoleBackupPath);
     return {
@@ -196,14 +229,23 @@ function resolveCleanBaseForApply(asarPath, resourcesDir) {
     };
   }
 
-  // Case 4: Patched by third-party with NO clean backup anywhere -> refuse safely!
+  // Case 4: Patched by third-party with NO matching clean backup -> refuse safely!
   if (currentMarkers.hasThirdPartyPatch) {
+    if (hasMismatchedCleanBackup) {
+      const foundVersions = cleanBackups
+        .map((b) => `${b.name}(${b.appVersion ? `v${b.appVersion}` : '未知版本'})`)
+        .join('、');
+      throw new Error(
+        `检测到第三方汉化补丁，但已有原版备份版本与当前 app.asar（${currentAsarVersion ? `v${currentAsarVersion}` : '未知版本'}）不匹配（检测到：${foundVersions}），已阻止替换以防误覆盖降级。`
+      );
+    }
     throw new Error(
       '检测到第三方汉化补丁，但未找到干净的原版 app.asar 备份（app.asar.agy-console.bak / app.asar.zh-cn.bak / app.asar.bak）。已中止以防损坏原版备份。'
     );
   }
 
-  // Case 5: Patched only by Console, and backup was deleted externally -> re-patch idempotently WITHOUT creating a fake clean backup.
+  // Case 5: Patched only by Console, and backup was deleted or only stale older-version backups exist ->
+  // re-patch current app.asar idempotently WITHOUT downgrading or creating a fake clean backup.
   return {
     baseAsarPath: asarPath,
     backupPath: null,
@@ -223,9 +265,19 @@ function loadOrCompileBundle(jobSpec) {
 }
 
 function performApply(jobSpec) {
-  const { asarPath, resourcesDir, appVersion, bundleFilePath, stateFilePath, installDir } = jobSpec;
+  const { asarPath, resourcesDir, appVersion, electronVersion, bundleFilePath, stateFilePath, installDir } = jobSpec;
+  const resolvedInstallDir = installDir || (resourcesDir ? path.dirname(resourcesDir) : path.dirname(path.dirname(asarPath)));
   const { baseAsarPath, backupPath, backupSource } = resolveCleanBaseForApply(asarPath, resourcesDir);
   const bundle = loadOrCompileBundle(jobSpec);
+
+  const resolvedElectronVersion =
+    electronVersion || readElectronVersionFile(resolvedInstallDir, resourcesDir) || null;
+  const resolvedAppVersion =
+    appVersion ||
+    readAsarPackageVersion(baseAsarPath) ||
+    readAsarPackageVersion(asarPath) ||
+    resolvedElectronVersion ||
+    null;
 
   const hasPreload = hasAsarFile(baseAsarPath, 'dist/preload.js');
   const hasMain = hasAsarFile(baseAsarPath, 'dist/main.js');
@@ -265,7 +317,8 @@ function performApply(jobSpec) {
     engine: 'agy-console-i18n',
     patchVersion: PATCH_VERSION,
     patchedAt: nowIso,
-    appVersion: appVersion || null,
+    appVersion: resolvedAppVersion,
+    electronVersion: resolvedElectronVersion,
     bundleFilePath: bundleFilePath || '',
     bundleHash,
     menuLocalizationEnabled: bundle?.config?.menuLocalizationEnabled !== false,
@@ -282,7 +335,7 @@ function performApply(jobSpec) {
     try {
       const qDir = path.join(path.dirname(stateFilePath || bundleFilePath || asarPath), 'quarantine');
       ensureDir(qDir);
-      const backupsNow = scanBackups(resourcesDir);
+      const backupsNow = scanBackups(resourcesDir, resolvedAppVersion);
       for (const b of backupsNow) {
         if (b.kind !== 'third_party' || !fs.existsSync(b.path)) continue;
         const dest = path.join(qDir, `${Date.now()}-${b.name}`);
@@ -301,8 +354,10 @@ function performApply(jobSpec) {
       patched: true,
       lastAction: 'apply',
       lastAppliedAt: nowIso,
-      patchedAppVersion: appVersion || null,
-      installDir: installDir || path.dirname(resourcesDir),
+      patchedAppVersion: resolvedAppVersion,
+      appVersion: resolvedAppVersion,
+      electronVersion: resolvedElectronVersion,
+      installDir: resolvedInstallDir,
       backupPath,
       backupSource,
       quarantinedBackups,
@@ -323,39 +378,55 @@ function performApply(jobSpec) {
 
 function performRestore(jobSpec) {
   const { asarPath, resourcesDir, stateFilePath, installDir } = jobSpec;
-  const backups = scanBackups(resourcesDir);
-  const cleanBackup =
-    backups.find((b) => b.name === CONSOLE_BACKUP_NAME && b.valid && b.isCleanOriginal) ||
-    backups.find((b) => b.valid && b.isCleanOriginal);
+
+  // (a) Anti-downgrade guard: never overwrite an already clean original app.asar (e.g., after official update)
+  const markers = inspectAsarMarkers(asarPath);
+  if (markers.valid && markers.isCleanOriginal) {
+    throw new Error('当前 app.asar 已是干净原版，已阻止还原以防误覆盖降级');
+  }
+
+  // (b) Prefer a clean backup whose internal package.json version matches current app.asar package.json version
+  const currentAsarVersion = markers.valid ? readAsarPackageVersion(asarPath) : null;
+  const backups = scanBackups(resourcesDir, currentAsarVersion);
+  const cleanBackups = backups.filter((b) => b.valid && b.isCleanOriginal);
+  const matchingCleanBackup =
+    cleanBackups.find((b) => b.name === CONSOLE_BACKUP_NAME && b.matchesCurrentVersion) ||
+    cleanBackups.find((b) => b.matchesCurrentVersion);
+  const hasMismatchedCleanBackup = cleanBackups.length > 0 && !matchingCleanBackup;
 
   const nowIso = new Date().toISOString();
   let method = 'backup_restore';
   let restoredFrom = null;
 
-  if (cleanBackup) {
-    atomicCopyFile(cleanBackup.path, asarPath);
-    restoredFrom = cleanBackup.path;
-  } else {
-    // Fallback: if current app.asar only has our Console patch, strip our markers and injected files
-    const markers = inspectAsarMarkers(asarPath);
-    if (markers.valid && markers.hasConsolePatch && !markers.hasThirdPartyPatch) {
-      method = 'marker_strip';
-      const setMap = new Map();
-      if (hasAsarFile(asarPath, 'dist/preload.js')) {
-        const curPreload = readAsarFile(asarPath, 'dist/preload.js').toString('utf8');
-        setMap.set('dist/preload.js', Buffer.from(stripMarkerBlock(curPreload, 'PRELOAD_RUNTIME'), 'utf8'));
-      }
-      if (hasAsarFile(asarPath, 'dist/main.js')) {
-        const curMain = readAsarFile(asarPath, 'dist/main.js').toString('utf8');
-        setMap.set('dist/main.js', Buffer.from(stripMarkerBlock(curMain, 'MAIN_MENU'), 'utf8'));
-      }
-      const removeSet = new Set([CONSOLE_RUNTIME_PATH, CONSOLE_MAIN_PATH, CONSOLE_META_PATH]);
-      patchAsarStreaming(asarPath, asarPath, { set: setMap, remove: removeSet });
-    } else {
-      throw new Error(
-        '未找到可用的干净原版备份（app.asar.agy-console.bak / app.asar.zh-cn.bak / app.asar.bak），无法还原原版。'
-      );
+  if (matchingCleanBackup) {
+    atomicCopyFile(matchingCleanBackup.path, asarPath);
+    restoredFrom = matchingCleanBackup.path;
+  } else if (markers.valid && markers.hasConsolePatch && !markers.hasThirdPartyPatch) {
+    // Fallback: if current app.asar only has our Console patch (no matching backup or only stale backups),
+    // strip our markers and injected files in place without risking a version downgrade.
+    method = 'marker_strip';
+    const setMap = new Map();
+    if (hasAsarFile(asarPath, 'dist/preload.js')) {
+      const curPreload = readAsarFile(asarPath, 'dist/preload.js').toString('utf8');
+      setMap.set('dist/preload.js', Buffer.from(stripMarkerBlock(curPreload, 'PRELOAD_RUNTIME'), 'utf8'));
     }
+    if (hasAsarFile(asarPath, 'dist/main.js')) {
+      const curMain = readAsarFile(asarPath, 'dist/main.js').toString('utf8');
+      setMap.set('dist/main.js', Buffer.from(stripMarkerBlock(curMain, 'MAIN_MENU'), 'utf8'));
+    }
+    const removeSet = new Set([CONSOLE_RUNTIME_PATH, CONSOLE_MAIN_PATH, CONSOLE_META_PATH]);
+    patchAsarStreaming(asarPath, asarPath, { set: setMap, remove: removeSet });
+  } else if (hasMismatchedCleanBackup) {
+    const foundVersions = cleanBackups
+      .map((b) => `${b.name}(${b.appVersion ? `v${b.appVersion}` : '未知版本'})`)
+      .join('、');
+    throw new Error(
+      `已有原版备份版本与当前 app.asar（${currentAsarVersion ? `v${currentAsarVersion}` : '未知版本'}）不匹配（检测到：${foundVersions}），已阻止还原以防误覆盖降级。`
+    );
+  } else {
+    throw new Error(
+      '未找到可用的干净原版备份（app.asar.agy-console.bak / app.asar.zh-cn.bak / app.asar.bak），无法还原原版。'
+    );
   }
 
   if (stateFilePath) {

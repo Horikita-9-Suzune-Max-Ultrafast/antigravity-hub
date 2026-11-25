@@ -3,6 +3,31 @@ import path from 'node:path';
 import { getCandidateAppDataDirs, findTranscriptPath, formatDisplayPath } from './paths.mjs';
 
 const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
+const MAX_TRANSCRIPT_CACHE = 64;
+const MAX_ANNOTATION_CACHE = 256;
+
+const transcriptCache = new Map(); // normFilePath -> { size, mtimeMs, steps, metaBase, subagentIds }
+const annotationCache = new Map(); // normFilePath -> { size, mtimeMs, parsed }
+
+export function clearTranscriptCache() {
+  transcriptCache.clear();
+  annotationCache.clear();
+}
+
+function lruPut(map, key, val, limit) {
+  if (map.has(key)) map.delete(key);
+  map.set(key, val);
+  while (map.size > limit) {
+    const oldest = map.keys().next().value;
+    if (oldest === undefined) break;
+    map.delete(oldest);
+  }
+}
+
+function normCacheKey(filePath) {
+  const abs = path.resolve(filePath);
+  return process.platform === 'win32' ? abs.toLowerCase() : abs;
+}
 
 /**
  * Parse a single Antigravity annotation .pbtxt file (<appDataDir>/annotations/<convId>.pbtxt)
@@ -35,13 +60,20 @@ export function readConversationAnnotation(conversationId, options = {}) {
   for (const appDir of getCandidateAppDataDirs(options)) {
     const p = path.join(appDir, 'annotations', `${safeId}.pbtxt`);
     try {
-      if (fs.existsSync(p)) {
-        const raw = fs.readFileSync(p, 'utf8');
-        const parsed = parseAnnotationPbtxt(raw);
-        if (parsed.title || parsed.lastViewMs > 0) return parsed;
+      const st = fs.statSync(p);
+      const key = normCacheKey(p);
+      const cached = annotationCache.get(key);
+      if (cached && cached.size === st.size && cached.mtimeMs === st.mtimeMs) {
+        lruPut(annotationCache, key, cached, MAX_ANNOTATION_CACHE);
+        if (cached.parsed.title || cached.parsed.lastViewMs > 0) return cached.parsed;
+        continue;
       }
+      const raw = fs.readFileSync(p, 'utf8');
+      const parsed = parseAnnotationPbtxt(raw);
+      lruPut(annotationCache, key, { size: st.size, mtimeMs: st.mtimeMs, parsed }, MAX_ANNOTATION_CACHE);
+      if (parsed.title || parsed.lastViewMs > 0) return parsed;
     } catch {
-      // fail open if unreadable
+      // fail open if missing or unreadable
     }
   }
   return { title: '', lastViewMs: 0, archived: false };
@@ -183,11 +215,81 @@ export function parseTranscriptIncremental(filePath, byteOffset = 0) {
   };
 }
 
+function computeMetaBase(steps) {
+  let promptLabel = '';
+  let lastModel = '';
+  const stepCount = steps.length;
+  let lastUsedTokens = 0;
+
+  const firstUser = steps.find((s) => s.type === 'USER_INPUT' && s.content);
+  if (firstUser) {
+    const cleaned = firstUser.content
+      .replace(/<\/?USER_REQUEST>/gi, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (cleaned) {
+      promptLabel = cleaned.slice(0, 48) + (cleaned.length > 48 ? '…' : '');
+    }
+  }
+  const fileSet = new Set();
+  for (const s of steps) {
+    if (s.type === 'PLANNER_RESPONSE') {
+      if (s.model) lastModel = s.model;
+      if (s.inputTokens + s.cacheReadTokens > 0) {
+        lastUsedTokens = s.inputTokens + s.cacheReadTokens;
+      }
+      for (const tc of s.toolCalls) {
+        const name = String(tc?.name || '').toLowerCase();
+        if (name === 'write_file' || name === 'edit_file' || name === 'replace_file_content') {
+          const p = tc?.args?.Path || tc?.args?.path || tc?.args?.TargetFile;
+          if (p) fileSet.add(path.basename(String(p).replace(/^"|"$/g, '')));
+        }
+      }
+    }
+  }
+  return {
+    promptLabel,
+    lastModel,
+    stepCount,
+    lastUsedTokens,
+    touchedFiles: [...fileSet].slice(0, 8),
+  };
+}
+
+function getTranscriptCacheEntry(filePath, statOverride = null) {
+  if (!filePath) return null;
+  let stat = statOverride;
+  if (!stat) {
+    try {
+      stat = fs.statSync(filePath);
+    } catch {
+      return null;
+    }
+  }
+  const key = normCacheKey(filePath);
+  const cached = transcriptCache.get(key);
+  if (cached && cached.size === stat.size && cached.mtimeMs === stat.mtimeMs) {
+    lruPut(transcriptCache, key, cached, MAX_TRANSCRIPT_CACHE);
+    return cached;
+  }
+  const { steps } = parseTranscriptIncremental(filePath, 0);
+  const entry = {
+    size: stat.size,
+    mtimeMs: stat.mtimeMs,
+    steps,
+    metaBase: null,
+    subagentIdsByParent: new Map(),
+  };
+  lruPut(transcriptCache, key, entry, MAX_TRANSCRIPT_CACHE);
+  return entry;
+}
+
 /**
- * Parse a full transcript file from byte 0.
+ * Parse a full transcript file from byte 0 (with (size, mtimeMs) LRU cache).
  */
 export function parseTranscriptFull(filePath) {
-  return parseTranscriptIncremental(filePath, 0).steps;
+  const entry = getTranscriptCacheEntry(filePath);
+  return entry ? entry.steps : [];
 }
 
 /**
@@ -226,54 +328,51 @@ export function discoverSubagentIds(steps, parentConversationId = '') {
   return found;
 }
 
+function getCachedSubagentIds(entry, parentConversationId) {
+  const pid = String(parentConversationId || '').toLowerCase();
+  if (entry.subagentIdsByParent.has(pid)) {
+    return entry.subagentIdsByParent.get(pid);
+  }
+  const discovered = discoverSubagentIds(entry.steps, parentConversationId);
+  entry.subagentIdsByParent.set(pid, discovered);
+  return discovered;
+}
+
+function getCachedMetaBase(entry) {
+  if (!entry.metaBase) {
+    entry.metaBase = computeMetaBase(entry.steps);
+  }
+  return entry.metaBase;
+}
+
 /**
  * Extract a concise human-readable label from a conversation's transcript.
  */
 export function extractConversationMeta(filePath, conversationId, options = {}) {
   let label = conversationId.slice(0, 8);
-  let promptLabel = '';
   let lastModel = '';
   let stepCount = 0;
   let lastUsedTokens = 0;
   let touchedFiles = [];
 
-  const annotation = readConversationAnnotation(conversationId, options);
+  const annotation = options._annotation || readConversationAnnotation(conversationId, options);
 
   try {
-    const steps = parseTranscriptFull(filePath);
-    stepCount = steps.length;
-    const firstUser = steps.find((s) => s.type === 'USER_INPUT' && s.content);
-    if (firstUser) {
-      const cleaned = firstUser.content
-        .replace(/<\/?USER_REQUEST>/gi, '')
-        .replace(/\s+/g, ' ')
-        .trim();
-      if (cleaned) {
-        promptLabel = cleaned.slice(0, 48) + (cleaned.length > 48 ? '…' : '');
+    const entry = options._cacheEntry || getTranscriptCacheEntry(filePath, options._stat || null);
+    if (entry) {
+      const base = getCachedMetaBase(entry);
+      stepCount = base.stepCount;
+      lastModel = base.lastModel;
+      lastUsedTokens = base.lastUsedTokens;
+      touchedFiles = base.touchedFiles;
+      if (annotation.title) {
+        label = annotation.title;
+      } else if (base.promptLabel) {
+        label = base.promptLabel;
       }
-    }
-    if (annotation.title) {
+    } else if (annotation.title) {
       label = annotation.title;
-    } else if (promptLabel) {
-      label = promptLabel;
     }
-    const fileSet = new Set();
-    for (const s of steps) {
-      if (s.type === 'PLANNER_RESPONSE') {
-        if (s.model) lastModel = s.model;
-        if (s.inputTokens + s.cacheReadTokens > 0) {
-          lastUsedTokens = s.inputTokens + s.cacheReadTokens;
-        }
-        for (const tc of s.toolCalls) {
-          const name = String(tc?.name || '').toLowerCase();
-          if (name === 'write_file' || name === 'edit_file' || name === 'replace_file_content') {
-            const p = tc?.args?.Path || tc?.args?.path || tc?.args?.TargetFile;
-            if (p) fileSet.add(path.basename(String(p).replace(/^"|"$/g, '')));
-          }
-        }
-      }
-    }
-    touchedFiles = [...fileSet].slice(0, 8);
   } catch {
     if (annotation.title) label = annotation.title;
   }
@@ -292,6 +391,7 @@ export function extractConversationMeta(filePath, conversationId, options = {}) 
 
 /**
  * Discover recent Antigravity conversations sorted by most recently updated transcript.
+ * Single-pass with LRU transcript caching; avoids parsing old transcripts when limit is small.
  */
 export function listConversations(options = {}) {
   const limit = Math.max(1, Math.min(50, Number(options.limit) || 15));
@@ -321,6 +421,8 @@ export function listConversations(options = {}) {
         candidates.push({
           conversationId: convId,
           transcriptPath: tPath,
+          stat,
+          annotation: ann,
           mtimeMs: stat.mtimeMs,
           lastViewMs: ann.lastViewMs || 0,
           activityMs: Math.max(stat.mtimeMs, ann.lastViewMs || 0),
@@ -334,13 +436,24 @@ export function listConversations(options = {}) {
 
   candidates.sort((a, b) => b.activityMs - a.activityMs || b.mtimeMs - a.mtimeMs);
 
-  // Identify subagent conversation IDs referenced by recent parent transcripts so main selector stays clean
+  // Single-pass lazy parsing: only parse enough top candidates to discover subagent parents
+  // and build metadata without re-parsing files or parsing 20 old files when limit is small.
+  const subScanWindow =
+    limit <= 3
+      ? Math.min(candidates.length, Math.max(limit + 2, 3))
+      : Math.min(candidates.length, Math.min(20, limit + 5));
+
   const subagentIds = new Set();
   const subagentParentMap = new Map();
-  for (const c of candidates.slice(0, Math.min(candidates.length, 20))) {
+  const entryCacheByIdx = new Map();
+
+  for (let i = 0; i < subScanWindow; i++) {
+    const c = candidates[i];
     try {
-      const steps = parseTranscriptFull(c.transcriptPath);
-      const discovered = discoverSubagentIds(steps, c.conversationId);
+      const entry = getTranscriptCacheEntry(c.transcriptPath, c.stat);
+      if (!entry) continue;
+      entryCacheByIdx.set(i, entry);
+      const discovered = getCachedSubagentIds(entry, c.conversationId);
       discovered.forEach((sid, idx) => {
         const lower = sid.toLowerCase();
         subagentIds.add(lower);
@@ -359,12 +472,20 @@ export function listConversations(options = {}) {
   const nowMs = Date.now();
   const recentSubagentWindowMs = 2 * 60 * 60 * 1000;
   const results = [];
-  for (const c of candidates) {
+  for (let i = 0; i < candidates.length; i++) {
+    const c = candidates[i];
     const lowerId = c.conversationId.toLowerCase();
     const isSub = subagentIds.has(lowerId);
     const isRecentSub = isSub && nowMs - c.mtimeMs <= recentSubagentWindowMs;
     if (isSub && !options.includeSubagents && !(options.includeRecentSubagents && isRecentSub)) continue;
-    const meta = extractConversationMeta(c.transcriptPath, c.conversationId, options);
+
+    const cachedEntry = entryCacheByIdx.get(i) || getTranscriptCacheEntry(c.transcriptPath, c.stat);
+    const meta = extractConversationMeta(c.transcriptPath, c.conversationId, {
+      ...options,
+      _annotation: c.annotation,
+      _cacheEntry: cachedEntry,
+      _stat: c.stat,
+    });
     const subInfo = subagentParentMap.get(lowerId) || null;
     results.push({
       ...meta,

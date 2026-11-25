@@ -9,6 +9,53 @@ import { parseTranscriptFull, listConversations } from './transcript-parser.mjs'
 import { getTelemetryReport, evaluateAlerts } from './telemetry.mjs';
 import { resolveTargetSession } from './session-tracker.mjs';
 
+const STATIC_SCAN_TTL_MS = 15_000;
+const MCP_FAST_TTL_MS = 5_000;
+const MAX_STATIC_CACHE_ENTRIES = 32;
+const mcpScanCache = new Map();
+const staticRulesCache = new Map();
+const staticSkillsAgentsCache = new Map();
+const skillFileTokensCache = new Map();
+
+export function clearContextInspectorCache() {
+  mcpScanCache.clear();
+  staticRulesCache.clear();
+  staticSkillsAgentsCache.clear();
+  skillFileTokensCache.clear();
+}
+
+function lruCacheSet(map, key, value, max = MAX_STATIC_CACHE_ENTRIES) {
+  if (map.has(key)) map.delete(key);
+  map.set(key, value);
+  while (map.size > max) {
+    const oldest = map.keys().next().value;
+    if (oldest === undefined) break;
+    map.delete(oldest);
+  }
+}
+
+function safeStatSig(p) {
+  try {
+    const st = fs.statSync(p);
+    return `${st.mtimeMs}:${st.size}`;
+  } catch {
+    return '-';
+  }
+}
+
+function listSubdirsSafe(dir) {
+  try {
+    if (!fs.existsSync(dir)) return [];
+    return fs
+      .readdirSync(dir, { withFileTypes: true })
+      .filter((e) => e.isDirectory())
+      .map((e) => e.name)
+      .sort();
+  } catch {
+    return [];
+  }
+}
+
 function safeReadFile(p) {
   try {
     if (fs.existsSync(p) && fs.statSync(p).isFile()) {
@@ -26,13 +73,61 @@ function fmtSizeK(tokens) {
   return `${tokens}`;
 }
 
+function getCachedSkillFileMetrics(skillFile) {
+  try {
+    const st = fs.statSync(skillFile);
+    const key = path.resolve(skillFile).toLowerCase();
+    const cached = skillFileTokensCache.get(key);
+    if (cached && cached.mtimeMs === st.mtimeMs && cached.size === st.size) {
+      return cached;
+    }
+    const fullText = fs.readFileSync(skillFile, 'utf8');
+    const entry = {
+      mtimeMs: st.mtimeMs,
+      size: st.size,
+      tokens: estimateTokens(fullText),
+      bytes: Buffer.byteLength(fullText, 'utf8'),
+    };
+    lruCacheSet(skillFileTokensCache, key, entry, 128);
+    return entry;
+  } catch {
+    return { mtimeMs: 0, size: 0, tokens: 0, bytes: 0 };
+  }
+}
+
 /**
  * Scan documented MCP schema cache directories (<appDataDir>/mcp/<server>/*.json)
  * plus configured MCP servers for eager vs deferred breakdown.
+ * Short-circuits for 5s (fast memory TTL, 0 fs syscalls) unless options.force is true,
+ * and caches for 15s keyed by directory/config mtimes.
  */
 function scanMcpTools(options = {}) {
   const appDir = getAppDataDir(options);
+  const configRoot = getConfigRoot(options);
   const mcpDir = path.join(appDir, 'mcp');
+  const pluginsDir = path.join(configRoot, 'plugins');
+
+  const cacheKey = `${path.resolve(appDir).toLowerCase()}|${path.resolve(configRoot).toLowerCase()}`;
+  const now = Date.now();
+  const cached = mcpScanCache.get(cacheKey);
+  if (!options.force && cached && now < cached.fastExpiresAt) {
+    return cached.value;
+  }
+
+  const mcpSubdirs = listSubdirsSafe(mcpDir);
+  const pluginSubdirs = listSubdirsSafe(pluginsDir);
+  const fpParts = [
+    safeStatSig(mcpDir),
+    ...mcpSubdirs.map((d) => `${d}:${safeStatSig(path.join(mcpDir, d))}`),
+    safeStatSig(pluginsDir),
+    ...pluginSubdirs.map((d) => `${d}:${safeStatSig(path.join(pluginsDir, d, 'mcp_config.json'))}`),
+  ];
+  const fingerprint = fpParts.join('|');
+  if (!options.force && cached && now < cached.expiresAt && cached.fingerprint === fingerprint) {
+    cached.fastExpiresAt = now + MCP_FAST_TTL_MS;
+    return cached.value;
+  }
+
   const servers = [];
   let deferredTokens = 0;
   let deferredCount = 0;
@@ -40,15 +135,7 @@ function scanMcpTools(options = {}) {
   let eagerCount = 0;
 
   if (fs.existsSync(mcpDir)) {
-    let entries = [];
-    try {
-      entries = fs.readdirSync(mcpDir, { withFileTypes: true });
-    } catch {
-      entries = [];
-    }
-    for (const entry of entries) {
-      if (!entry.isDirectory()) continue;
-      const serverName = entry.name;
+    for (const serverName of mcpSubdirs) {
       const serverPath = path.join(mcpDir, serverName);
       let files = [];
       try {
@@ -80,7 +167,6 @@ function scanMcpTools(options = {}) {
         });
       }
       tools.sort((a, b) => b.tokens - a.tokens);
-      // Lazy-loaded schemas live in <appDataDir>/mcp/<server>/*.json
       deferredTokens += sTokens;
       deferredCount += files.length;
       servers.push({
@@ -101,92 +187,112 @@ function scanMcpTools(options = {}) {
     }
   }
 
-  // Also account for plugin's own slim 5 model-visible tools (~600t) if deployed or active
-  const configRoot = getConfigRoot(options);
-  const pluginsDir = path.join(configRoot, 'plugins');
   if (fs.existsSync(pluginsDir)) {
-    try {
-      for (const pe of fs.readdirSync(pluginsDir, { withFileTypes: true })) {
-        if (!pe.isDirectory()) continue;
-        const mcpCfgPath = path.join(pluginsDir, pe.name, 'mcp_config.json');
-        if (!fs.existsSync(mcpCfgPath)) continue;
-        try {
-          const cfg = JSON.parse(fs.readFileSync(mcpCfgPath, 'utf8'));
-          for (const srvKey of Object.keys(cfg.mcpServers || {})) {
-            const fullKey = `${pe.name}_${srvKey}`;
-            if (servers.some((s) => s.name === fullKey || s.name === srvKey)) continue;
-            if (pe.name === 'context-cache' || srvKey === 'context-cache-server') {
-              const tok = 600;
-              eagerTokens += tok;
-              eagerCount += 5;
-              const ownTools = [
-                { name: 'ctx_open_monitor', deferred: false, tokens: 140, size: fmtSizeK(140) },
-                { name: 'ctx_brief', deferred: false, tokens: 110, size: fmtSizeK(110) },
-                { name: 'ctx_save', deferred: false, tokens: 130, size: fmtSizeK(130) },
-                { name: 'ctx_search', deferred: false, tokens: 110, size: fmtSizeK(110) },
-                { name: 'ctx_doctor', deferred: false, tokens: 110, size: fmtSizeK(110) },
-              ];
-              servers.push({
-                name: srvKey,
-                kind: 'mcp_server',
-                mode: 'eager',
-                sourceLayer: 'plugin',
-                filePath: mcpCfgPath,
-                displayPath: formatDisplayPath(mcpCfgPath),
-                toolCount: 5,
-                deferredCount: 0,
-                eagerCount: 5,
-                tokens: tok,
-                meta: '5 model + 10 app-only',
-                size: fmtSizeK(tok),
-                tools: ownTools,
-              });
-            } else {
-              const tok = 900;
-              eagerTokens += tok;
-              eagerCount += 4;
-              servers.push({
-                name: fullKey,
-                kind: 'mcp_server',
-                mode: 'eager',
-                sourceLayer: 'plugin',
-                filePath: mcpCfgPath,
-                displayPath: formatDisplayPath(mcpCfgPath),
-                toolCount: 4,
-                deferredCount: 0,
-                eagerCount: 4,
-                tokens: tok,
-                meta: 'configured MCP server',
-                size: fmtSizeK(tok),
-                tools: [],
-              });
-            }
+    for (const peName of pluginSubdirs) {
+      const mcpCfgPath = path.join(pluginsDir, peName, 'mcp_config.json');
+      if (!fs.existsSync(mcpCfgPath)) continue;
+      try {
+        const cfg = JSON.parse(fs.readFileSync(mcpCfgPath, 'utf8'));
+        for (const srvKey of Object.keys(cfg.mcpServers || {})) {
+          const fullKey = `${peName}_${srvKey}`;
+          if (servers.some((s) => s.name === fullKey || s.name === srvKey)) continue;
+          if (peName === 'context-cache' || srvKey === 'context-cache-server') {
+            const tok = 600;
+            eagerTokens += tok;
+            eagerCount += 5;
+            const ownTools = [
+              { name: 'ctx_open_monitor', deferred: false, tokens: 140, size: fmtSizeK(140) },
+              { name: 'ctx_brief', deferred: false, tokens: 110, size: fmtSizeK(110) },
+              { name: 'ctx_save', deferred: false, tokens: 130, size: fmtSizeK(130) },
+              { name: 'ctx_search', deferred: false, tokens: 110, size: fmtSizeK(110) },
+              { name: 'ctx_doctor', deferred: false, tokens: 110, size: fmtSizeK(110) },
+            ];
+            servers.push({
+              name: srvKey,
+              kind: 'mcp_server',
+              mode: 'eager',
+              sourceLayer: 'plugin',
+              filePath: mcpCfgPath,
+              displayPath: formatDisplayPath(mcpCfgPath),
+              toolCount: 5,
+              deferredCount: 0,
+              eagerCount: 5,
+              tokens: tok,
+              meta: '5 model + 10 app-only',
+              size: fmtSizeK(tok),
+              tools: ownTools,
+            });
+          } else {
+            const tok = 900;
+            eagerTokens += tok;
+            eagerCount += 4;
+            servers.push({
+              name: fullKey,
+              kind: 'mcp_server',
+              mode: 'eager',
+              sourceLayer: 'plugin',
+              filePath: mcpCfgPath,
+              displayPath: formatDisplayPath(mcpCfgPath),
+              toolCount: 4,
+              deferredCount: 0,
+              eagerCount: 4,
+              tokens: tok,
+              meta: 'configured MCP server',
+              size: fmtSizeK(tok),
+              tools: [],
+            });
           }
-        } catch {
-          // ignore malformed mcp_config
         }
+      } catch {
+        // ignore malformed mcp_config
       }
-    } catch {
-      // ignore
     }
   }
 
   servers.sort((a, b) => b.tokens - a.tokens);
 
-  return {
+  const result = {
     servers,
     eagerTokens,
     eagerCount,
     deferredTokens,
     deferredCount,
   };
+  lruCacheSet(mcpScanCache, cacheKey, {
+    fingerprint,
+    value: result,
+    fastExpiresAt: now + MCP_FAST_TTL_MS,
+    expiresAt: now + STATIC_SCAN_TTL_MS,
+  });
+  return result;
 }
 
 /**
- * Scan active Rules & Memory files across global plugins, global rules, and workspace root.
+ * Scan static Rules files across global plugins, global rules, and workspace root (cached 15s by mtime).
  */
-function scanRulesAndMemory(workspaceDir, options = {}) {
+function scanStaticRuleFiles(workspaceDir, options = {}) {
   const configRoot = getConfigRoot(options);
+  const pluginsDir = path.join(configRoot, 'plugins');
+  const globalRulesDir = path.join(configRoot, 'rules');
+  const wsNorm = workspaceDir ? path.resolve(workspaceDir) : '';
+  const cacheKey = `${path.resolve(configRoot).toLowerCase()}|${wsNorm.toLowerCase()}`;
+
+  const pluginSubdirs = listSubdirsSafe(pluginsDir);
+  const fpParts = [
+    safeStatSig(pluginsDir),
+    ...pluginSubdirs.map((d) => `${d}:${safeStatSig(path.join(pluginsDir, d, 'rules'))}`),
+    safeStatSig(globalRulesDir),
+    wsNorm ? safeStatSig(path.join(wsNorm, 'AGENTS.md')) : '-',
+    wsNorm ? safeStatSig(path.join(wsNorm, 'GEMINI.md')) : '-',
+    wsNorm ? safeStatSig(path.join(wsNorm, '.agents', 'rules')) : '-',
+  ];
+  const fingerprint = fpParts.join('|');
+  const now = Date.now();
+  const cached = staticRulesCache.get(cacheKey);
+  if (cached && now < cached.expiresAt && cached.fingerprint === fingerprint) {
+    return cached.value;
+  }
+
   const files = [];
   const seen = new Set();
 
@@ -212,23 +318,18 @@ function scanRulesAndMemory(workspaceDir, options = {}) {
     });
   };
 
-  // Global plugin rules
-  const pluginsDir = path.join(configRoot, 'plugins');
-  if (fs.existsSync(pluginsDir)) {
+  for (const peName of pluginSubdirs) {
+    const rDir = path.join(pluginsDir, peName, 'rules');
+    if (!fs.existsSync(rDir)) continue;
     try {
-      for (const pe of fs.readdirSync(pluginsDir, { withFileTypes: true })) {
-        if (!pe.isDirectory()) continue;
-        const rDir = path.join(pluginsDir, pe.name, 'rules');
-        if (!fs.existsSync(rDir)) continue;
-        for (const f of fs.readdirSync(rDir)) {
-          if (f.endsWith('.md')) {
-            addFile(
-              path.join(rDir, f),
-              `${pe.name}/rules/${f}`,
-              pe.name === 'context-cache' ? 'plugin slim rule' : 'global plugin rule',
-              'plugin'
-            );
-          }
+      for (const f of fs.readdirSync(rDir)) {
+        if (f.endsWith('.md')) {
+          addFile(
+            path.join(rDir, f),
+            `${peName}/rules/${f}`,
+            peName === 'context-cache' ? 'plugin slim rule' : 'global plugin rule',
+            'plugin'
+          );
         }
       }
     } catch {
@@ -236,8 +337,6 @@ function scanRulesAndMemory(workspaceDir, options = {}) {
     }
   }
 
-  // Global standalone rules
-  const globalRulesDir = path.join(configRoot, 'rules');
   if (fs.existsSync(globalRulesDir)) {
     try {
       for (const f of fs.readdirSync(globalRulesDir)) {
@@ -250,13 +349,12 @@ function scanRulesAndMemory(workspaceDir, options = {}) {
     }
   }
 
-  // Workspace rules (AGENTS.md, GEMINI.md, .agents/rules/*.md)
-  if (workspaceDir && fs.existsSync(workspaceDir)) {
-    const baseName = path.basename(workspaceDir);
+  if (wsNorm && fs.existsSync(wsNorm)) {
+    const baseName = path.basename(wsNorm);
     for (const fname of ['AGENTS.md', 'GEMINI.md']) {
-      addFile(path.join(workspaceDir, fname), `${baseName}/${fname}`, 'workspace rule', 'workspace');
+      addFile(path.join(wsNorm, fname), `${baseName}/${fname}`, 'workspace rule', 'workspace');
     }
-    const wsRulesDir = path.join(workspaceDir, '.agents', 'rules');
+    const wsRulesDir = path.join(wsNorm, '.agents', 'rules');
     if (fs.existsSync(wsRulesDir)) {
       try {
         for (const f of fs.readdirSync(wsRulesDir)) {
@@ -269,6 +367,16 @@ function scanRulesAndMemory(workspaceDir, options = {}) {
       }
     }
   }
+
+  lruCacheSet(staticRulesCache, cacheKey, { fingerprint, value: files, expiresAt: now + STATIC_SCAN_TTL_MS });
+  return files;
+}
+
+/**
+ * Scan active Rules & Memory files across global plugins, global rules, and workspace root.
+ */
+function scanRulesAndMemory(workspaceDir, options = {}) {
+  const files = [...scanStaticRuleFiles(workspaceDir, options)];
 
   // Active SessionStart Compact Brief from vault
   const brief = buildCompactBrief({ projectDir: workspaceDir }, options);
@@ -293,53 +401,45 @@ function scanRulesAndMemory(workspaceDir, options = {}) {
   return { files, totalTokens };
 }
 
-/**
- * Scan available skills (metadata summaries) + detect skills loaded in full via read_file in transcript.
- */
-function scanSkillsAndAgents(steps, workspaceDir, options = {}) {
+function scanStaticSkillsAndAgents(workspaceDir, options = {}) {
   const configRoot = getConfigRoot(options);
   const appDir = getAppDataDir(options);
+  const pluginsDir = path.join(configRoot, 'plugins');
+  const wsNorm = workspaceDir ? path.resolve(workspaceDir) : '';
+  const cacheKey = `${path.resolve(appDir).toLowerCase()}|${path.resolve(configRoot).toLowerCase()}|${wsNorm.toLowerCase()}`;
 
-  // Detect SKILL.md paths read during transcript
-  const loadedSkillPaths = new Set();
-  for (const s of steps) {
-    for (const tc of s.toolCalls) {
-      const name = String(tc?.name || '').toLowerCase();
-      if (name === 'read_file' || name === 'view_file') {
-        const p = String(tc?.args?.Path || tc?.args?.path || tc?.args?.AbsolutePath || '').replace(/^"|"$/g, '');
-        if (/skill\.md$/i.test(p)) {
-          loadedSkillPaths.add(path.resolve(p).toLowerCase());
-        }
-      }
-    }
-  }
-
+  const pluginSubdirs = listSubdirsSafe(pluginsDir);
   const skillRoots = [
     { dir: path.join(appDir, 'builtin', 'skills'), sourceLayer: 'builtin' },
     { dir: path.join(configRoot, 'skills'), sourceLayer: 'global' },
+    ...pluginSubdirs.map((peName) => ({ dir: path.join(pluginsDir, peName, 'skills'), sourceLayer: 'plugin' })),
   ];
-  const pluginsDir = path.join(configRoot, 'plugins');
-  if (fs.existsSync(pluginsDir)) {
-    try {
-      for (const pe of fs.readdirSync(pluginsDir, { withFileTypes: true })) {
-        if (pe.isDirectory()) {
-          skillRoots.push({ dir: path.join(pluginsDir, pe.name, 'skills'), sourceLayer: 'plugin' });
-        }
-      }
-    } catch {
-      // ignore
-    }
-  }
-  if (workspaceDir) {
-    skillRoots.push({ dir: path.join(workspaceDir, '.agents', 'skills'), sourceLayer: 'workspace' });
+  if (wsNorm) {
+    skillRoots.push({ dir: path.join(wsNorm, '.agents', 'skills'), sourceLayer: 'workspace' });
   }
 
-  const skills = [];
+  const agentDirs = [
+    { dir: path.join(configRoot, 'agents'), sourceLayer: 'global' },
+    ...pluginSubdirs.map((peName) => ({ dir: path.join(pluginsDir, peName, 'agents'), sourceLayer: 'plugin' })),
+  ];
+  if (wsNorm) {
+    agentDirs.push({ dir: path.join(wsNorm, '.agents', 'agents'), sourceLayer: 'workspace' });
+  }
+
+  const fingerprint = [
+    safeStatSig(pluginsDir),
+    ...skillRoots.map((r) => safeStatSig(r.dir)),
+    ...agentDirs.map((r) => safeStatSig(r.dir)),
+  ].join('|');
+
+  const now = Date.now();
+  const cached = staticSkillsAgentsCache.get(cacheKey);
+  if (cached && now < cached.expiresAt && cached.fingerprint === fingerprint) {
+    return cached.value;
+  }
+
+  const discoveredSkills = [];
   const seenSkillNames = new Set();
-  let skillMetadataTokens = 0;
-  let loadedSkillsTokens = 0;
-  let loadedSkillsCount = 0;
-
   for (const { dir: root, sourceLayer } of skillRoots) {
     if (!fs.existsSync(root)) continue;
     let entries = [];
@@ -354,45 +454,13 @@ function scanSkillsAndAgents(steps, workspaceDir, options = {}) {
       if (!fs.existsSync(skillFile)) continue;
       if (seenSkillNames.has(e.name)) continue;
       seenSkillNames.add(e.name);
-
-      // Summary frontmatter costs ~45 tokens per skill in system prompt
-      skillMetadataTokens += 45;
-      const isLoaded = loadedSkillPaths.has(path.resolve(skillFile).toLowerCase());
-      if (isLoaded) {
-        const fullText = safeReadFile(skillFile);
-        const tok = estimateTokens(fullText);
-        loadedSkillsTokens += tok;
-        loadedSkillsCount++;
-        skills.push({
-          name: e.name,
-          kind: 'skill',
-          sourceLayer,
-          filePath: skillFile,
-          displayPath: formatDisplayPath(skillFile),
-          meta: 'skill (loaded)',
-          tokens: tok,
-          size: fmtSizeK(tok),
-          bytes: Buffer.byteLength(fullText, 'utf8'),
-        });
-      }
+      discoveredSkills.push({
+        name: e.name,
+        sourceLayer,
+        skillFile,
+        normPath: path.resolve(skillFile).toLowerCase(),
+      });
     }
-  }
-
-  // Custom agents
-  const agentDirs = [{ dir: path.join(configRoot, 'agents'), sourceLayer: 'global' }];
-  if (fs.existsSync(pluginsDir)) {
-    try {
-      for (const pe of fs.readdirSync(pluginsDir, { withFileTypes: true })) {
-        if (pe.isDirectory()) {
-          agentDirs.push({ dir: path.join(pluginsDir, pe.name, 'agents'), sourceLayer: 'plugin' });
-        }
-      }
-    } catch {
-      // ignore
-    }
-  }
-  if (workspaceDir) {
-    agentDirs.push({ dir: path.join(workspaceDir, '.agents', 'agents'), sourceLayer: 'workspace' });
   }
 
   const agents = [];
@@ -404,7 +472,6 @@ function scanSkillsAndAgents(steps, workspaceDir, options = {}) {
         if (!f.endsWith('.md')) continue;
         const fullPath = path.join(dir, f);
         const text = safeReadFile(fullPath);
-        // Only name+description are injected into system prompt (~80-220t)
         const tok = Math.min(250, Math.max(60, Math.round(estimateTokens(text) * 0.25)));
         agentTokens += tok;
         agents.push({
@@ -424,13 +491,68 @@ function scanSkillsAndAgents(steps, workspaceDir, options = {}) {
     }
   }
 
-  return {
-    skillsTotalTokens: skillMetadataTokens + loadedSkillsTokens,
-    totalDiscoveredSkills: seenSkillNames.size,
-    loadedSkillsCount,
-    loadedSkills: skills.sort((a, b) => b.tokens - a.tokens),
+  const result = {
+    discoveredSkills,
+    totalDiscoveredSkills: discoveredSkills.length,
+    skillMetadataTokens: discoveredSkills.length * 45,
     agents,
     agentTokens,
+  };
+  lruCacheSet(staticSkillsAgentsCache, cacheKey, { fingerprint, value: result, expiresAt: now + STATIC_SCAN_TTL_MS });
+  return result;
+}
+
+/**
+ * Scan available skills (metadata summaries) + detect skills loaded in full via read_file in transcript.
+ */
+function scanSkillsAndAgents(steps, workspaceDir, options = {}) {
+  const staticData = scanStaticSkillsAndAgents(workspaceDir, options);
+
+  // Detect SKILL.md paths read during transcript
+  const loadedSkillPaths = new Set();
+  for (const s of steps) {
+    for (const tc of s.toolCalls) {
+      const name = String(tc?.name || '').toLowerCase();
+      if (name === 'read_file' || name === 'view_file') {
+        const p = String(tc?.args?.Path || tc?.args?.path || tc?.args?.AbsolutePath || '').replace(/^"|"$/g, '');
+        if (/skill\.md$/i.test(p)) {
+          loadedSkillPaths.add(path.resolve(p).toLowerCase());
+        }
+      }
+    }
+  }
+
+  const skills = [];
+  let loadedSkillsTokens = 0;
+  let loadedSkillsCount = 0;
+
+  if (loadedSkillPaths.size > 0) {
+    for (const sk of staticData.discoveredSkills) {
+      if (!loadedSkillPaths.has(sk.normPath)) continue;
+      const metrics = getCachedSkillFileMetrics(sk.skillFile);
+      loadedSkillsTokens += metrics.tokens;
+      loadedSkillsCount++;
+      skills.push({
+        name: sk.name,
+        kind: 'skill',
+        sourceLayer: sk.sourceLayer,
+        filePath: sk.skillFile,
+        displayPath: formatDisplayPath(sk.skillFile),
+        meta: 'skill (loaded)',
+        tokens: metrics.tokens,
+        size: fmtSizeK(metrics.tokens),
+        bytes: metrics.bytes,
+      });
+    }
+  }
+
+  return {
+    skillsTotalTokens: staticData.skillMetadataTokens + loadedSkillsTokens,
+    totalDiscoveredSkills: staticData.totalDiscoveredSkills,
+    loadedSkillsCount,
+    loadedSkills: skills.sort((a, b) => b.tokens - a.tokens),
+    agents: staticData.agents,
+    agentTokens: staticData.agentTokens,
   };
 }
 
