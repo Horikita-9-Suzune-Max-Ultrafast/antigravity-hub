@@ -15,6 +15,7 @@ import {
   getDocumentTheme,
 } from '../src/ui/core/mcp-app-client.mjs';
 import { createRpcClient } from '../src/ui/core/rpc.mjs';
+import { createResizeScheduler } from '../src/ui/core/dom.mjs';
 import { createUiState, MINI_BAR_DEFAULT_ORDER } from '../src/ui/core/store.mjs';
 import {
   ICON_SPRITE_HTML,
@@ -592,4 +593,59 @@ test('esbuild bundle gate: new modular architecture bundles with 0 zod bytes and
     `Expected full dashboard.html <= ${MAX_UI_BUNDLE_BYTES} B (475 KiB), got ${built.byteSize} B (${(built.byteSize / 1024).toFixed(1)} KiB)`
   );
   assert.ok(built.cssBytes < 80_000, `Expected minified Radix CSS < 80 KiB, got ${built.cssBytes} B`);
+});
+
+test('v1.6.0 wiring regression gate: telemetry 2-arg handoff, resizeScheduler callback, DOM IDs, filter state keys, and layered Orb host', async () => {
+  // 1. createResizeScheduler(initialCb) must execute callback on schedule()
+  const prevRaf = globalThis.requestAnimationFrame;
+  const prevCancel = globalThis.cancelAnimationFrame;
+  let ran = 0;
+  globalThis.requestAnimationFrame = (fn) => {
+    fn();
+    return 1;
+  };
+  globalThis.cancelAnimationFrame = () => {};
+  try {
+    const sched = createResizeScheduler(() => {
+      ran += 1;
+    });
+    sched.schedule();
+    assert.equal(ran, 1, 'createResizeScheduler(cb) must register and invoke initial callback');
+  } finally {
+    globalThis.requestAnimationFrame = prevRaf;
+    globalThis.cancelAnimationFrame = prevCancel;
+  }
+
+  // 2. app.mjs must forward both (ctx, metrics) args to nativeChrome.updateNativeTitleBarTelemetry
+  const appSrc = fs.readFileSync(path.join(ROOT_DIR, 'src/ui/app.mjs'), 'utf8');
+  assert.match(
+    appSrc,
+    /onTelemetryUpdate\s*:\s*\(\s*ctx\s*,\s*metrics\s*\)\s*=>/,
+    'app.mjs onTelemetryUpdate must forward both (ctx, metrics)'
+  );
+  assert.match(
+    appSrc,
+    /updateNativeTitleBarTelemetry\s*\(\s*ctx\s*,\s*metrics\s*\)/,
+    'app.mjs must call updateNativeTitleBarTelemetry(ctx, metrics)'
+  );
+
+  // 3. events.mjs must align filter state keys with store.mjs and real DOM IDs in index.html
+  const eventsSrc = fs.readFileSync(path.join(ROOT_DIR, 'src/ui/core/events.mjs'), 'utf8');
+  const htmlSrc = fs.readFileSync(path.join(ROOT_DIR, 'src/ui/index.html'), 'utf8');
+  assert.equal(eventsSrc.includes('state.callsModelFilter'), false, 'events.mjs must use state.modelFilter');
+  assert.equal(eventsSrc.includes('state.callsAgentFilter'), false, 'events.mjs must use state.agentFilter');
+  assert.equal(eventsSrc.includes('state.vaultKindFilter'), false, 'events.mjs must use state.vaultKind');
+  for (const id of ['quickPopoutBtn', 'launcherOpenPopoutBtn', 'launcherUseEmbeddedBtn', 'launcherClosePopoutBtn']) {
+    assert.ok(htmlSrc.includes(`id="${id}"`), `index.html missing #${id}`);
+    assert.ok(eventsSrc.includes(`'${id}'`), `events.mjs missing binding for #${id}`);
+  }
+  assert.ok(eventsSrc.includes('[data-acc-idx]'), 'events.mjs must handle inventory accordion [data-acc-idx]');
+  assert.ok(eventsSrc.includes('[data-inv-group][data-inv-item]'), 'events.mjs must handle [data-inv-group][data-inv-item]');
+  assert.ok(eventsSrc.includes('[data-alert-idx]'), 'events.mjs must handle [data-alert-idx]');
+
+  // 4. Win32 host must implement per-pixel alpha OrbOverlayForm + per-window DPI + orb:state telemetry
+  const hostSrc = fs.readFileSync(path.join(ROOT_DIR, 'src/core/win-floating-host.ps1'), 'utf8');
+  for (const token of ['class OrbOverlayForm', 'UpdateLayeredWindow', 'GetDpiForWindow', 'orb:state:']) {
+    assert.ok(hostSrc.includes(token), `win-floating-host.ps1 missing ${token}`);
+  }
 });

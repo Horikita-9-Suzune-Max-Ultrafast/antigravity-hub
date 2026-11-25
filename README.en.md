@@ -2,9 +2,9 @@
 
 [简体中文](./README.md) | **English**
 
-**Modular Native Control Center (MCP App) for Google Antigravity: Context Cache & Monitor, Ecosystem & Harness Governance, Local Wallpaper Engine, and Zero-Dep Chinese Localization**
+**Modular Native Control Center (MCP App) for Google Antigravity: Context Cache & Usage Stats, Local Code Review, Ecosystem & Harness Governance, Local Wallpaper Engine, and Zero-Dep Chinese Localization**
 
-[![Version: v1.5.5](https://img.shields.io/badge/Version-v1.5.5-0ea5e9.svg)](https://github.com/Horikita-9-Suzune-Max-Ultrafast/antigravity-hub/releases/tag/v1.5.5)
+[![Version: v1.6.0](https://img.shields.io/badge/Version-v1.6.0-0ea5e9.svg)](https://github.com/Horikita-9-Suzune-Max-Ultrafast/antigravity-hub/releases/tag/v1.6.0)
 [![Antigravity 2.35.1 Update Verified](https://img.shields.io/badge/Antigravity%202.35.1-Update%20Verified-10b981.svg)](#battle-tested-official-update-survival-proof)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 [![Node.js >= 24](https://img.shields.io/badge/Node.js-%3E%3D24-339933.svg)](https://nodejs.org/)
@@ -16,9 +16,9 @@
 
 ## Quick Navigation
 
-- [Four Core Modules at a Glance](#four-core-modules-at-a-glance)
+- [Five Core Modules at a Glance](#five-core-modules-at-a-glance)
 - [Battle-Tested: Official Update Survival Proof](#battle-tested-official-update-survival-proof)
-- [What's New in v1.5.5](#whats-new-in-v155)
+- [What's New in v1.6.0](#whats-new-in-v160)
 - [Quick Start (3-Step Prebuilt Bundle)](#quick-start)
 - [Key Features](#key-features)
 - [Architecture & Design Principles](#architecture--design-principles)
@@ -29,16 +29,17 @@
 
 ---
 
-## Four Core Modules at a Glance
+## Five Core Modules at a Glance
 
-**Antigravity Hub** ships with a responsive dual-layout shell—a fixed `56px` left icon rail on wide viewports (`> 680px`) that collapses into a compact top module bar in narrow side panes (`<= 680px`)—with **instant zh-CN / English language switching** without reloading.
+**Antigravity Hub** ships with a responsive dual-layout shell—a fixed `56px` left icon rail on wide viewports (`> 680px`) that collapses into a compact 5-module top bar in narrow side panes (`<= 680px`)—with **instant zh-CN / English language switching** without reloading.
 
 | Module | Pain Point Solved | Core Capabilities |
 | :--- | :--- | :--- |
-| **1. Context Cache & Monitor** | Slow turns, unexplained prefix-cache drops, opaque context bloat, repeating background in every new chat | 6-category context breakdown, **click-through Asset Inspector Modal**, **one-click Alert jump-to-step**, main/sub-agent TPS & cache-drop attribution, **native frameless floating window & 5-chip Radix Mini Bar**, Gemini KV timer, **3-source Handoff Capsule (3 budget tiers)**, safe restart |
-| **2. Ecosystem & Harness Governance** | Too many plugins/MCPs bloating every session; manual toggling across workflows risks disabling essentials | Effective Harness stack (`P1 Workspace` → `P4 Built-in`), offline 3-in-1 linter (MCP bloat / Skill conflicts & broken links / secret audit) with **tiered remediation**, multi-signal classifier & **interactive scenario profiles**, pinned core plugins, immutable config snapshots & CLI rollback |
-| **3. Local Wallpaper Engine**<br>`Appearance & Wallpaper` | Plain default UI without risking fragile ASAR repacking for visual customization | Zero-new-ASAR hot reload, external local wallpaper library (15 MiB breaker) + **100% read-only local folder scanning**, custom rotation pools with dual-buffer crossfade, **live slider tuning (opacity/blur/saturation/scrim/glass)**, light/dark theme bindings, instant & CLI emergency off |
-| **4. Antigravity Localization** | English-only native menus and UI; fear of third-party patches translating code or breaking updates | Pure Node.js streaming ASAR patcher (maintains 4 MiB SHA-256 integrity), **739+ curated entries** (menus + dynamic UI + regex patterns), 3-layer hot-reloaded external dictionary, **physical immunity zones** (code/terminal/paths), clean original backup guard & one-click restore |
+| **1. Context Cache & Monitor** | Slow turns, unexplained prefix-cache drops, opaque context bloat, no cross-session cumulative spend view | 6-category context breakdown, **Cross-Session Cumulative Usage Stats (`Today/24h/7d/30d/All` + CNY/USD)**, click-through Asset Inspector, one-click Alert jump-to-step, main/sub-agent Decode TPS & TTFT, **Win32 120fps per-pixel alpha Orb with shared-anchor morphing Mini Bar**, unified pill Gemini KV timer, 3-source Handoff Capsule |
+| **2. Local Code Review** | Missing hardcoded secrets/merge conflicts/empty catches before commit, tedious manual lint/test, AI review polluting main chat context | Zero-dep Git diff parser (`uncommitted / staged / last_commit / branch`), **8 millisecond L1 static security & quality rules** (added lines only), whitelisted native project gates (`lint/typecheck/test/ruff/mypy/cargo/go`), **L2 isolated subagent review & one-click fix prompt**, persistent ignores & 20-report history |
+| **3. Ecosystem & Harness Governance** | Too many plugins/MCPs bloating every session; manual toggling across workflows risks disabling essentials | Effective Harness stack (`P1 Workspace` → `P4 Built-in`), **4-Pillar continuous health scoring**, offline 3-in-1 linter with tiered remediation, multi-signal classifier & interactive scenario profiles, pinned core plugins, immutable snapshots & CLI rollback |
+| **4. Local Wallpaper Engine**<br>`Appearance & Wallpaper` | Plain default UI without risking fragile ASAR repacking for visual customization | Zero-new-ASAR hot reload, external local wallpaper library (15 MiB breaker) + 100% read-only local folder scanning, custom rotation pools with dual-buffer crossfade, live slider tuning, light/dark theme bindings, instant & CLI emergency off |
+| **5. Antigravity Localization** | English-only native menus and UI; fear of third-party patches translating code or breaking updates | Pure Node.js streaming ASAR patcher (maintains 4 MiB SHA-256 integrity), 739+ curated entries, 3-layer hot-reloaded external dictionary, physical immunity zones (code/terminal/paths), true `app.asar` version anti-downgrade guard & one-click restore |
 
 ---
 
@@ -61,13 +62,24 @@ We intentionally ran a live, in-place official upgrade to **Antigravity `2.35.1`
 
 ---
 
-## What's New in v1.5.5
+## What's New in v1.6.0
 
-- **GPU 99% Spike Elimination & Instant Popout Close Sync (v1.5.5)**: Removed all CSS `backdrop-filter` rules, infinite 60fps animations, forced `offsetWidth` reflows, and 5s window-bounds polling; gated the 1s KV countdown timer to active countdowns only, added `lowPowerMode` for wallpapers, and slimmed the single-file UI bundle to `~706 KiB` (`< 750 KiB`). Closing the floating window or exiting the WebView2 host flips to offline state immediately (`0ms`) and releases the ephemeral port.
-- **Viewport-Clamped Floating Menus, Responsive Titlebar & Dynamic Calls Table (v1.5.5)**: All select dropdowns and KV help popovers now use viewport `position: fixed` clamping (re-clamping on resize, auto-closing on workspace scroll, and closing on `Escape`). The expanded native titlebar degrades gracefully (`model -> shortModel -> hide model -> hide TPS`) while keeping `Antigravity Hub` uncrushed. Live Calls uses boundary-fixed dynamic column allocation (protecting numeric columns from premature `...` ellipsis, elastically shortening model labels, and falling back cleanly to 2-row cards on narrow widths) and caps initial rows to 120 with a one-click **Show all** toggle.
-- **Native SQLite Nanosecond TTFT & Decode TPS Engine (v1.5.5)**: Added zero-dep read-only `native-step-metrics.mjs` (Node 24 built-in `node:sqlite` + pure-JS Protobuf wire reader) to extract nanosecond per-step TTFT, pure decode duration, and self-verified exact thinking/content token splits directly from Antigravity's local conversation DB. Table rows and anatomy drawers display **`TTFT / Duration`** alongside pure Decode TPS (`—` for `< 1s` decode windows or `< 15 tok` outputs). When the native DB is absent or changes schema, it fails open to **Plan A tool-execution stripping** (`hybrid_tool_split`), removing local tool execution time (`npm test`, `git push`) and eliminating spikes/false lows; added `doctor --repair --resync-telemetry` for lossless historical recomputation and compaction.
-- **True `app.asar` Version Detection & Anti-Downgrade Guard (v1.5.5)**: Localization now prioritizes `package.json` inside `app.asar` over Electron's version file (preserving `electronVersion` and backward-compatible legacy metadata so patched users never get false update alerts). Both apply and restore paths validate `.bak` versions and lock stale backups or already-clean `app.asar` files to prevent accidental downgrade.
-- **Atomic SQLite WAL Rebuild & Backend Security Hardening (v1.5.5)**: `rebuildIndex()` now executes `DELETE FROM` inside `BEGIN IMMEDIATE ... COMMIT` (eliminating empty-DB race windows under concurrent polling), `doctor` displays deduplicated vs. raw call counts (`dbCalls/truthUniqueCalls (raw)`), `scanMcpTools()` adds a 5s fast-TTL memory short-circuit, and popout HTTP token verification uses constant-time `crypto.timingSafeEqual`.
+- **New 5th Top-Level Module: Local Code Review (v1.6.0)**: Zero-dependency Git diff parser (`uncommitted / staged / last_commit / branch`, auto-folding lockfiles/dist/binaries); 8 millisecond L1 static security & quality rules (scanning added lines only); whitelisted native project gate detection & manual runner (`lint / typecheck / test / ruff / mypy / cargo / go vet`); L2 isolated subagent deep-review prompt builder, JSON report import, persistent ignores, 20-report history, and checkbox-driven targeted fix instructions.
+- **Cross-Session Cumulative Usage Stats Tab (v1.6.0)**: Added a **Stats** tab (`Context / Calls / Stats / Vault`) backed by SQLite aggregation over all historical calls with `Today / 24h / 7d / 30d / All` time ranges and model filtering; displays cumulative Tokens (input / output / cache breakdown), total requests, timezone-aware `¥ CNY` / `$ USD` cost toggle, cache hit rate progress bar, weighted Decode TPS & average TTFT, and per-model breakdown.
+- **Win32 Native 120fps Per-Pixel Alpha Orb, Shared-Anchor Morphing & Compiled `.exe` Cache (v1.6.0)**: Compiles and caches `floating-host-<hash>.exe` via built-in `.NET 4 csc.exe` (`< 5ms` cache hit); native 60–240Hz DWM drag & resize; minimizes into a crisp `WS_EX_LAYERED` + `UpdateLayeredWindow` 48px anti-aliased circular Orb with soft elevation shadow, live telemetry ring, and native right-click menu; Orb ↔ Mini Bar share one focal anchor with a continuous **220ms `cubic ease-out` Dynamic-Island pill morph & opacity crossfade**, shared width sync, and exact vertical centering across high-DPI scales.
+- **4-Pillar Governance Scoring & Core Engine Performance Overhaul (v1.6.0)**: Unified `ecosystem-inventory.mjs` scanner (honoring plugin enabled state and splitting `eager` vs. `deferred` MCP tokens) with continuous 4-pillar health scoring; incremental byte-offset transcript parsing, 5×→1× Git subprocess convergence, `WeakMap` SQLite prepared-statement cache, and `rev` digest short-circuiting.
+- **Zero-Zod -33% Bundle Diet & Unified Radix Visual System (v1.6.0)**: Replaced heavy SDK + `zod` with a lightweight native SEP-1865 MCP App bridge, slimming the single-file UI from `706 KiB` down to **`475.0 KiB`**; standardized on Radix UI Colors 12-step scales, 4 font sizes, and a unified KV countdown pill with clickable help popover; **86 automated tests passing**.
+
+<details>
+<summary><strong>Previous Highlights (v1.5.5)</strong></summary>
+
+- **GPU 99% Spike Elimination & Instant Popout Close Sync (v1.5.5)**: Removed CSS `backdrop-filter`, infinite animations, forced `offsetWidth` reflows, and 5s bounds polling; gated 1s KV timer and added `lowPowerMode` for wallpapers.
+- **Viewport-Clamped Floating Menus, Responsive Titlebar & Dynamic Calls Table (v1.5.5)**: Upgraded all popovers/menus to viewport `position: fixed` clamping and dynamic Calls table column allocation.
+- **Native SQLite Nanosecond TTFT & Decode TPS Engine (v1.5.5)**: Added zero-dep read-only `native-step-metrics.mjs` extracting nanosecond TTFT, pure decode duration, and exact thinking/content token splits with Plan A fail-open fallback.
+- **True `app.asar` Version Detection & Anti-Downgrade Guard (v1.5.5)**: Prioritizes `app.asar` `package.json` version and validates `.bak` backups on both apply and restore paths.
+- **Atomic SQLite WAL Rebuild & Backend Security Hardening (v1.5.5)**: Transactional `rebuildIndex()` and constant-time `crypto.timingSafeEqual` popout token checks.
+
+</details>
 
 <details>
 <summary><strong>Previous Highlights (v1.5.4)</strong></summary>
@@ -97,16 +109,16 @@ We intentionally ran a live, in-place official upgrade to **Antigravity `2.35.1`
 
 ### Option A: Prebuilt Release Bundle (Recommended, 3 Steps, Zero `npm install`)
 
-1. Download `context-cache-v1.5.5-plugin.zip` (readable `.mjs` source + pre-bundled single-file UI, zero `node_modules`) from [Releases](https://github.com/Horikita-9-Suzune-Max-Ultrafast/antigravity-hub/releases/latest).
+1. Download `context-cache-v1.6.0-plugin.zip` (readable `.mjs` source + pre-bundled single-file UI, zero `node_modules`) from [Releases](https://github.com/Horikita-9-Suzune-Max-Ultrafast/antigravity-hub/releases/latest).
 2. Extract into `~/.gemini/config/plugins/` so `plugin.json` lives at `~/.gemini/config/plugins/context-cache/plugin.json`:
    - **Windows PowerShell**:
      ```powershell
-     Expand-Archive -Path .\context-cache-v1.5.5-plugin.zip -DestinationPath "$env:USERPROFILE\.gemini\config\plugins" -Force
+     Expand-Archive -Path .\context-cache-v1.6.0-plugin.zip -DestinationPath "$env:USERPROFILE\.gemini\config\plugins" -Force
      ```
    - **macOS / Linux**:
      ```bash
      mkdir -p ~/.gemini/config/plugins
-     unzip -o context-cache-v1.5.5-plugin.zip -d ~/.gemini/config/plugins
+     unzip -o context-cache-v1.6.0-plugin.zip -d ~/.gemini/config/plugins
      ```
 3. Antigravity discovers and loads the plugin automatically (no restart required):
    - **Left Sidebar**: Open **`Antigravity Hub`** for the full-page console;
@@ -257,7 +269,7 @@ node --no-warnings bin/ctx.mjs i18n restore
 
 ### Smooth Upgrade
 - **In-App One-Click Update (v1.5.4+ Recommended)**: Open **Settings → Maintenance & Actions**, click **Check Updates**, then click **Update Now (SHA-256)** to verify checksums, atomically swap the plugin directory (auto-rollback on lock/error), and safely restart Antigravity.
-- **Prebuilt Bundle Manual Extract**: Download the latest `context-cache-v1.5.5-plugin.zip` and extract over `~/.gemini/config/plugins`. All vault memories, wallpapers, custom dictionaries, governance preferences, and snapshots live in `%USERPROFILE%\.context-cache` with **zero data loss**.
+- **Prebuilt Bundle Manual Extract**: Download the latest `context-cache-v1.6.0-plugin.zip` and extract over `~/.gemini/config/plugins`. All vault memories, wallpapers, custom dictionaries, governance preferences, and snapshots live in `%USERPROFILE%\.context-cache` with **zero data loss**.
 - **Source Users**: Run `git pull && npm run deploy`.
 
 ### Clean Uninstall & Lossless Rollback

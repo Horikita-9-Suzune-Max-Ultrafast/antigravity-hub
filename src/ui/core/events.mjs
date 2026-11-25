@@ -18,6 +18,7 @@ export function bindGlobalUiEvents({
   modalCtrl,
   monitorContext,
   monitorCalls,
+  monitorStats,
   monitorVault,
   reviewModule,
   governanceModule,
@@ -52,29 +53,40 @@ export function bindGlobalUiEvents({
       return;
     }
     if (id === 'sessionSelect') {
-      state.followMode = 'pinned';
-      state.activeConversationId = val || null;
+      if (val === '__auto__') {
+        state.followMode = 'auto';
+        state.pinnedConversationId = null;
+      } else {
+        state.followMode = 'pinned';
+        state.pinnedConversationId = val || null;
+        state.activeConversationId = val || null;
+      }
       resetSessionViewState(state, prevDisplay);
       rpc.invalidateRev();
-      void callAppTool('app_config_manage', { action: 'set_active_session', conversationId: val || null }).catch(() => {});
       renderAllSelects();
       void pollAll(true);
       return;
     }
     if (id === 'callsModel') {
-      state.callsModelFilter = val;
+      state.modelFilter = val || 'all';
       renderCallsSelects();
-      void monitorCalls.loadCalls(true);
+      monitorCalls.renderCalls();
       return;
     }
     if (id === 'callsAgent') {
-      state.callsAgentFilter = val;
+      state.agentFilter = val || 'all';
       renderCallsSelects();
-      void monitorCalls.loadCalls(true);
+      monitorCalls.renderCalls();
+      return;
+    }
+    if (id === 'statsModel') {
+      state.statsModelFilter = val || 'all';
+      monitorStats?.renderSelects();
+      void monitorStats?.loadStats(false);
       return;
     }
     if (id === 'vaultKind') {
-      state.vaultKindFilter = val;
+      state.vaultKind = val || 'all';
       renderVaultSelects();
       void monitorVault.loadVault();
       return;
@@ -126,17 +138,37 @@ export function bindGlobalUiEvents({
     if (closeModalBtn) return modalCtrl.closeModal(closeModalBtn.dataset.closeModal);
     if (e.target.classList?.contains('modal-backdrop') && e.target.id) return modalCtrl.closeModal(e.target.id);
 
+    const accIdxBtn = e.target.closest('[data-acc-idx]');
+    if (accIdxBtn) {
+      const idx = Number(accIdxBtn.dataset.accIdx);
+      state.openAccIdx = state.openAccIdx === idx ? -1 : idx;
+      document.querySelectorAll('#inventoryList .acc-trigger').forEach((b, i) => {
+        b.dataset.open = String(i === state.openAccIdx);
+      });
+      document.querySelectorAll('#inventoryList .inv-acc-body').forEach((body, i) => {
+        body.dataset.open = String(i === state.openAccIdx);
+      });
+      return;
+    }
     const accBtn = e.target.closest('[data-accordion]');
     if (accBtn) {
       const acc = document.getElementById(accBtn.dataset.accordion);
       if (acc) acc.dataset.open = String(acc.dataset.open !== 'true');
       return;
     }
-    const invBtn = e.target.closest('[data-inventory-idx]');
-    if (invBtn) return monitorContext.openAssetInspector(Number(invBtn.dataset.inventoryIdx));
+    const invItemBtn = e.target.closest('[data-inv-group][data-inv-item]');
+    if (invItemBtn) {
+      return void monitorContext.openAssetInspector(
+        Number(invItemBtn.dataset.invGroup),
+        Number(invItemBtn.dataset.invItem)
+      );
+    }
 
-    const alertBtn = e.target.closest('[data-alert-jump]');
-    if (alertBtn) return void monitorContext.handleAlertJump(Number(alertBtn.dataset.alertJump));
+    const alertBtn = e.target.closest('[data-alert-idx], [data-alert-jump]');
+    if (alertBtn) {
+      const idx = alertBtn.dataset.alertIdx ?? alertBtn.dataset.alertJump;
+      return void monitorContext.handleAlertJump(Number(idx));
+    }
 
     const callRow = e.target.closest('tr.call-row[data-call-id]');
     if (callRow) return monitorCalls.toggleCallExpand(callRow.dataset.callId);
@@ -198,10 +230,10 @@ export function bindGlobalUiEvents({
     }
   });
   document.getElementById('refreshBtn')?.addEventListener('click', () => void pollAll(true));
-  document.getElementById('openPopoutBtn')?.addEventListener('click', () => void openPopoutWindow({ manual: true }));
-  document.getElementById('launcherOpenBtn')?.addEventListener('click', () => void openPopoutWindow({ manual: true }));
-  document.getElementById('launcherInlineBtn')?.addEventListener('click', () => exitGlobalLauncherMode());
-  document.getElementById('launcherQuitBtn')?.addEventListener('click', () => {
+  document.getElementById('quickPopoutBtn')?.addEventListener('click', () => void openPopoutWindow({ manual: true }));
+  document.getElementById('launcherOpenPopoutBtn')?.addEventListener('click', () => void openPopoutWindow({ manual: true }));
+  document.getElementById('launcherUseEmbeddedBtn')?.addEventListener('click', () => exitGlobalLauncherMode());
+  document.getElementById('launcherClosePopoutBtn')?.addEventListener('click', () => {
     void (async () => {
       try {
         await callAppTool('app_config_manage', { action: 'close_popout' });
@@ -224,14 +256,11 @@ export function bindGlobalUiEvents({
     if (document.visibilityState === 'visible') {
       monitorContext.startKvCountdownTimer();
       void pollAll(false);
-    } else {
+    } else if (!(isNativePopout && state.windowMode === 'orb')) {
       monitorContext.stopKvCountdownTimer();
     }
   });
   window.addEventListener('message', (ev) => {
     if (typeof ev.data === 'string') nativeChrome.handleHostMessage(ev.data);
-  });
-  window.chrome?.webview?.addEventListener?.('message', (ev) => {
-    nativeChrome.handleHostMessage(typeof ev.data === 'string' ? ev.data : String(ev.data || ''));
   });
 }

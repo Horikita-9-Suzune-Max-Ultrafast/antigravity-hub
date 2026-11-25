@@ -1,4 +1,4 @@
-import { getTelemetryReport } from '../../core/telemetry.mjs';
+import { getTelemetryReport, getUsageStats } from '../../core/telemetry.mjs';
 import { getQuotaSnapshot, calibrateQuotaGroup } from '../../core/quota.mjs';
 import { resolveTargetSession } from '../../core/session-tracker.mjs';
 import { listConversations } from '../../core/transcript-parser.mjs';
@@ -11,6 +11,20 @@ function toolOk(text, structuredContent) {
 }
 
 export function handleGetCalls(args, { defaultWorkspace, options }) {
+  if (args?.action === 'usage_stats') {
+    return toolOk(
+      'ok',
+      getUsageStats(
+        {
+          range: args.range || 'today',
+          modelFilter: args.modelFilter || 'all',
+          force: Boolean(args.force),
+        },
+        options
+      )
+    );
+  }
+
   let resolvedConvId = args.conversationId || undefined;
   let resolvedTranscript = undefined;
   if (!resolvedConvId && args.followActive !== false) {

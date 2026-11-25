@@ -2,9 +2,9 @@
 
 **简体中文** | [English](./README.en.md)
 
-**专为 Google Antigravity 打造的模块化原生控制中心（MCP App）：集上下文监控与跨会话记忆、生态治理与场景预设、本地壁纸引擎、零依赖界面汉化于一体**
+**专为 Google Antigravity 打造的模块化原生控制中心（MCP App）：集上下文监控与累计用量统计、本地代码审查、生态治理与场景预设、本地壁纸引擎、零依赖界面汉化于一体**
 
-[![Version: v1.5.5](https://img.shields.io/badge/Version-v1.5.5-0ea5e9.svg)](https://github.com/Horikita-9-Suzune-Max-Ultrafast/antigravity-hub/releases/tag/v1.5.5)
+[![Version: v1.6.0](https://img.shields.io/badge/Version-v1.6.0-0ea5e9.svg)](https://github.com/Horikita-9-Suzune-Max-Ultrafast/antigravity-hub/releases/tag/v1.6.0)
 [![Antigravity 2.35.1 Update Verified](https://img.shields.io/badge/Antigravity%202.35.1-Update%20Verified-10b981.svg)](#实测验证官方更新防破坏实录)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 [![Node.js >= 24](https://img.shields.io/badge/Node.js-%3E%3D24-339933.svg)](https://nodejs.org/)
@@ -16,9 +16,9 @@
 
 ## 快速导航
 
-- [四大核心模块一览](#四大核心模块一览)
+- [五大核心模块一览](#五大核心模块一览)
 - [实测验证：官方更新防破坏实录](#实测验证官方更新防破坏实录)
-- [v1.5.5 新版亮点](#v155-新版亮点)
+- [v1.6.0 新版亮点](#v160-新版亮点)
 - [零门槛快速上手（3 步解压即用）](#快速开始)
 - [核心功能详解](#核心特性)
 - [架构与安全设计](#架构与设计原则)
@@ -29,16 +29,17 @@
 
 ---
 
-## 四大核心模块一览
+## 五大核心模块一览
 
-**Antigravity Hub** 采用响应式双形态外壳——宽屏（`> 680px`）自动展示 `56px` 左侧图标导航栏，窄屏（`<= 680px`）自动折叠为顶部紧凑切换条，支持 **简体中文 / English 免刷新实时切换**。
+**Antigravity Hub** 采用响应式双形态外壳——宽屏（`> 680px`）自动展示 `56px` 左侧图标导航栏，窄屏（`<= 680px`）自动折叠为顶部紧凑 5 模块切换条，支持 **简体中文 / English 免刷新实时切换**。
 
 | 模块 | 解决什么痛点 | 核心能力 |
 | :--- | :--- | :--- |
-| **1. 上下文监控与记忆库**<br>`Context Cache & Monitor` | 对话变慢、缓存莫名击穿、上下文被什么占满看不清、新开对话要反复交代背景 | 上下文 6 维构成透视、**已挂载资产点击穿透检视弹窗**、**异常预警一键精准跳步骤**、主/子 Agent 实时 TPS 与缓存击穿归因、**原生无框悬浮窗 & 5 模块独立 Radix 语义迷你条**、Gemini KV 倒计时、**三源自动聚合交接胶囊（三档预算）**、一键安全重启 |
-| **2. 生态治理与场景预设**<br>`Ecosystem & Harness Governance` | 插件/MCP 装多了拖慢每次对话，切场景要手动一个个开关且容易误关核心插件 | Effective Harness 全景栈（P1 工作区 → P4 内置）、离线三合一体检（MCP 冗余 / Skill 冲突断链 / 明文密钥审计）与**分层修复闭环**、多信号智能分类 + **可勾选场景预设**、常驻核心保护、不可变快照时间机器 + CLI 回滚 |
-| **3. 本地壁纸引擎**<br>`Appearance & Wallpaper` | 默认界面偏素，想要清爽顺眼的个人壁纸且不想重打包破坏客户端 | 零新增 ASAR 侵入点热加载、外置本地壁纸库（15 MiB 熔断）+ **100% 只读本地文件夹扫描**、轮播池子集与双缓冲淡入淡出、**滑块实时调参（不透明度/模糊/饱和度/遮罩/毛玻璃）**、深浅主题独立绑定、一键秒关与 CLI 急救 |
-| **4. 零依赖界面汉化**<br>`Antigravity Localization` | 原生界面全英文、高频设置与菜单不直观，担心第三方汉化误翻代码或升级冲突 | 纯 Node.js 流式 ASAR 补丁引擎（维护 4 MiB SHA-256 校验）、**739+ 精校内置词条**（原生菜单 + 动态界面 + 正则模板）、三层词典外置热加载、代码块/终端/路径**物理免疫防误翻**、纯净原版备份保护与一键无损还原 |
+| **1. 上下文监控与记忆库**<br>`Context Cache & Monitor` | 对话变慢、缓存莫名击穿、上下文被什么占满看不清、跨会话累计消耗没总账 | 上下文 6 维构成透视、**跨会话累计用量统计看板（今日/24h/7d/30d/全部 + 人民币/美元）**、已挂载资产点击穿透检视、异常预警一键跳步骤、主/子 Agent 实时纯解码 TPS 与 TTFT、**Win32 原生 120fps 透明悬浮球与共享焦点连续形变迷你条**、统一药丸风格 Gemini KV 倒计时、三源交接胶囊 |
+| **2. 本地代码审查**<br>`Local Code Review` | 提交前漏掉硬编码密钥/冲突标记/空异常、手动跑 lint/test 繁琐、AI 审查容易污染主对话上下文 | 零依赖 Git Diff 解析（未提交/已暂存/最近提交/分支对比）、**8 条 L1 毫秒级静态安全与质量预检**（仅扫新增行）、原生工程门禁白名单探测与手动触发（lint/typecheck/test/ruff/mypy/cargo/go）、**L2 隔离 Subagent 深度审查闭环与勾选一键修复**、忽略持久化与 20 份历史报告 |
+| **3. 生态治理与场景预设**<br>`Ecosystem & Harness Governance` | 插件/MCP 装多了拖慢每次对话，切场景要手动一个个开关且容易误关核心插件 | Effective Harness 全景栈（P1 工作区 → P4 内置）、**4 支柱连续递减健康评分**（上下文/安全/卫生/完整性）、离线三合一体检与分层修复闭环、多信号智能分类 + 可勾选场景预设、常驻核心保护、不可变快照时间机器 + CLI 回滚 |
+| **4. 本地壁纸引擎**<br>`Appearance & Wallpaper` | 默认界面偏素，想要清爽顺眼的个人壁纸且不想重打包破坏客户端 | 零新增 ASAR 侵入点热加载、外置本地壁纸库（15 MiB 熔断）+ 100% 只读本地文件夹扫描、轮播池子集与双缓冲淡入淡出、滑块实时调参（不透明度/模糊/饱和度/遮罩/毛玻璃）、深浅主题独立绑定、一键秒关与 CLI 急救 |
+| **5. 零依赖界面汉化**<br>`Antigravity Localization` | 原生界面全英文、高频设置与菜单不直观，担心第三方汉化误翻代码或升级冲突 | 纯 Node.js 流式 ASAR 补丁引擎（维护 4 MiB SHA-256 校验）、739+ 精校内置词条（原生菜单 + 动态界面 + 正则模板）、三层词典外置热加载、代码块/终端/路径物理免疫防误翻、真实 `app.asar` 版本防降级护栏与一键无损还原 |
 
 ---
 
@@ -61,15 +62,26 @@
 
 ---
 
-## v1.5.5 新版亮点
+## v1.6.0 新版亮点
 
-如果你是从旧版本升级或刚了解本项目，以下为 `v1.5.5` 核心升级内容：
+如果你是从旧版本升级或刚了解本项目，以下为 `v1.6.0` 核心大版本升级内容：
 
-- **GPU 99% 峰值清零与悬浮窗即时同步（v1.5.5）**：彻底清除 CSS `backdrop-filter` 与常驻 60fps 无限动画，移除强制同步 `offsetWidth` 回流与 5s 窗口坐标轮询，按需启停 KV 1s 倒计时并新增低功耗壁纸模式；单文件 UI 精简至 `~706 KiB`（`< 750 KiB`）；关闭悬浮窗或 WebView2 宿主退出时 `0ms` 立即切回离线态并释放端口。
-- **视口防裁切浮层、标题栏自适应与调用表动态列宽（v1.5.5）**：全部下拉菜单与 KV 帮助气泡升级为视口 `position: fixed` 自动夹紧（窗口缩放实时重算、滚动工作区自动收起、`Esc` 键关闭）；扩展态原生标题栏溢出时按序降级并始终保持 `Antigravity Hub` 标题完整；调用明细表升级为「数值列保底 + 模型名弹性缩略 + 窄宽双行卡片兜底」动态列宽分配，彻底消除数字列提早出现 `...` 省略号，默认首屏渲染 120 行并支持一键展开全部（预警跳转自动展开）。
-- **原生 SQLite 纳秒级 TTFT 与纯解码 TPS 引擎（v1.5.5）**：新增零依赖只读模块 `native-step-metrics.mjs`（Node 24 内置 `node:sqlite` + 纯 JS Protobuf 解析），直接提取本地会话库每步纳秒级首字耗时（TTFT）、纯解码耗时与精确思考/正文 Token 拆分；调用表与解剖抽屉升级为 **`首字 / 耗时`** 双维度展示，按纯解码速度计算 Decode TPS（解码 `< 1s` 或输出 `< 15 tok` 静默显示 `—` 不误报低速）；本地库不可用时自动 Fail-Open 降级至 **Plan A 工具耗时剥离引擎**（自动剔除 `npm test`/`git push` 等本地工具执行时长，彻底根除虚假尖峰与 `0.7 tok/s` 误报）；新增 `doctor --repair --resync-telemetry` 一键全量历史重算与去重压缩。
-- **真实 `app.asar` 版本探测与防降级护栏（v1.5.5）**：汉化状态优先读取 `app.asar` 内部 `package.json` 真实版本（同时保留 Electron 版本字段并向后兼容旧版元数据，杜绝误报过期）；应用与还原双链路均校验 `.bak` 内部版本，锁定过期旧版备份并在当前已是干净原版时主动阻止还原，彻底杜绝误覆盖降级风险。
-- **SQLite WAL 原子重建与后端安全加固（v1.5.5）**：`rebuildIndex` 将清理与回填合并进同一 `BEGIN IMMEDIATE` 事务（消除并发轮询空窗），`doctor` 清晰展示去重/原始调用数（`dbCalls/truthUniqueCalls (raw)`），`scanMcpTools` 新增 5s 快速内存缓存短接，悬浮窗 HTTP 令牌校验升级为常量时间 `crypto.timingSafeEqual`。
+- **全新第 5 一级模块：本地代码审查（v1.6.0）**：纯 Node.js 零依赖 Git Diff 解析引擎（支持 `未提交 / 已暂存 / 最近提交 / 分支对比`，自动折叠 lockfile/dist/二进制）；内置 8 条 L1 毫秒级确定性安全与质量规则（仅扫描新增行，杜绝历史旧代码误报）；支持白名单探测并手动执行项目原生门禁（`lint / typecheck / test / ruff / mypy / cargo / go vet`）；提供 L2 隔离 Subagent 深度审查 Prompt 构造、报告落盘导入与勾选发现项一键生成精准修复指令。
+- **跨会话累计用量统计看板（v1.6.0）**：在「监控」页新增 **「统计」** 标签（`上下文 / 明细 / 统计 / 记忆库`），基于本地 SQLite 全历史调用库提供 `今天 / 24 小时 / 7 天 / 30 天 / 全部` 时段筛选与模型筛选；一屏呈现累计 Token（含输入/输出/缓存拆分）、请求次数、按时区默认人民币 `¥` 并可一键切换 `¥ / $` 的估算费用、缓存命中率进度条、加权纯解码速度 & 首字平均 TTFT 以及按模型明细。
+- **Win32 原生 120fps 透明悬浮球、共享焦点连续形变与编译缓存（v1.6.0）**：悬浮窗宿主升级为本地 `.NET 4 csc.exe` 编译缓存（`floating-host-<hash>.exe`，命中缓存 `< 5ms` 启动），支持原生 60–240Hz DWM 拖拽缩放；最小化收起为 `WS_EX_LAYERED` + `UpdateLayeredWindow` 逐像素抗锯齿 48px 圆形悬浮球（带柔和投影、实时进度环与右键原生菜单）；悬浮球 ↔ 迷你条共享同一焦点锚点，原地完成 **220ms `cubic ease-out` 灵动岛式胶囊连续形变与透明叠化交接**，迷你条与完整窗强制同宽联动且高分屏上下精准居中。
+- **生态治理 4 支柱连续评分与核心性能全链路压榨（v1.6.0）**：合并 `ecosystem-inventory.mjs` 统一扫描底座（严格区分 `eager / deferred` MCP 与插件启停态），落地 4 支柱连续健康评分；引擎层完成 Transcript 增量字节累加解析、Git 5×→1× 单子进程收敛、SQLite `WeakMap` 预编译语句缓存、轮询 `rev` 摘要短路与 `ACTIVE_CONV_TTL_MS` 心跳提速。
+- **零 Zod 瘦身 33% 与 Radix 12 阶视觉统一（v1.6.0）**：自研轻量 SEP-1865 MCP App 桥接层彻底移除 `zod` 与重型 SDK，单文件 UI 从 `706 KiB` 骤降至 **`475.0 KiB`**；全界面收敛为 Radix UI Colors 12 阶色板与 4 级字号体系，统一 KV 倒计时药丸胶囊与可点击解释气泡，**86 项自动化测试全部通过**。
+
+<details>
+<summary><strong>回顾 v1.5.5 核心亮点</strong></summary>
+
+- **GPU 99% 峰值清零与悬浮窗即时同步（v1.5.5）**：彻底清除 CSS `backdrop-filter` 与常驻 60fps 无限动画，移除强制同步 `offsetWidth` 回流与 5s 窗口坐标轮询，按需启停 KV 1s 倒计时并新增低功耗壁纸模式；关闭悬浮窗或 WebView2 宿主退出时 `0ms` 立即切回离线态并释放端口。
+- **视口防裁切浮层、标题栏自适应与调用表动态列宽（v1.5.5）**：全部下拉菜单与 KV 帮助气泡升级为视口 `position: fixed` 自动夹紧；调用明细表升级为动态列宽分配与窄宽双行卡片兜底。
+- **原生 SQLite 纳秒级 TTFT 与纯解码 TPS 引擎（v1.5.5）**：新增零依赖只读模块 `native-step-metrics.mjs` 提取每步纳秒级首字耗时（TTFT）、纯解码耗时与精确思考/正文 Token 拆分；本地库不可用时自动降级至 Plan A 工具耗时剥离引擎。
+- **真实 `app.asar` 版本探测与防降级护栏（v1.5.5）**：汉化状态优先读取 `app.asar` 内部 `package.json` 真实版本并校验 `.bak` 防误降级。
+- **SQLite WAL 原子重建与后端安全加固（v1.5.5）**：`rebuildIndex` 事务化原子重建，悬浮窗 HTTP 令牌校验升级为 `crypto.timingSafeEqual`。
+
+</details>
 
 <details>
 <summary><strong>回顾 v1.5.4 核心亮点</strong></summary>
@@ -99,16 +111,16 @@
 
 ### 方式一：下载 Release 免构建插件包（推荐，3 步解压即用，零 `npm install`）
 
-1. 前往 [Releases 页面](https://github.com/Horikita-9-Suzune-Max-Ultrafast/antigravity-hub/releases/latest) 下载 `context-cache-v1.5.5-plugin.zip`（全明文 `.mjs` 源码 + 预编译单文件 UI，零 `node_modules`）。
+1. 前往 [Releases 页面](https://github.com/Horikita-9-Suzune-Max-Ultrafast/antigravity-hub/releases/latest) 下载 `context-cache-v1.6.0-plugin.zip`（全明文 `.mjs` 源码 + 预编译单文件 UI，零 `node_modules`）。
 2. 解压至 Antigravity 本地插件目录，确保目录结构为 `~/.gemini/config/plugins/context-cache/plugin.json`：
    - **Windows PowerShell**：
      ```powershell
-     Expand-Archive -Path .\context-cache-v1.5.5-plugin.zip -DestinationPath "$env:USERPROFILE\.gemini\config\plugins" -Force
+     Expand-Archive -Path .\context-cache-v1.6.0-plugin.zip -DestinationPath "$env:USERPROFILE\.gemini\config\plugins" -Force
      ```
    - **macOS / Linux**：
      ```bash
      mkdir -p ~/.gemini/config/plugins
-     unzip -o context-cache-v1.5.5-plugin.zip -d ~/.gemini/config/plugins
+     unzip -o context-cache-v1.6.0-plugin.zip -d ~/.gemini/config/plugins
      ```
 3. Antigravity 会自动发现并加载插件（无需重启）：
    - **左侧边栏**：点击 **`Antigravity Hub`** 打开全页控制台（带左侧窄图标导航栏）；
@@ -259,7 +271,7 @@ node --no-warnings bin/ctx.mjs i18n restore
 
 ### 平滑升级到最新版
 - **插件内一键更新（v1.5.4+ 推荐）**：进入 **「插件设置 → 维护与操作」** 点击 **「检查更新」**，发现新版后点击 **「一键更新（SHA-256 校验）」** 即可完成强校验下载、原子目录切换与安全重启引导（如遇网络超时或文件占用自动回滚并可跳转 Release 手动下载）。
-- **Release 包手动覆盖**：也可直接下载新版 `context-cache-v1.5.5-plugin.zip` 并覆盖解压到 `~/.gemini/config/plugins`。你的记忆库、壁纸库、汉化词典、治理偏好与配置快照全部存放在 `%USERPROFILE%\.context-cache`，**升级零数据丢失**。
+- **Release 包手动覆盖**：也可直接下载新版 `context-cache-v1.6.0-plugin.zip` 并覆盖解压到 `~/.gemini/config/plugins`。你的记忆库、壁纸库、汉化词典、治理偏好与配置快照全部存放在 `%USERPROFILE%\.context-cache`，**升级零数据丢失**。
 - **源码用户**：在仓库目录执行 `git pull && npm run deploy`。
 
 ### 完整卸载与无损还原

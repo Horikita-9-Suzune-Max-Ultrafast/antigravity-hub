@@ -240,20 +240,20 @@ export function renderModelSimSelect(fromPoll, { state, tr }) {
 export function renderCallsSelects({ state, tr }) {
   const models = [...new Set((state.callsData?.calls || []).map((c) => c.model).filter(Boolean))];
   renderCustomSelect(
-    'callsModelFilterHost',
+    'modelSelectHost',
     {
       id: 'callsModel',
-      value: state.callsModelFilter,
-      options: [{ value: '', label: tr('monitor.calls.allModels') }, ...models.map((m) => ({ value: m, label: m }))],
+      value: state.modelFilter || 'all',
+      options: [{ value: 'all', label: tr('monitor.calls.allModels') }, ...models.map((m) => ({ value: m, label: m }))],
       compact: true,
     },
     { state, tr }
   );
   renderCustomSelect(
-    'callsAgentFilterHost',
+    'agentSelectHost',
     {
       id: 'callsAgent',
-      value: state.callsAgentFilter,
+      value: state.agentFilter || 'all',
       options: [
         { value: 'all', label: tr('monitor.calls.allAgents') },
         { value: 'main', label: tr('monitor.calls.mainOnly') },
@@ -274,11 +274,11 @@ export function renderVaultSelects({ state, tr }) {
     { value: 'checkpoint', label: tr('monitor.vault.kindCheckpoint') },
   ];
   renderCustomSelect(
-    'vaultKindHost',
+    'vaultKindSelectHost',
     {
       id: 'vaultKind',
-      value: state.vaultKindFilter,
-      options: [{ value: '', label: tr('monitor.vault.allKinds') }, ...kinds],
+      value: state.vaultKind || 'all',
+      options: [{ value: 'all', label: tr('monitor.vault.allKinds') }, ...kinds],
       compact: true,
     },
     { state, tr }

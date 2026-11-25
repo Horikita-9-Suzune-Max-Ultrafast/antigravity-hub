@@ -5,16 +5,30 @@ import { atomicWriteJsonObj, createLruCache, withFileLockSync } from './fs-utils
 
 export const VALID_POLL_INTERVALS = [3, 5, 10, 30, 60, 0];
 export const VALID_UI_LANGUAGES = ['zh-CN', 'en'];
+export const VALID_CURRENCIES = ['CNY', 'USD'];
 export const VALID_MINI_BAR_MODULES = ['context', 'cache', 'kv', 'tps', 'model'];
 export const VALID_MINI_BAR_PRESETS = ['full', 'wide', 'standard', 'compact', 'minimal', 'custom'];
 export const VALID_CONSOLE_MODULES = ['monitor', 'review', 'governance', 'appearance', 'i18n'];
 export const VALID_WINDOW_MODES = ['console', 'minibar', 'orb'];
+
+const CNY_TIMEZONE_RE = /^Asia\/(Shanghai|Chongqing|Harbin|Urumqi|Hong_Kong|Macau|Taipei)/i;
+
+export function detectDefaultCurrency() {
+  try {
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+    return CNY_TIMEZONE_RE.test(tz) ? 'CNY' : 'USD';
+  } catch {
+    return 'USD';
+  }
+}
 
 const configReadCache = createLruCache(16);
 
 export const DEFAULT_CONFIG = {
   version: 1,
   uiLanguage: 'zh-CN',
+  currency: detectDefaultCurrency(),
+  cnyPerUsd: 7.2,
   pollIntervalSec: 5,
   auxAutoOpen: true,
   popout: {
@@ -179,6 +193,11 @@ export function sanitizeConfig(cfg) {
   } else {
     out.uiLanguage = 'zh-CN';
   }
+  const normalizedCurrency = typeof out.currency === 'string' ? out.currency.trim().toUpperCase() : '';
+  out.currency = VALID_CURRENCIES.includes(normalizedCurrency) ? normalizedCurrency : detectDefaultCurrency();
+  const rawCnyPerUsd = Number(out.cnyPerUsd);
+  out.cnyPerUsd =
+    Number.isFinite(rawCnyPerUsd) && rawCnyPerUsd !== 0 ? Math.max(1, Math.min(50, rawCnyPerUsd)) : 7.2;
   if (!VALID_POLL_INTERVALS.includes(Number(out.pollIntervalSec))) {
     out.pollIntervalSec = 5;
   } else {

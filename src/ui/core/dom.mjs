@@ -296,8 +296,9 @@ export function clampHelpTip(wrap) {
 /**
  * Single coalesced ResizeObserver + window resize rAF scheduler.
  */
-export function createResizeScheduler() {
+export function createResizeScheduler(initialCb = null) {
   const callbacks = new Set();
+  if (typeof initialCb === 'function') callbacks.add(initialCb);
   let rafId = 0;
   let observer = null;
   let winBound = false;

@@ -22,6 +22,7 @@ import {
 import { createModalController } from './components/modal.mjs';
 import { createMonitorContextModule } from './modules/monitor-context.mjs';
 import { createMonitorCallsModule } from './modules/monitor-calls.mjs';
+import { createMonitorStatsModule } from './modules/monitor-stats.mjs';
 import { createMonitorVaultModule } from './modules/monitor-vault.mjs';
 import { createReviewModule } from './modules/review-module.mjs';
 import { createGovernanceModule } from './modules/governance-module.mjs';
@@ -75,18 +76,29 @@ function closeSelectMenus() {
 function closeKvPopovers() {
   for (const id of ['kvHelpPopover', 'settingsKvHelpPopover']) {
     const el = document.getElementById(id);
-    if (el) el.dataset.open = 'false';
+    if (el) {
+      el.dataset.open = 'false';
+      el.classList.add('hidden');
+    }
   }
 }
 
 function toggleKvPopover(popoverId, anchorEl) {
   const pop = document.getElementById(popoverId);
   if (!pop || !anchorEl) return;
-  const next = pop.dataset.open !== 'true';
+  const next = pop.classList.contains('hidden') || pop.dataset.open !== 'true';
   closeKvPopovers();
   if (!next) return;
+  pop.classList.remove('hidden');
   pop.dataset.open = 'true';
-  positionFloatingLayer(pop, anchorEl, { alignRight: popoverId === 'kvHelpPopover', gap: 8 });
+  positionFloatingLayer(pop, anchorEl, {
+    alignRight: popoverId === 'kvHelpPopover',
+    maxWidthCap: 300,
+    maxHeightCap: 260,
+    gap: 8,
+    pad: 10,
+    matchTriggerMinWidth: false,
+  });
 }
 
 const canSendToAgent = () => !IS_POPOUT && Boolean(mcpApp && (state.canSendMessage || state.canUpdateModelContext));
@@ -118,6 +130,7 @@ function renderAllSelects(fromPoll = false) {
   renderFollowToggle({ state, tr, getUiLang });
   renderSessionSelect(fromPoll, { state, tr, getUiLang });
   renderCallsSelects();
+  monitorStats.renderSelects?.();
   renderVaultSelects();
   monitorContext.renderContextModelSim();
   renderSelect('popoutSizeHost', {
@@ -137,172 +150,73 @@ function renderAllSelects(fromPoll = false) {
 // Instantiate Modular Subsystems
 // =========================================================================
 const nativeChrome = createNativeChromeModule({
-  state,
-  tr,
-  getUiLang,
-  isNativePopout: IS_NATIVE_POPOUT,
-  popoutToken: POPOUT_TOKEN,
-  popoutClientId: POPOUT_CLIENT_ID,
-  persistConfigPatch,
-  showToast,
-  onSessionFollowSwitch: (convId) => {
-    state.activeConversationId = convId;
-    resetSessionViewState(state, prevDisplay);
-    rpc.invalidateRev();
-    void pollAll(true);
-  },
-  onSizeMoveChange: (active) => {
-    state.sizeMoveActive = Boolean(active);
-    if (!active) resizeScheduler.schedule();
-  },
-  onModeChanged: (mode) => {
-    if (mode === 'console') resizeScheduler.schedule();
-  },
+  state, tr, getUiLang, isNativePopout: IS_NATIVE_POPOUT, popoutToken: POPOUT_TOKEN, popoutClientId: POPOUT_CLIENT_ID,
+  persistConfigPatch, showToast,
+  onSessionFollowSwitch: (convId) => { state.activeConversationId = convId; resetSessionViewState(state, prevDisplay); rpc.invalidateRev(); void pollAll(true); },
+  onSizeMoveChange: (active) => { state.sizeMoveActive = Boolean(active); if (!active) resizeScheduler.schedule(); },
+  onModeChanged: (mode) => { if (mode === 'console') resizeScheduler.schedule(); },
 });
 
-const monitorCalls = createMonitorCallsModule({
-  state,
-  tr,
-  getUiLang,
-  callAppTool,
-  renderCallsSelects,
-  positionIndicator,
-});
-
+const monitorCalls = createMonitorCallsModule({ state, tr, getUiLang, callAppTool, renderCallsSelects, positionIndicator });
+const monitorStats = createMonitorStatsModule({ state, tr, getUiLang, callAppTool, persistConfigPatch, renderCustomSelect: renderSelect, showToast });
 const fitCallsTableLayout = () => {
   // Keeps col-model-full / col-model-short visibility synced with dynamic table container width
   const tbl = document.getElementById('callsTable');
   if (tbl && !tbl.dataset.modelMode) tbl.dataset.modelMode = 'full';
   monitorCalls.fitCallsTableLayout();
 };
-
 const monitorVault = createMonitorVaultModule({
-  state,
-  tr,
-  getUiLang,
-  callAppTool,
-  getMcpApp: () => mcpApp,
-  showToast,
-  openModal: modalCtrl.openModal,
-  closeModal: modalCtrl.closeModal,
-  positionIndicator,
-  renderVaultSelects,
+  state, tr, getUiLang, callAppTool, getMcpApp: () => mcpApp, showToast,
+  openModal: modalCtrl.openModal, closeModal: modalCtrl.closeModal, positionIndicator, renderVaultSelects,
 });
-
 const monitorContext = createMonitorContextModule({
-  state,
-  prevDisplay,
-  tr,
-  getUiLang,
-  localizeBreakdownItem,
-  localizeDeferredItem,
-  localizeInventoryGroup,
-  callAppTool,
-  getMcpApp: () => mcpApp,
-  showToast,
-  openModal: modalCtrl.openModal,
-  closeModal: modalCtrl.closeModal,
-  switchModule,
-  switchTab,
-  positionIndicator,
-  onTelemetryUpdate: (payload) => {
-    nativeChrome.updateNativeTitleBarTelemetry(payload);
-    nativeChrome.updateOrbView(payload);
-  },
+  state, prevDisplay, tr, getUiLang, localizeBreakdownItem, localizeDeferredItem, localizeInventoryGroup,
+  callAppTool, getMcpApp: () => mcpApp, showToast, openModal: modalCtrl.openModal, closeModal: modalCtrl.closeModal,
+  switchModule, switchTab, positionIndicator,
+  onTelemetryUpdate: (ctx, metrics) => { nativeChrome.updateNativeTitleBarTelemetry(ctx, metrics); },
   onOpenCallsMatch: (alert, hay) => monitorCalls.focusAlertCall(alert, hay),
   onOpenCapsule: () => monitorVault.openCapsuleModal(),
 });
-
 const reviewModule = createReviewModule({
-  callAppTool,
-  esc,
-  tr,
-  getUiLang,
-  showToast,
-  openModal: modalCtrl.openModal,
-  closeModal: modalCtrl.closeModal,
-  renderCustomSelect: renderSelect,
-  getProjectDir: () => state.activeProjectDir,
-  getConversationId: () => state.activeConversationId,
-  canSendMessage: canSendToAgent,
-  sendToAgent,
+  callAppTool, esc, tr, getUiLang, showToast, openModal: modalCtrl.openModal, closeModal: modalCtrl.closeModal,
+  renderCustomSelect: renderSelect, getProjectDir: () => state.activeProjectDir,
+  getConversationId: () => state.activeConversationId, canSendMessage: canSendToAgent, sendToAgent,
 });
-
 const governanceModule = createGovernanceModule({
-  callAppTool,
-  esc,
-  tr,
-  getUiLang,
-  showToast,
-  positionIndicator,
-  onOpenSettings: () => openSettingsPage(),
-  getProjectDir: () => state.activeProjectDir,
-  canSendMessage: canSendToAgent,
-  sendToAgent,
+  callAppTool, esc, tr, getUiLang, showToast, positionIndicator,
+  onOpenSettings: () => openSettingsPage(), getProjectDir: () => state.activeProjectDir,
+  canSendMessage: canSendToAgent, sendToAgent,
 });
-
 const appearanceModule = createAppearanceModule({
-  callAppTool,
-  esc,
-  showToast,
-  openModal: modalCtrl.openModal,
-  closeModal: modalCtrl.closeModal,
-  positionIndicator,
-  renderCustomSelect: renderSelect,
-  onOpenSettings: () => openSettingsPage(),
-  onGoI18nPatch: () => switchModule('i18n', 'status'),
-  popoutToken: POPOUT_TOKEN,
+  callAppTool, esc, showToast, openModal: modalCtrl.openModal, closeModal: modalCtrl.closeModal,
+  positionIndicator, renderCustomSelect: renderSelect, onOpenSettings: () => openSettingsPage(),
+  onGoI18nPatch: () => switchModule('i18n', 'status'), popoutToken: POPOUT_TOKEN,
 });
-
 const i18nModule = createI18nModule({
-  callAppTool,
-  esc,
-  showToast,
-  openModal: modalCtrl.openModal,
-  closeModal: modalCtrl.closeModal,
-  positionIndicator,
-  renderCustomSelect: renderSelect,
+  callAppTool, esc, showToast, openModal: modalCtrl.openModal, closeModal: modalCtrl.closeModal,
+  positionIndicator, renderCustomSelect: renderSelect,
   onStatusChange: (data) => {
     const dot = document.getElementById('railI18nAlertDot');
-    const warn = data?.status === 'outdated_after_update' || data?.status === 'patched_by_other';
-    if (dot) dot.classList.toggle('hidden', !warn);
+    if (dot) dot.classList.toggle('hidden', !(data?.status === 'outdated_after_update' || data?.status === 'patched_by_other'));
   },
   onOpenSettings: () => openSettingsPage(),
 });
-
 const settingsModule = createSettingsModule({
-  state,
-  tr,
-  getUiLang,
-  normalizeUiLang,
-  defaultUiLang: DEFAULT_UI_LANG,
-  isNativePopout: IS_NATIVE_POPOUT,
-  callAppTool,
-  getMcpApp: () => mcpApp,
-  persistConfigPatch,
-  applyUiLanguage,
-  restartPollTimer,
-  renderContext: (anim) => monitorContext.renderContext(anim),
-  syncKvCountdownUi: () => monitorContext.syncKvCountdownUi(),
+  state, tr, getUiLang, normalizeUiLang, defaultUiLang: DEFAULT_UI_LANG, isNativePopout: IS_NATIVE_POPOUT,
+  callAppTool, getMcpApp: () => mcpApp, persistConfigPatch, applyUiLanguage, restartPollTimer,
+  renderContext: (anim) => monitorContext.renderContext(anim), syncKvCountdownUi: () => monitorContext.syncKvCountdownUi(),
   renderNativePinButton: () => nativeChrome.renderNativePinButton(),
   onMiniBarOrderChanged: () => {
     nativeChrome.resetCache();
     const ctx = state.contextData;
     if (ctx) {
-      nativeChrome.updateNativeTitleBarTelemetry({
-        pct: ctx.usedPct || 0,
-        cachePct: ctx.latestCacheHitRate,
-        tps: ctx.latestTps,
-        model: ctx.latestModel || ctx.model || '',
-        kvState: monitorContext.computeGeminiKvState(),
-      });
+      const { kv, health } = monitorContext.syncKvCountdownUi();
+      nativeChrome.updateNativeTitleBarTelemetry(ctx, { pct: Number(ctx.usedPercent) || 0, cache: Number(ctx.latestCacheHitRate) || 0, tps: Number(ctx.avgTps) || 0, kv, health });
     }
   },
   onOpenPopout: () => void openPopoutWindow({ manual: true }),
   onSetSharedWidth: (w) => nativeChrome.setSharedWidth(w),
-  showToast,
-  openModal: modalCtrl.openModal,
-  closeModal: modalCtrl.closeModal,
+  showToast, openModal: modalCtrl.openModal, closeModal: modalCtrl.closeModal,
 });
 
 const resizeScheduler = createResizeScheduler(() => {
@@ -346,6 +260,7 @@ function syncNavState() {
 function openSettingsPage() {
   if (!state.settingsOpen) state.prevModuleBeforeSettings = state.activeModule;
   state.settingsOpen = true;
+  state.inSettings = true;
   syncNavState();
   settingsModule.renderSettings();
   renderAllSelects();
@@ -353,6 +268,7 @@ function openSettingsPage() {
 
 function closeSettingsPage() {
   state.settingsOpen = false;
+  state.inSettings = false;
   syncNavState();
   resizeScheduler.schedule();
 }
@@ -360,6 +276,7 @@ function closeSettingsPage() {
 function switchModule(mod, subTab = null) {
   const next = VALID_CONSOLE_MODULES.includes(mod) ? mod : 'monitor';
   state.settingsOpen = false;
+  state.inSettings = false;
   state.activeModule = next;
   syncNavState();
   if (next === 'monitor') {
@@ -372,10 +289,12 @@ function switchModule(mod, subTab = null) {
 }
 
 function switchTab(tab) {
-  const valid = FEATURE_FLAGS.showQuotaTab ? ['context', 'calls', 'vault', 'quota'] : ['context', 'calls', 'vault'];
+  const valid = FEATURE_FLAGS.showQuotaTab
+    ? ['context', 'calls', 'stats', 'vault', 'quota']
+    : ['context', 'calls', 'stats', 'vault'];
   const next = valid.includes(tab) ? tab : 'context';
   state.activeTab = next;
-  for (const t of ['context', 'calls', 'vault', 'quota']) {
+  for (const t of ['context', 'calls', 'stats', 'vault', 'quota']) {
     document.getElementById(`panel-${t}`)?.classList.toggle('hidden', t !== next);
   }
   document.querySelectorAll('#mainSegNav .seg-tab').forEach((b) => {
@@ -383,6 +302,7 @@ function switchTab(tab) {
   });
   requestAnimationFrame(() => positionIndicator('mainSegNav', 'mainSegIndicator'));
   if (next === 'calls') void monitorCalls.loadCalls(true);
+  else if (next === 'stats') void monitorStats.loadStats(false);
   else if (next === 'vault') void monitorVault.loadVault();
 }
 
@@ -393,11 +313,13 @@ function applyUiLanguage(lang) {
   applyStaticTranslations(document, next);
   monitorContext.resetCache();
   monitorCalls.resetCache();
+  monitorStats.resetCache();
   monitorVault.resetCache();
   nativeChrome.resetCache();
   nativeChrome.renderNativePinButton();
   if (state.contextData) monitorContext.renderContext(false);
   if (state.callsData) monitorCalls.renderCalls();
+  if (state.statsData) monitorStats.renderStats();
   if (state.vaultData) monitorVault.renderVault();
   reviewModule.renderAll?.();
   governanceModule.renderAll?.();
@@ -410,17 +332,22 @@ function applyUiLanguage(lang) {
 // Global Launcher, Popout Sync & Polling
 // =========================================================================
 function updateLauncherUi() {
-  const open = isPopoutOpen(state.popoutStatus || {});
+  const status = state.popoutStatus || {};
+  const open = isPopoutOpen(status);
   const setTxt = (id, txt) => {
     const el = document.getElementById(id);
     if (el) el.textContent = txt;
   };
-  setTxt('launcherTitle', open ? tr('launcher.titleRunning') : tr('launcher.titleReady'));
-  setTxt('launcherDesc', open ? tr('launcher.descRunning') : tr('launcher.descReady'));
-  setTxt('launcherOpenBtn', open ? tr('launcher.focusBtn') : tr('launcher.openBtn'));
-  document.getElementById('launcherQuitBtn')?.classList.toggle('hidden', !open);
-  const dot = document.getElementById('launcherDot');
-  if (dot) dot.style.background = open ? 'var(--success)' : 'var(--accent)';
+  setTxt('launcherTitle', open ? tr('launcher.titleRunning') : tr('launcher.titleStopped'));
+  setTxt('launcherOpenPopoutBtn', tr('launcher.btnFocus'));
+  setTxt('launcherPortBadge', open ? tr('launcher.statusRunning') : tr('launcher.statusStopped'));
+  const subEl = document.getElementById('launcherSubMeta');
+  if (subEl) {
+    subEl.textContent = open && status.port ? tr('launcher.subRunning', { port: status.port }) : tr('launcher.subStopped');
+  }
+  document.getElementById('launcherClosePopoutBtn')?.classList.toggle('hidden', !open);
+  const dot = document.getElementById('launcherStatusDot');
+  if (dot) dot.classList.toggle('hidden', !open);
 }
 
 function stopLauncherStatusPoller() {
@@ -481,9 +408,13 @@ async function openPopoutWindow({ manual = false } = {}) {
     if (res?.popoutStatus) state.popoutStatus = res.popoutStatus;
     if (res?.opened || isPopoutOpen(res?.popoutStatus)) {
       if (!IS_POPOUT) enterGlobalLauncherMode(res.popoutStatus);
-      if (manual) showToast(tr('toast.popoutOpened'), 'success');
+      if (manual) {
+        const port = res?.popoutStatus?.port || state.popoutStatus?.port || '';
+        const msgKey = res?.alreadyOpen ? 'toast.popoutFocused' : 'toast.popoutLaunched';
+        showToast(port ? tr(msgKey, { port }) : tr('toast.popoutOpened'), 'success');
+      }
     } else if (manual) {
-      showToast(tr('toast.popoutOpenFailed'), 'error');
+      showToast(tr('toast.popoutFailed', { error: res?.error || 'unavailable' }), 'error');
     }
   } catch (err) {
     if (manual) showToast(tr('toast.syncFailed', { error: err?.message || String(err) }), 'error');
@@ -492,7 +423,7 @@ async function openPopoutWindow({ manual = false } = {}) {
 
 async function pollAll(force = false) {
   if (state.launcherMode || state.sizeMoveActive) return;
-  if (!force && document.visibilityState !== 'visible') return;
+  if (!force && document.visibilityState !== 'visible' && !(IS_NATIVE_POPOUT && state.windowMode === 'orb')) return;
   const svg = document.getElementById('refreshSvg');
   if (force && svg) svg.classList.add('spin-once');
   try {
@@ -516,6 +447,7 @@ async function pollAll(force = false) {
       renderFollowToggle({ state, tr, getUiLang });
     }
     if (state.activeModule === 'monitor' && state.activeTab === 'calls') await monitorCalls.loadCalls(force);
+    else if (state.activeModule === 'monitor' && state.activeTab === 'stats') await monitorStats.loadStats(force);
     else if (state.activeModule === 'monitor' && state.activeTab === 'vault' && force) await monitorVault.loadVault();
   } catch (err) {
     if (force) showToast(tr('toast.syncFailed', { error: err?.message || String(err) }), 'error');
@@ -572,6 +504,7 @@ async function bootstrap() {
   nativeChrome.setupNativeFramelessChrome();
   monitorContext.bindEvents();
   monitorCalls.bindEvents();
+  monitorStats.bindEvents();
   monitorVault.bindEvents();
   reviewModule.init();
   governanceModule.init();
@@ -580,7 +513,7 @@ async function bootstrap() {
   settingsModule.bindEvents();
   bindGlobalUiEvents({
     state, prevDisplay, tr, getUiLang, isNativePopout: IS_NATIVE_POPOUT, rpc, callAppTool, persistConfigPatch, modalCtrl,
-    monitorContext, monitorCalls, monitorVault, reviewModule, governanceModule, appearanceModule, i18nModule,
+    monitorContext, monitorCalls, monitorStats, monitorVault, reviewModule, governanceModule, appearanceModule, i18nModule,
     settingsModule, nativeChrome, resizeScheduler, renderCallsSelects, renderVaultSelects, renderAllSelects,
     closeSelectMenus, closeKvPopovers, toggleKvPopover, switchModule, switchTab, openSettingsPage, closeSettingsPage,
     openPopoutWindow, exitGlobalLauncherMode, pollAll, restartPollTimer,

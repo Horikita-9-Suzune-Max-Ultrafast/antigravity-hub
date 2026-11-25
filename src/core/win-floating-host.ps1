@@ -22,10 +22,12 @@ using System;
 using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Drawing2D;
+using System.Drawing.Imaging;
 using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
+using System.Text.RegularExpressions;
 using System.Windows.Forms;
 
 namespace ContextCacheHost {
@@ -44,6 +46,20 @@ namespace ContextCacheHost {
     public struct POINT_WIN32 {
         public int X;
         public int Y;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct SIZE_WIN32 {
+        public int cx;
+        public int cy;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 1)]
+    public struct BLENDFUNCTION {
+        public byte BlendOp;
+        public byte BlendFlags;
+        public byte SourceConstantAlpha;
+        public byte AlphaFormat;
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -231,6 +247,629 @@ namespace ContextCacheHost {
         }
     }
 
+    internal sealed class OrbOverlayForm : Form {
+        [DllImport("user32.dll", SetLastError = true)]
+        static extern bool UpdateLayeredWindow(
+            IntPtr hwnd,
+            IntPtr hdcDst,
+            ref POINT_WIN32 pptDst,
+            ref SIZE_WIN32 psize,
+            IntPtr hdcSrc,
+            ref POINT_WIN32 pptSrc,
+            int crKey,
+            ref BLENDFUNCTION pblend,
+            int dwFlags
+        );
+        [DllImport("user32.dll", SetLastError = true)]
+        static extern IntPtr GetDC(IntPtr hWnd);
+        [DllImport("user32.dll")]
+        static extern int ReleaseDC(IntPtr hWnd, IntPtr hDC);
+        [DllImport("user32.dll")]
+        static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
+        [DllImport("user32.dll")]
+        static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+        [DllImport("user32.dll")]
+        static extern uint GetDpiForWindow(IntPtr hWnd);
+        [DllImport("gdi32.dll", SetLastError = true)]
+        static extern IntPtr CreateCompatibleDC(IntPtr hDC);
+        [DllImport("gdi32.dll", SetLastError = true)]
+        static extern bool DeleteDC(IntPtr hdc);
+        [DllImport("gdi32.dll", SetLastError = true)]
+        static extern IntPtr SelectObject(IntPtr hDC, IntPtr hObject);
+        [DllImport("gdi32.dll", SetLastError = true)]
+        static extern bool DeleteObject(IntPtr hObject);
+
+        const int WS_POPUP = unchecked((int)0x80000000);
+        const int WS_EX_LAYERED = 0x00080000;
+        const int WS_EX_TOOLWINDOW = 0x00000080;
+        const int WS_EX_APPWINDOW = 0x00040000;
+        const int WM_DPICHANGED = 0x02E0;
+        const int ULW_ALPHA = 0x02;
+        const byte AC_SRC_OVER = 0x00;
+        const byte AC_SRC_ALPHA = 0x01;
+        const uint SWP_NOSIZE = 0x0001;
+        const uint SWP_NOMOVE = 0x0002;
+        const uint SWP_NOZORDER = 0x0004;
+        const uint SWP_NOACTIVATE = 0x0010;
+
+        public const int ORB_DISC_LOGICAL = 48;
+        public const int ORB_SHADOW_PAD_LOGICAL = 8;
+        public const int ORB_CANVAS_LOGICAL = ORB_DISC_LOGICAL + ORB_SHADOW_PAD_LOGICAL * 2; // 64px
+
+        private float _dpiScale = 1.0f;
+        private bool _isDark = false;
+        private float _ratio = 0.05f;
+        private string _health = "safe";
+        private bool _activeTurn = false;
+        private bool _hovered = false;
+        private bool _pressed = false;
+        private string _tipText = "";
+
+        private bool _mouseDown = false;
+        private bool _dragging = false;
+        private Point _dragStartCursor;
+        private Point _dragStartLocation;
+        private int _lastClickTick = 0;
+        private Timer _singleClickTimer;
+        private ToolTip _toolTip;
+        public bool IsMorphing = false;
+
+        public Action OnSingleClick;
+        public Action OnDoubleClick;
+        public Action OnContextMenuRequested;
+        public Action<Point> OnDragFinished;
+
+        public OrbOverlayForm(float dpiScale, bool isDark, bool topMost) {
+            _dpiScale = Math.Max(1.0f, dpiScale);
+            _isDark = isDark;
+            FormBorderStyle = FormBorderStyle.None;
+            StartPosition = FormStartPosition.Manual;
+            ShowInTaskbar = false;
+            TopMost = topMost;
+            Cursor = Cursors.Hand;
+            int px = CanvasPx();
+            Size = new Size(px, px);
+
+            _singleClickTimer = new Timer { Interval = 160 };
+            _singleClickTimer.Tick += delegate {
+                _singleClickTimer.Stop();
+                _lastClickTick = 0;
+                if (OnSingleClick != null) OnSingleClick();
+            };
+
+            _toolTip = new ToolTip {
+                AutomaticDelay = 200,
+                AutoPopDelay = 5000,
+                InitialDelay = 200,
+                ReshowDelay = 100,
+                ShowAlways = true
+            };
+        }
+
+        public int CanvasPx() {
+            return Math.Max(48, (int)Math.Round(ORB_CANVAS_LOGICAL * _dpiScale));
+        }
+
+        public int ShadowPadPx() {
+            return Math.Max(4, (int)Math.Round(ORB_SHADOW_PAD_LOGICAL * _dpiScale));
+        }
+
+        protected override CreateParams CreateParams {
+            get {
+                var cp = base.CreateParams;
+                cp.Style = WS_POPUP;
+                cp.ExStyle |= WS_EX_LAYERED | WS_EX_TOOLWINDOW;
+                cp.ExStyle &= ~WS_EX_APPWINDOW;
+                return cp;
+            }
+        }
+
+        protected override bool ShowWithoutActivation {
+            get { return true; }
+        }
+
+        protected override void OnHandleCreated(EventArgs e) {
+            base.OnHandleCreated(e);
+            RefreshDpiFromWindow();
+            RepaintLayered();
+        }
+
+        protected override void WndProc(ref Message m) {
+            if (m.Msg == WM_DPICHANGED) {
+                try {
+                    long wp = m.WParam.ToInt64();
+                    int newDpi = (int)((wp >> 16) & 0xFFFF);
+                    if (newDpi < 72) newDpi = (int)(wp & 0xFFFF);
+                    if (newDpi >= 72) {
+                        _dpiScale = newDpi / 96.0f;
+                        int px = CanvasPx();
+                        Size = new Size(px, px);
+                        RepaintLayered();
+                    }
+                    m.Result = IntPtr.Zero;
+                    return;
+                } catch {}
+            }
+            base.WndProc(ref m);
+        }
+
+        private void RefreshDpiFromWindow() {
+            if (!IsHandleCreated) return;
+            try {
+                uint d = GetDpiForWindow(Handle);
+                if (d >= 72) {
+                    _dpiScale = d / 96.0f;
+                    int px = CanvasPx();
+                    if (Width != px || Height != px) {
+                        Size = new Size(px, px);
+                    }
+                }
+            } catch {}
+        }
+
+        public void SetDpiScale(float scale) {
+            if (scale >= 0.75f && Math.Abs(scale - _dpiScale) > 0.01f) {
+                _dpiScale = scale;
+                int px = CanvasPx();
+                Size = new Size(px, px);
+                if (IsHandleCreated) RepaintLayered();
+            }
+        }
+
+        public void SetTheme(bool isDark) {
+            if (_isDark == isDark) return;
+            _isDark = isDark;
+            if (IsHandleCreated) RepaintLayered();
+        }
+
+        public void SetTopMost(bool topMost) {
+            TopMost = topMost;
+            if (IsHandleCreated) {
+                SetWindowPos(Handle, topMost ? new IntPtr(-1) : new IntPtr(-2), 0, 0, 0, 0, SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE);
+            }
+        }
+
+        public void SetTip(string text) {
+            _tipText = text ?? "";
+            if (_toolTip != null && !IsDisposed && IsHandleCreated) {
+                try { _toolTip.SetToolTip(this, _tipText); } catch {}
+            }
+        }
+
+        public void UpdateTelemetry(float ratio, string health, bool activeTurn, string tipText) {
+            float clamped = Math.Max(0.05f, Math.Min(1.0f, ratio));
+            string normHealth = string.IsNullOrEmpty(health) ? "safe" : health;
+            bool changed =
+                Math.Abs(clamped - _ratio) > 0.002f ||
+                !string.Equals(normHealth, _health, StringComparison.Ordinal) ||
+                activeTurn != _activeTurn;
+            _ratio = clamped;
+            _health = normHealth;
+            _activeTurn = activeTurn;
+            if (tipText != null) SetTip(tipText);
+            if (changed && IsHandleCreated && Visible) {
+                RepaintLayered();
+            }
+        }
+
+        public void ShowAt(Point loc, bool topMost) {
+            TopMost = topMost;
+            Location = loc;
+            if (!IsHandleCreated) CreateHandle();
+            RefreshDpiFromWindow();
+            RepaintLayered();
+            ShowWindow(Handle, 4); // SW_SHOWNOACTIVATE
+            SetWindowPos(Handle, topMost ? new IntPtr(-1) : new IntPtr(-2), loc.X, loc.Y, CanvasPx(), CanvasPx(), SWP_NOACTIVATE);
+            Visible = true;
+            RepaintLayered();
+        }
+
+        public void HideOrb() {
+            if (_singleClickTimer != null) _singleClickTimer.Stop();
+            _mouseDown = false;
+            _dragging = false;
+            _pressed = false;
+            _hovered = false;
+            if (_toolTip != null && IsHandleCreated) {
+                try { _toolTip.Hide(this); } catch {}
+            }
+            if (IsHandleCreated) {
+                ShowWindow(Handle, 0); // SW_HIDE
+            }
+            Visible = false;
+        }
+
+        private Color GetAccentColor() {
+            if (_health == "danger") return Color.FromArgb(229, 72, 77);  // Radix Red 9
+            if (_health == "warn") return Color.FromArgb(255, 178, 36);   // Radix Amber 9
+            return Color.FromArgb(0, 144, 255);                           // Radix Blue 9
+        }
+
+        private Color GetWingColor() {
+            if (_health == "danger") return Color.FromArgb(254, 235, 236); // Radix Red 3
+            if (_health == "warn") return Color.FromArgb(255, 247, 194);   // Radix Amber 3
+            return Color.FromArgb(213, 239, 255);                          // Radix Blue 4
+        }
+
+        private Bitmap RenderOrbBitmap(int canvasPx) {
+            var bmp = new Bitmap(canvasPx, canvasPx, PixelFormat.Format32bppPArgb);
+            using (var g = Graphics.FromImage(bmp)) {
+                g.SmoothingMode = SmoothingMode.HighQuality;
+                g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+                g.CompositingQuality = CompositingQuality.HighQuality;
+                g.Clear(Color.Transparent);
+
+                float s = canvasPx / (float)ORB_CANVAS_LOGICAL;
+                g.ScaleTransform(s, s);
+
+                if (_pressed) {
+                    g.TranslateTransform(32f, 32f);
+                    g.ScaleTransform(0.95f, 0.95f);
+                    g.TranslateTransform(-32f, -32f);
+                }
+
+                // 1. Soft multi-layer elevation shadow (zero hard square edge)
+                int[] alphas = _isDark ? new[] { 20, 34, 52 } : new[] { 10, 18, 28 };
+                float[] radii = new[] { 26.8f, 25.5f, 24.4f };
+                float[] yOffs = new[] { 2.4f, 1.8f, 1.2f };
+                for (int i = 0; i < 3; i++) {
+                    using (var sh = new SolidBrush(Color.FromArgb(alphas[i], 17, 17, 19))) {
+                        float r = radii[i];
+                        g.FillEllipse(sh, 32f - r, 32f + yOffs[i] - r, r * 2f, r * 2f);
+                    }
+                }
+
+                // 2. 48px circular card surface (Radix Slate 1 light / Slate 2 dark)
+                Color discFill = _isDark ? Color.FromArgb(24, 25, 27) : Color.FromArgb(252, 252, 253);
+                Color accent = GetAccentColor();
+                Color borderColor = (_hovered || _activeTurn)
+                    ? accent
+                    : (_isDark ? Color.FromArgb(67, 72, 78) : Color.FromArgb(205, 206, 214));
+
+                using (var fillBrush = new SolidBrush(discFill)) {
+                    g.FillEllipse(fillBrush, 8f, 8f, 48f, 48f);
+                }
+                using (var borderPen = new Pen(borderColor, (_hovered || _activeTurn) ? 1.35f : 1.0f)) {
+                    g.DrawEllipse(borderPen, 8.5f, 8.5f, 47f, 47f);
+                }
+
+                // 3. Outer circular telemetry progress track & arc (centered at 32,32, r=19.2)
+                Color trackColor = _isDark ? Color.FromArgb(46, 49, 53) : Color.FromArgb(224, 225, 230);
+                RectangleF ringRect = new RectangleF(12.8f, 12.8f, 38.4f, 38.4f);
+                using (var trackPen = new Pen(trackColor, 2.6f)) {
+                    g.DrawEllipse(trackPen, ringRect);
+                }
+                float sweep = Math.Max(0.05f, Math.Min(1.0f, _ratio)) * 360f;
+                using (var progPen = new Pen(accent, 2.6f)) {
+                    progPen.StartCap = LineCap.Round;
+                    progPen.EndCap = LineCap.Round;
+                    g.DrawArc(progPen, ringRect, -90f, sweep);
+                }
+
+                // 4. Center 20x20 Antigravity Core Prism brand mark (centered at 32,32)
+                float bx = 22f;
+                float by = 22f;
+                using (var bgBrush = new SolidBrush(accent))
+                using (var path = new GraphicsPath()) {
+                    float r = 5f;
+                    float d = r * 2f;
+                    path.AddArc(bx + 1f, by + 1f, d, d, 180, 90);
+                    path.AddArc(bx + 19f - d, by + 1f, d, d, 270, 90);
+                    path.AddArc(bx + 19f - d, by + 19f - d, d, d, 0, 90);
+                    path.AddArc(bx + 1f, by + 19f - d, d, d, 90, 90);
+                    path.CloseFigure();
+                    g.FillPath(bgBrush, path);
+                }
+
+                PointF[] diamond = new[] {
+                    new PointF(bx + 10f, by + 4f),
+                    new PointF(bx + 15f, by + 8f),
+                    new PointF(bx + 10f, by + 12f),
+                    new PointF(bx + 5f, by + 8f)
+                };
+                using (var whiteBrush = new SolidBrush(Color.White)) {
+                    g.FillPolygon(whiteBrush, diamond);
+                }
+                using (var wingPen = new Pen(GetWingColor(), 2.0f)) {
+                    wingPen.StartCap = LineCap.Round;
+                    wingPen.EndCap = LineCap.Round;
+                    wingPen.LineJoin = LineJoin.Round;
+                    g.DrawLines(wingPen, new[] {
+                        new PointF(bx + 5f, by + 13f),
+                        new PointF(bx + 10f, by + 16f),
+                        new PointF(bx + 15f, by + 13f)
+                    });
+                }
+            }
+            return bmp;
+        }
+
+        public void RepaintLayered() {
+            if (IsDisposed || !IsHandleCreated || IsMorphing) return;
+            int px = CanvasPx();
+            CommitLayeredBitmap(RenderOrbBitmap(px), Left, Top, px, px, 255);
+        }
+
+        private static GraphicsPath CreateRoundedRectPath(float x, float y, float w, float h, float radius) {
+            var path = new GraphicsPath();
+            float r = Math.Max(0.5f, Math.Min(radius, Math.Min(w, h) * 0.5f));
+            float d = r * 2f;
+            path.AddArc(x, y, d, d, 180, 90);
+            path.AddArc(x + w - d, y, d, d, 270, 90);
+            path.AddArc(x + w - d, y + h - d, d, d, 0, 90);
+            path.AddArc(x, y + h - d, d, d, 90, 90);
+            path.CloseFigure();
+            return path;
+        }
+
+        private static int LerpByte(int a, int b, float t) {
+            return Math.Max(0, Math.Min(255, (int)Math.Round(a + (b - a) * t)));
+        }
+
+        internal Bitmap RenderMorphBitmap(float bodyWLogical, float bodyHLogical, float radiusLogical, float morphT) {
+            float t = Math.Max(0f, Math.Min(1f, morphT));
+            float pad = ORB_SHADOW_PAD_LOGICAL;
+            float totalW = bodyWLogical + pad * 2f;
+            float totalH = bodyHLogical + pad * 2f;
+            int pxW = Math.Max(48, (int)Math.Ceiling(totalW * _dpiScale));
+            int pxH = Math.Max(48, (int)Math.Ceiling(totalH * _dpiScale));
+
+            var bmp = new Bitmap(pxW, pxH, PixelFormat.Format32bppPArgb);
+            using (var g = Graphics.FromImage(bmp)) {
+                g.SmoothingMode = SmoothingMode.HighQuality;
+                g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+                g.CompositingQuality = CompositingQuality.HighQuality;
+                g.Clear(Color.Transparent);
+                g.ScaleTransform(_dpiScale, _dpiScale);
+
+                // 1. Soft morphing elevation shadow
+                int[] alphas = _isDark ? new[] { 18, 30, 46 } : new[] { 9, 16, 25 };
+                float[] expands = new[] { 2.6f, 1.5f, 0.5f };
+                float[] yOffs = new[] { 2.4f, 1.7f, 1.1f };
+                for (int i = 0; i < 3; i++) {
+                    float ex = expands[i];
+                    using (var shPath = CreateRoundedRectPath(
+                        pad - ex,
+                        pad + yOffs[i] - ex,
+                        bodyWLogical + ex * 2f,
+                        bodyHLogical + ex * 2f,
+                        radiusLogical + ex))
+                    using (var shBrush = new SolidBrush(Color.FromArgb(alphas[i], 17, 17, 19))) {
+                        g.FillPath(shBrush, shPath);
+                    }
+                }
+
+                // 2. Morphing surface pill (Orb card -> MiniBar surface)
+                Color surfaceFill = _isDark
+                    ? Color.FromArgb(24, 25, 27)
+                    : Color.FromArgb(
+                        LerpByte(252, 249, t),
+                        LerpByte(252, 249, t),
+                        LerpByte(253, 251, t)
+                    );
+                Color accent = GetAccentColor();
+                Color borderColor = _isDark ? Color.FromArgb(67, 72, 78) : Color.FromArgb(205, 206, 214);
+
+                using (var pillPath = CreateRoundedRectPath(pad, pad, bodyWLogical, bodyHLogical, radiusLogical))
+                using (var fillBrush = new SolidBrush(surfaceFill)) {
+                    g.FillPath(fillBrush, pillPath);
+                }
+                using (var borderPath = CreateRoundedRectPath(pad + 0.5f, pad + 0.5f, bodyWLogical - 1f, bodyHLogical - 1f, Math.Max(0.5f, radiusLogical - 0.5f)))
+                using (var borderPen = new Pen(borderColor, 1.0f)) {
+                    g.DrawPath(borderPen, borderPath);
+                }
+
+                // 3. Circular telemetry ring dissolves smoothly as Orb stretches into MiniBar
+                float ringVis = Math.Max(0f, Math.Min(1f, 1f - t * 2.6f));
+                if (ringVis > 0.02f) {
+                    int aTrack = (int)Math.Round(255 * ringVis);
+                    Color baseTrack = _isDark ? Color.FromArgb(46, 49, 53) : Color.FromArgb(224, 225, 230);
+                    Color trackC = Color.FromArgb(aTrack, baseTrack.R, baseTrack.G, baseTrack.B);
+                    Color progC = Color.FromArgb(aTrack, accent.R, accent.G, accent.B);
+                    float cx = pad + bodyWLogical * 0.5f;
+                    float cy = pad + bodyHLogical * 0.5f;
+                    float ringD = 38.4f;
+                    RectangleF ringRect = new RectangleF(cx - ringD * 0.5f, cy - ringD * 0.5f, ringD, ringD);
+                    using (var trackPen = new Pen(trackC, 2.6f)) {
+                        g.DrawEllipse(trackPen, ringRect);
+                    }
+                    float sweep = Math.Max(0.05f, Math.Min(1.0f, _ratio)) * 360f;
+                    using (var progPen = new Pen(progC, 2.6f)) {
+                        progPen.StartCap = LineCap.Round;
+                        progPen.EndCap = LineCap.Round;
+                        g.DrawArc(progPen, ringRect, -90f, sweep);
+                    }
+                }
+
+                // 4. Brand Prism Logo glides from Orb center to MiniBar left slot (x = pad + 12 + 9)
+                float logoSize = 20f + (18f - 20f) * t;
+                float startCenterX = pad + bodyWLogical * 0.5f;
+                float endCenterX = pad + 12f + logoSize * 0.5f;
+                float logoCx = startCenterX + (endCenterX - startCenterX) * t;
+                float logoCy = pad + bodyHLogical * 0.5f;
+                float scaleLogo = logoSize / 20f;
+
+                var state = g.Save();
+                g.TranslateTransform(logoCx - logoSize * 0.5f, logoCy - logoSize * 0.5f);
+                g.ScaleTransform(scaleLogo, scaleLogo);
+                using (var bgBrush = new SolidBrush(accent))
+                using (var path = CreateRoundedRectPath(1f, 1f, 18f, 18f, 5f)) {
+                    g.FillPath(bgBrush, path);
+                }
+                PointF[] diamond = new[] {
+                    new PointF(10f, 4f),
+                    new PointF(15f, 8f),
+                    new PointF(10f, 12f),
+                    new PointF(5f, 8f)
+                };
+                using (var whiteBrush = new SolidBrush(Color.White)) {
+                    g.FillPolygon(whiteBrush, diamond);
+                }
+                using (var wingPen = new Pen(GetWingColor(), 2.0f)) {
+                    wingPen.StartCap = LineCap.Round;
+                    wingPen.EndCap = LineCap.Round;
+                    wingPen.LineJoin = LineJoin.Round;
+                    g.DrawLines(wingPen, new[] {
+                        new PointF(5f, 13f),
+                        new PointF(10f, 16f),
+                        new PointF(15f, 13f)
+                    });
+                }
+                g.Restore(state);
+            }
+            return bmp;
+        }
+
+        public void PaintMorphFrame(int bodyX, int bodyY, int bodyW, int bodyH, float radiusLogical, float morphT, byte constAlpha, bool topMost) {
+            if (IsDisposed) return;
+            if (!IsHandleCreated) CreateHandle();
+            int padPx = ShadowPadPx();
+            float wLog = Math.Max(32f, bodyW / _dpiScale);
+            float hLog = Math.Max(28f, bodyH / _dpiScale);
+            using (var bmp = RenderMorphBitmap(wLog, hLog, radiusLogical, morphT)) {
+                int dstX = bodyX - padPx;
+                int dstY = bodyY - padPx;
+                if (!Visible) {
+                    ShowWindow(Handle, 4); // SW_SHOWNOACTIVATE
+                    Visible = true;
+                }
+                CommitLayeredBitmap(bmp, dstX, dstY, bmp.Width, bmp.Height, constAlpha);
+                SetWindowPos(Handle, topMost ? new IntPtr(-1) : new IntPtr(-2), dstX, dstY, bmp.Width, bmp.Height, SWP_NOACTIVATE);
+            }
+        }
+
+        private void CommitLayeredBitmap(Bitmap bmp, int x, int y, int w, int h, byte constAlpha) {
+            if (bmp == null || IsDisposed || !IsHandleCreated) return;
+            IntPtr screenDc = IntPtr.Zero;
+            IntPtr memDc = IntPtr.Zero;
+            IntPtr hBitmap = IntPtr.Zero;
+            IntPtr oldBitmap = IntPtr.Zero;
+            try {
+                screenDc = GetDC(IntPtr.Zero);
+                memDc = CreateCompatibleDC(screenDc);
+                hBitmap = bmp.GetHbitmap(Color.FromArgb(0));
+                oldBitmap = SelectObject(memDc, hBitmap);
+
+                var size = new SIZE_WIN32 { cx = w, cy = h };
+                var ptSrc = new POINT_WIN32 { X = 0, Y = 0 };
+                var ptDst = new POINT_WIN32 { X = x, Y = y };
+                var blend = new BLENDFUNCTION {
+                    BlendOp = AC_SRC_OVER,
+                    BlendFlags = 0,
+                    SourceConstantAlpha = constAlpha,
+                    AlphaFormat = AC_SRC_ALPHA
+                };
+                UpdateLayeredWindow(Handle, screenDc, ref ptDst, ref size, memDc, ref ptSrc, 0, ref blend, ULW_ALPHA);
+            } catch {}
+            finally {
+                if (oldBitmap != IntPtr.Zero && memDc != IntPtr.Zero) SelectObject(memDc, oldBitmap);
+                if (hBitmap != IntPtr.Zero) DeleteObject(hBitmap);
+                if (memDc != IntPtr.Zero) DeleteDC(memDc);
+                if (screenDc != IntPtr.Zero) ReleaseDC(IntPtr.Zero, screenDc);
+            }
+        }
+
+        protected override void OnMouseEnter(EventArgs e) {
+            base.OnMouseEnter(e);
+            if (IsMorphing) return;
+            _hovered = true;
+            RepaintLayered();
+        }
+
+        protected override void OnMouseLeave(EventArgs e) {
+            base.OnMouseLeave(e);
+            if (IsMorphing) return;
+            _hovered = false;
+            if (!_mouseDown) {
+                _pressed = false;
+            }
+            RepaintLayered();
+        }
+
+        protected override void OnMouseDown(MouseEventArgs e) {
+            base.OnMouseDown(e);
+            if (IsMorphing) return;
+            if (e.Button == MouseButtons.Left) {
+                _mouseDown = true;
+                _dragging = false;
+                _pressed = true;
+                _dragStartCursor = Cursor.Position;
+                _dragStartLocation = Location;
+                Capture = true;
+                RepaintLayered();
+            }
+        }
+
+        protected override void OnMouseMove(MouseEventArgs e) {
+            base.OnMouseMove(e);
+            if (IsMorphing || !_mouseDown) return;
+            Point cur = Cursor.Position;
+            int dx = cur.X - _dragStartCursor.X;
+            int dy = cur.Y - _dragStartCursor.Y;
+            if (!_dragging) {
+                int threshold = Math.Max(4, (int)Math.Round(4 * _dpiScale));
+                if (dx * dx + dy * dy < threshold * threshold) return;
+                _dragging = true;
+                _singleClickTimer.Stop();
+                _lastClickTick = 0;
+                Cursor = Cursors.SizeAll;
+                if (_toolTip != null && IsHandleCreated) {
+                    try { _toolTip.Hide(this); } catch {}
+                }
+            }
+            int nx = _dragStartLocation.X + dx;
+            int ny = _dragStartLocation.Y + dy;
+            SetWindowPos(Handle, IntPtr.Zero, nx, ny, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+        }
+
+        protected override void OnMouseUp(MouseEventArgs e) {
+            base.OnMouseUp(e);
+            if (IsMorphing) return;
+            if (e.Button == MouseButtons.Right) {
+                if (OnContextMenuRequested != null) OnContextMenuRequested();
+                return;
+            }
+            if (e.Button != MouseButtons.Left || !_mouseDown) return;
+            bool wasDragging = _dragging;
+            _mouseDown = false;
+            _dragging = false;
+            _pressed = false;
+            Capture = false;
+            Cursor = Cursors.Hand;
+            RepaintLayered();
+
+            if (wasDragging) {
+                if (OnDragFinished != null) OnDragFinished(Location);
+                return;
+            }
+
+            int now = Environment.TickCount;
+            if (_lastClickTick != 0 && unchecked(now - _lastClickTick) <= 220) {
+                _singleClickTimer.Stop();
+                _lastClickTick = 0;
+                if (OnDoubleClick != null) OnDoubleClick();
+            } else {
+                _lastClickTick = now;
+                _singleClickTimer.Stop();
+                _singleClickTimer.Start();
+            }
+        }
+
+        protected override void Dispose(bool disposing) {
+            if (disposing) {
+                if (_singleClickTimer != null) {
+                    try { _singleClickTimer.Stop(); _singleClickTimer.Dispose(); } catch {}
+                    _singleClickTimer = null;
+                }
+                if (_toolTip != null) {
+                    try { _toolTip.Dispose(); } catch {}
+                    _toolTip = null;
+                }
+            }
+            base.Dispose(disposing);
+        }
+    }
+
     public class FloatingForm : Form,
         ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler,
         ICoreWebView2CreateCoreWebView2ControllerCompletedHandler,
@@ -271,6 +910,8 @@ namespace ContextCacheHost {
         [DllImport("user32.dll")]
         static extern uint GetDpiForSystem();
         [DllImport("user32.dll")]
+        static extern uint GetDpiForWindow(IntPtr hWnd);
+        [DllImport("user32.dll")]
         static extern IntPtr GetForegroundWindow();
         [DllImport("user32.dll")]
         static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
@@ -278,6 +919,12 @@ namespace ContextCacheHost {
         static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
         [DllImport("user32.dll")]
         static extern int SetWindowRgn(IntPtr hWnd, IntPtr hRgn, bool bRedraw);
+        [DllImport("user32.dll")]
+        static extern int GetWindowLong(IntPtr hWnd, int nIndex);
+        [DllImport("user32.dll")]
+        static extern int SetWindowLong(IntPtr hWnd, int nIndex, int dwNewLong);
+        [DllImport("user32.dll")]
+        static extern bool SetLayeredWindowAttributes(IntPtr hwnd, uint crKey, byte bAlpha, uint dwFlags);
         [DllImport("gdi32.dll")]
         static extern IntPtr CreateEllipticRgn(int nLeftRect, int nTopRect, int nRightRect, int nBottomRect);
         [DllImport("gdi32.dll")]
@@ -326,12 +973,16 @@ namespace ContextCacheHost {
         const int WS_MINIMIZEBOX = 0x00020000;
         const int WS_MAXIMIZEBOX = 0x00010000;
         const int WS_EX_TOOLWINDOW = 0x00000080;
+        const int WS_EX_LAYERED = 0x00080000;
         const int WS_EX_APPWINDOW = 0x00040000;
+        const int GWL_EXSTYLE = -20;
+        const uint LWA_ALPHA = 0x02;
 
         const uint SWP_NOSIZE = 0x0001;
         const uint SWP_NOMOVE = 0x0002;
         const uint SWP_NOZORDER = 0x0004;
         const uint SWP_NOACTIVATE = 0x0010;
+        const uint SWP_FRAMECHANGED = 0x0020;
         const uint SWP_SHOWWINDOW = 0x0040;
 
         const int SM_CXSIZEFRAME = 32;
@@ -367,6 +1018,7 @@ namespace ContextCacheHost {
         private bool _hasSavedConsoleLocation = false;
         private Point _orbLocation;
         private bool _hasOrbLocation = false;
+        private bool _orbAnchorRight = false;
         private bool _inModeTransition = false;
         private bool _inSizeMove = false;
 
@@ -381,6 +1033,12 @@ namespace ContextCacheHost {
         private ToolStripMenuItem _orbMenuPinItem;
         private ToolTip _orbToolTip;
         private string _orbTipText = "";
+        private OrbOverlayForm _orbForm;
+        private float _orbRatio = 0.05f;
+        private string _orbHealth = "safe";
+        private bool _orbActiveTurn = false;
+        private Timer _morphTimer;
+        private bool _formLayeredActive = false;
         private Timer _closeFallbackTimer;
 
         public static void EnableDpiAwareness() {
@@ -528,6 +1186,14 @@ namespace ContextCacheHost {
                 }
             } catch {}
             return Screen.PrimaryScreen != null ? Screen.PrimaryScreen.WorkingArea : new Rectangle(0, 0, 1440, 900);
+        }
+
+        private Rectangle GetWorkingAreaForPoint(int px, int py) {
+            try {
+                Rectangle r = Screen.FromPoint(new Point(px, py)).WorkingArea;
+                if (r.Width > 0 && r.Height > 0) return r;
+            } catch {}
+            return GetCurrentWorkingArea();
         }
 
         private Point ClampToWorkingArea(int x, int y, int w, int h) {
@@ -919,11 +1585,281 @@ namespace ContextCacheHost {
             PostJsonToWebView(json);
         }
 
+        private void EnsureOrbForm() {
+            if (_orbForm != null && !_orbForm.IsDisposed) return;
+            _orbForm = new OrbOverlayForm(_dpiScale, _isDark, TopMost);
+            _orbForm.OnSingleClick = delegate { EnterMiniBarMode(_miniBarLogicalHeight); };
+            _orbForm.OnDoubleClick = delegate { EnterConsoleMode(); };
+            _orbForm.OnContextMenuRequested = delegate { ShowOrbContextMenu(); };
+            _orbForm.OnDragFinished = delegate(Point loc) {
+                int canvasPx = _orbForm != null ? _orbForm.CanvasPx() : OrbPx();
+                Point clamped = ClampToWorkingArea(loc.X, loc.Y, canvasPx, canvasPx);
+                if (clamped != loc && _orbForm != null && _orbForm.IsHandleCreated) {
+                    SetWindowPos(_orbForm.Handle, IntPtr.Zero, clamped.X, clamped.Y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+                }
+                _orbLocation = clamped;
+                _hasOrbLocation = true;
+                Rectangle wa = GetWorkingAreaForPoint(clamped.X + canvasPx / 2, clamped.Y + canvasPx / 2);
+                _orbAnchorRight = (clamped.X + canvasPx / 2) > (wa.Left + wa.Width / 2);
+                EmitSizeMoveEnd();
+            };
+        }
+
+        private void RefreshWindowDpiScale() {
+            if (!IsHandleCreated) return;
+            try {
+                uint d = GetDpiForWindow(Handle);
+                if (d >= 72) {
+                    float next = d / 96.0f;
+                    if (Math.Abs(next - _dpiScale) > 0.01f) {
+                        _dpiScale = next;
+                        if (_orbForm != null && !_orbForm.IsDisposed) {
+                            _orbForm.SetDpiScale(_dpiScale);
+                        }
+                    }
+                }
+            } catch {}
+        }
+
+        private void SetFormLayeredAlpha(byte alpha) {
+            if (IsDisposed || !IsHandleCreated) return;
+            try {
+                if (!_formLayeredActive) {
+                    int ex = GetWindowLong(Handle, GWL_EXSTYLE);
+                    if ((ex & WS_EX_LAYERED) == 0) {
+                        SetWindowLong(Handle, GWL_EXSTYLE, ex | WS_EX_LAYERED);
+                    }
+                    _formLayeredActive = true;
+                }
+                SetLayeredWindowAttributes(Handle, 0, alpha, LWA_ALPHA);
+            } catch {}
+        }
+
+        private void ClearFormLayeredAlpha() {
+            if (IsDisposed || !IsHandleCreated || !_formLayeredActive) {
+                _formLayeredActive = false;
+                return;
+            }
+            try {
+                SetLayeredWindowAttributes(Handle, 0, 255, LWA_ALPHA);
+                int ex = GetWindowLong(Handle, GWL_EXSTYLE);
+                if ((ex & WS_EX_LAYERED) != 0) {
+                    SetWindowLong(Handle, GWL_EXSTYLE, ex & ~WS_EX_LAYERED);
+                    SetWindowPos(Handle, IntPtr.Zero, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+                }
+            } catch {}
+            _formLayeredActive = false;
+        }
+
+        private void CancelMorphAnimation() {
+            if (_morphTimer != null) {
+                try { _morphTimer.Stop(); _morphTimer.Dispose(); } catch {}
+                _morphTimer = null;
+            }
+            if (_orbForm != null && !_orbForm.IsDisposed) {
+                _orbForm.IsMorphing = false;
+            }
+            ClearFormLayeredAlpha();
+        }
+
+        private static int LerpInt(int a, int b, double t) {
+            return (int)Math.Round(a + (b - a) * t);
+        }
+
+        private static double EaseOutCubic(double t) {
+            double inv = 1.0 - Math.Max(0.0, Math.Min(1.0, t));
+            return 1.0 - inv * inv * inv;
+        }
+
+        private void StartOrbToMiniBarMorph(Rectangle fromDisc, Rectangle toBar) {
+            CancelMorphAnimation();
+            EnsureOrbForm();
+            _orbForm.SetDpiScale(_dpiScale);
+            _orbForm.SetTheme(_isDark);
+            _orbForm.UpdateTelemetry(_orbRatio, _orbHealth, _orbActiveTurn, _orbTipText);
+            _orbForm.IsMorphing = true;
+
+            // Pre-position & render real WebView2 MiniBar invisibly at alpha=0 so chips lay out cleanly before crossfade
+            SetFormLayeredAlpha(0);
+            IntPtr zAfter = TopMost ? new IntPtr(-1) : new IntPtr(-2);
+            SetWindowPos(Handle, zAfter, toBar.X, toBar.Y, toBar.Width, toBar.Height, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+            ShowWindow(Handle, 4); // SW_SHOWNOACTIVATE
+            SyncBounds();
+            EmitHostState();
+
+            var sw = Stopwatch.StartNew();
+            const double durationMs = 220.0;
+            _morphTimer = new Timer { Interval = 10 };
+            _morphTimer.Tick += delegate {
+                if (IsDisposed || _orbForm == null || _orbForm.IsDisposed || _windowMode != WindowMode.MiniBar) {
+                    CancelMorphAnimation();
+                    return;
+                }
+                double rawT = Math.Min(1.0, sw.Elapsed.TotalMilliseconds / durationMs);
+                double e = EaseOutCubic(rawT);
+
+                int curX = LerpInt(fromDisc.X, toBar.X, e);
+                int curY = LerpInt(fromDisc.Y, toBar.Y, e);
+                int curW = LerpInt(fromDisc.Width, toBar.Width, e);
+                int curH = LerpInt(fromDisc.Height, toBar.Height, e);
+                float curR = (float)(24.0 + (8.0 - 24.0) * e);
+
+                byte formAlpha = 0;
+                byte orbAlpha = 255;
+                if (rawT >= 0.56) {
+                    double ft = Math.Min(1.0, (rawT - 0.56) / 0.44);
+                    double smooth = ft * ft * (3.0 - 2.0 * ft);
+                    formAlpha = (byte)Math.Round(255.0 * smooth);
+                    orbAlpha = (byte)Math.Round(255.0 * (1.0 - smooth * 0.85));
+                }
+
+                _orbForm.PaintMorphFrame(curX, curY, curW, curH, curR, (float)e, orbAlpha, TopMost);
+                if (formAlpha > 0) {
+                    // Keep real WebView2 MiniBar right above morph pill during overlap crossfade
+                    SetWindowPos(Handle, TopMost ? new IntPtr(-1) : new IntPtr(-2), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+                }
+                SetFormLayeredAlpha(formAlpha);
+
+                if (rawT >= 1.0) {
+                    CancelMorphAnimation();
+                    if (_orbForm != null && !_orbForm.IsDisposed) {
+                        _orbForm.HideOrb();
+                    }
+                    ShowWindow(Handle, 5); // SW_SHOW
+                    SetWindowPos(Handle, TopMost ? new IntPtr(-1) : new IntPtr(-2), toBar.X, toBar.Y, toBar.Width, toBar.Height, SWP_NOACTIVATE);
+                    SyncBounds();
+                    EmitHostState();
+                }
+            };
+            _morphTimer.Start();
+        }
+
+        private void StartMiniBarToOrbMorph(Rectangle fromBar, Rectangle toDisc, Point finalOrbLoc) {
+            CancelMorphAnimation();
+            EnsureOrbForm();
+            _orbForm.SetDpiScale(_dpiScale);
+            _orbForm.SetTheme(_isDark);
+            _orbForm.UpdateTelemetry(_orbRatio, _orbHealth, _orbActiveTurn, _orbTipText);
+            _orbForm.IsMorphing = true;
+
+            // Paint morph shell immediately underneath MiniBar at t=0, then fade MiniBar out in first 55ms
+            _orbForm.PaintMorphFrame(fromBar.X, fromBar.Y, fromBar.Width, fromBar.Height, 8f, 1f, 255, TopMost);
+            SetFormLayeredAlpha(255);
+            SetWindowPos(Handle, TopMost ? new IntPtr(-1) : new IntPtr(-2), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+
+            var sw = Stopwatch.StartNew();
+            const double durationMs = 220.0;
+            bool formHidden = false;
+            _morphTimer = new Timer { Interval = 10 };
+            _morphTimer.Tick += delegate {
+                if (IsDisposed || _orbForm == null || _orbForm.IsDisposed || _windowMode != WindowMode.Orb) {
+                    CancelMorphAnimation();
+                    return;
+                }
+                double rawT = Math.Min(1.0, sw.Elapsed.TotalMilliseconds / durationMs);
+                double e = EaseOutCubic(rawT);
+
+                if (!formHidden) {
+                    if (rawT < 0.26) {
+                        double ft = 1.0 - (rawT / 0.26);
+                        SetFormLayeredAlpha((byte)Math.Round(255.0 * ft));
+                    } else {
+                        formHidden = true;
+                        ShowWindow(Handle, 0); // SW_HIDE
+                        ClearFormLayeredAlpha();
+                    }
+                }
+
+                int curX = LerpInt(fromBar.X, toDisc.X, e);
+                int curY = LerpInt(fromBar.Y, toDisc.Y, e);
+                int curW = LerpInt(fromBar.Width, toDisc.Width, e);
+                int curH = LerpInt(fromBar.Height, toDisc.Height, e);
+                float curR = (float)(8.0 + (24.0 - 8.0) * e);
+
+                _orbForm.PaintMorphFrame(curX, curY, curW, curH, curR, (float)(1.0 - e), 255, TopMost);
+
+                if (rawT >= 1.0) {
+                    CancelMorphAnimation();
+                    if (IsHandleCreated) ShowWindow(Handle, 0);
+                    if (_orbForm != null && !_orbForm.IsDisposed) {
+                        _orbForm.IsMorphing = false;
+                        _orbForm.ShowAt(finalOrbLoc, TopMost);
+                    }
+                    EmitHostState();
+                }
+            };
+            _morphTimer.Start();
+        }
+
+        private void StartOrbToConsoleFade(Rectangle toConsole) {
+            CancelMorphAnimation();
+            EnsureOrbForm();
+            _orbForm.IsMorphing = true;
+
+            SetFormLayeredAlpha(0);
+            IntPtr zAfter = TopMost ? new IntPtr(-1) : new IntPtr(-2);
+            SetWindowPos(Handle, zAfter, toConsole.X, toConsole.Y, toConsole.Width, toConsole.Height, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+            ShowWindow(Handle, 4);
+            SyncBounds();
+            EmitHostState();
+
+            var sw = Stopwatch.StartNew();
+            const double durationMs = 170.0;
+            int padPx = _orbForm.ShadowPadPx();
+            int discX = _orbForm.Left + padPx;
+            int discY = _orbForm.Top + padPx;
+            int orbPx = OrbPx();
+
+            _morphTimer = new Timer { Interval = 10 };
+            _morphTimer.Tick += delegate {
+                if (IsDisposed || _windowMode != WindowMode.Console) {
+                    CancelMorphAnimation();
+                    return;
+                }
+                double rawT = Math.Min(1.0, sw.Elapsed.TotalMilliseconds / durationMs);
+                double e = EaseOutCubic(rawT);
+                byte formAlpha = (byte)Math.Round(255.0 * e);
+                byte orbAlpha = (byte)Math.Round(255.0 * (1.0 - e));
+
+                if (_orbForm != null && !_orbForm.IsDisposed && orbAlpha > 2) {
+                    _orbForm.PaintMorphFrame(discX, discY, orbPx, orbPx, 24f, 0f, orbAlpha, TopMost);
+                }
+                SetFormLayeredAlpha(formAlpha);
+
+                if (rawT >= 1.0) {
+                    CancelMorphAnimation();
+                    if (_orbForm != null && !_orbForm.IsDisposed) _orbForm.HideOrb();
+                    ShowWindow(Handle, 5);
+                    SyncBounds();
+                    EmitHostState();
+                }
+            };
+            _morphTimer.Start();
+        }
+
         private void EnterOrbMode() {
+            CancelMorphAnimation();
             if (_windowMode == WindowMode.Orb) {
+                EnsureOrbForm();
+                if (_orbForm != null && !_orbForm.Visible) {
+                    int canvasPx = _orbForm.CanvasPx();
+                    Point clamped = ClampToWorkingArea(_orbLocation.X, _orbLocation.Y, canvasPx, canvasPx);
+                    _orbLocation = clamped;
+                    _hasOrbLocation = true;
+                    _orbForm.SetTheme(_isDark);
+                    _orbForm.UpdateTelemetry(_orbRatio, _orbHealth, _orbActiveTurn, _orbTipText);
+                    _orbForm.ShowAt(clamped, TopMost);
+                }
+                if (IsHandleCreated) ShowWindow(Handle, 0);
                 EmitHostState();
                 return;
             }
+            WindowMode prevMode = _windowMode;
+            Rectangle prevRect = new Rectangle(Left, Top, Width, Height);
+            bool bootingDirectOrb = (_initialMode == WindowMode.Orb && !_readyEmitted && _webview == null);
+            Point finalOrbLoc;
+            int padPx;
+            int orbPx = OrbPx();
             _inModeTransition = true;
             try {
                 if (_windowMode == WindowMode.Console && WindowState == FormWindowState.Normal) {
@@ -941,37 +1877,76 @@ namespace ContextCacheHost {
                     WindowState = FormWindowState.Normal;
                 }
 
-                int orbPx = OrbPx();
-                int targetX = _hasOrbLocation ? _orbLocation.X : (Right - orbPx - 8);
-                int targetY = _hasOrbLocation ? _orbLocation.Y : (Top + 8);
+                EnsureOrbForm();
+                int canvasPx = _orbForm.CanvasPx();
+                padPx = _orbForm.ShadowPadPx();
+                orbPx = OrbPx();
+                int targetX;
+                int targetY;
+                if (bootingDirectOrb && _hasOrbLocation) {
+                    targetX = _orbLocation.X;
+                    targetY = _orbLocation.Y;
+                } else {
+                    Rectangle wa = GetCurrentWorkingArea();
+                    _orbAnchorRight = (Left + Width / 2) > (wa.Left + wa.Width / 2);
+                    int discX = _orbAnchorRight ? (Right - orbPx) : Left;
+                    int discY = Top + (Height - orbPx) / 2;
+                    targetX = discX - padPx;
+                    targetY = discY - padPx;
+                }
 
                 _windowMode = WindowMode.Orb;
-                Point clamped = ClampToWorkingArea(targetX, targetY, orbPx, orbPx);
-
-                int corner = DWMWCP_DONOTROUND;
-                try { DwmSetWindowAttribute(Handle, DWMWA_WINDOW_CORNER_PREFERENCE, ref corner, sizeof(int)); } catch {}
-
-                SetWindowPos(Handle, IntPtr.Zero, clamped.X, clamped.Y, orbPx, orbPx, SWP_NOZORDER | SWP_NOACTIVATE);
-                ApplyOrbRegion(orbPx, orbPx);
-                _orbLocation = clamped;
+                finalOrbLoc = ClampToWorkingArea(targetX, targetY, canvasPx, canvasPx);
+                _orbLocation = finalOrbLoc;
                 _hasOrbLocation = true;
+                if (bootingDirectOrb) {
+                    Rectangle orbWa = GetWorkingAreaForPoint(finalOrbLoc.X + canvasPx / 2, finalOrbLoc.Y + canvasPx / 2);
+                    _orbAnchorRight = (finalOrbLoc.X + canvasPx / 2) > (orbWa.Left + orbWa.Width / 2);
+                }
             } finally {
                 _inModeTransition = false;
             }
-            SyncBounds();
+
+            if (prevMode == WindowMode.MiniBar && _webview != null && IsHandleCreated && prevRect.Width > 0 && prevRect.Height > 0) {
+                Rectangle toDisc = new Rectangle(finalOrbLoc.X + padPx, finalOrbLoc.Y + padPx, orbPx, orbPx);
+                StartMiniBarToOrbMorph(prevRect, toDisc, finalOrbLoc);
+                return;
+            }
+
+            _orbForm.SetDpiScale(_dpiScale);
+            _orbForm.SetTheme(_isDark);
+            _orbForm.UpdateTelemetry(_orbRatio, _orbHealth, _orbActiveTurn, _orbTipText);
+            _orbForm.ShowAt(finalOrbLoc, TopMost);
+            if (IsHandleCreated && _webview != null) {
+                ShowWindow(Handle, 0);
+            }
             EmitHostState();
         }
 
         private void EnterMiniBarMode(int logicalHeight) {
+            CancelMorphAnimation();
             if (logicalHeight > 0) {
                 _miniBarLogicalHeight = Math.Max(36, Math.Min(120, logicalHeight));
             }
+            bool leavingOrb = (_windowMode == WindowMode.Orb);
+            bool animateFromOrb = leavingOrb && _orbForm != null && !_orbForm.IsDisposed && _orbForm.Visible && _webview != null && IsHandleCreated;
+            Rectangle fromDisc = Rectangle.Empty;
+            if (animateFromOrb) {
+                int padPx = _orbForm.ShadowPadPx();
+                fromDisc = new Rectangle(_orbForm.Left + padPx, _orbForm.Top + padPx, OrbPx(), OrbPx());
+            }
+
+            Point clamped;
+            int targetW;
+            int targetH;
             _inModeTransition = true;
             try {
-                bool leavingOrb = (_windowMode == WindowMode.Orb);
                 if (leavingOrb) {
-                    _orbLocation = Location;
-                    _hasOrbLocation = true;
+                    if (_orbForm != null && !_orbForm.IsDisposed) {
+                        _orbLocation = _orbForm.Location;
+                        _hasOrbLocation = true;
+                        if (!animateFromOrb) _orbForm.HideOrb();
+                    }
                 } else if (_windowMode == WindowMode.Console && WindowState == FormWindowState.Normal) {
                     if (Width >= MinSharedWidthPx()) _sharedWidth = Width;
                     if (Height >= MinConsoleHeightPx()) _expandedHeight = Height;
@@ -993,39 +1968,66 @@ namespace ContextCacheHost {
                 Rectangle wa = GetCurrentWorkingArea();
                 int minW = MinSharedWidthPx();
                 int maxW = Math.Max(minW, wa.Width - 24);
-                int targetW = Math.Max(minW, Math.Min(maxW, _sharedWidth));
+                targetW = Math.Max(minW, Math.Min(maxW, _sharedWidth));
                 _sharedWidth = targetW;
-                int targetH = MiniBarHeightPx();
+                targetH = MiniBarHeightPx();
 
                 int baseX;
                 int baseY;
-                if (leavingOrb && _hasSavedConsoleLocation) {
-                    baseX = _savedConsoleLocation.X;
-                    baseY = _savedConsoleLocation.Y;
-                } else if (leavingOrb) {
-                    baseX = Left - targetW + Width;
-                    baseY = Top;
+                if (leavingOrb) {
+                    int padPx = (_orbForm != null && !_orbForm.IsDisposed)
+                        ? _orbForm.ShadowPadPx()
+                        : Math.Max(4, (int)Math.Round(OrbOverlayForm.ORB_SHADOW_PAD_LOGICAL * _dpiScale));
+                    int orbPx = OrbPx();
+                    int discX = _orbLocation.X + padPx;
+                    int discY = _orbLocation.Y + padPx;
+                    baseX = _orbAnchorRight ? (discX + orbPx - targetW) : discX;
+                    baseY = discY + (orbPx - targetH) / 2;
                 } else {
                     baseX = Left;
                     baseY = Top;
                 }
 
-                Point clamped = ClampToWorkingArea(baseX, baseY, targetW, targetH);
-                SetWindowPos(Handle, IntPtr.Zero, clamped.X, clamped.Y, targetW, targetH, SWP_NOZORDER | SWP_NOACTIVATE);
+                clamped = ClampToWorkingArea(baseX, baseY, targetW, targetH);
+                if (leavingOrb) {
+                    _savedConsoleLocation = clamped;
+                    _hasSavedConsoleLocation = true;
+                }
+                if (!animateFromOrb) {
+                    uint flags = leavingOrb ? SWP_SHOWWINDOW : (SWP_NOZORDER | SWP_NOACTIVATE);
+                    IntPtr zAfter = leavingOrb ? (TopMost ? new IntPtr(-1) : new IntPtr(-2)) : IntPtr.Zero;
+                    SetWindowPos(Handle, zAfter, clamped.X, clamped.Y, targetW, targetH, flags);
+                    if (leavingOrb) {
+                        ShowWindow(Handle, 5); // SW_SHOW
+                    }
+                }
             } finally {
                 _inModeTransition = false;
+            }
+
+            if (animateFromOrb) {
+                StartOrbToMiniBarMorph(fromDisc, new Rectangle(clamped.X, clamped.Y, targetW, targetH));
+                return;
             }
             SyncBounds();
             EmitHostState();
         }
 
         private void EnterConsoleMode() {
+            CancelMorphAnimation();
+            bool leavingOrb = (_windowMode == WindowMode.Orb);
+            bool animateFromOrb = leavingOrb && _orbForm != null && !_orbForm.IsDisposed && _orbForm.Visible && _webview != null && IsHandleCreated;
+            Point clamped;
+            int targetW;
+            int targetH;
             _inModeTransition = true;
             try {
-                bool leavingOrb = (_windowMode == WindowMode.Orb);
                 if (leavingOrb) {
-                    _orbLocation = Location;
-                    _hasOrbLocation = true;
+                    if (_orbForm != null && !_orbForm.IsDisposed) {
+                        _orbLocation = _orbForm.Location;
+                        _hasOrbLocation = true;
+                        if (!animateFromOrb) _orbForm.HideOrb();
+                    }
                 } else if (_windowMode == WindowMode.MiniBar) {
                     if (Width >= MinSharedWidthPx()) _sharedWidth = Width;
                     _savedConsoleLocation = Location;
@@ -1044,28 +2046,47 @@ namespace ContextCacheHost {
                 int minH = MinConsoleHeightPx();
                 int maxW = Math.Max(minW, wa.Width - 16);
                 int maxH = Math.Max(minH, wa.Height - 16);
-                int targetW = Math.Max(minW, Math.Min(maxW, _sharedWidth));
-                int targetH = Math.Max(minH, Math.Min(maxH, _expandedHeight));
+                targetW = Math.Max(minW, Math.Min(maxW, _sharedWidth));
+                targetH = Math.Max(minH, Math.Min(maxH, _expandedHeight));
                 _sharedWidth = targetW;
                 _expandedHeight = targetH;
 
                 int baseX;
                 int baseY;
-                if (leavingOrb && _hasSavedConsoleLocation) {
-                    baseX = _savedConsoleLocation.X;
-                    baseY = _savedConsoleLocation.Y;
-                } else if (leavingOrb) {
-                    baseX = Left - targetW + Width;
-                    baseY = Top;
+                if (leavingOrb) {
+                    int padPx = (_orbForm != null && !_orbForm.IsDisposed)
+                        ? _orbForm.ShadowPadPx()
+                        : Math.Max(4, (int)Math.Round(OrbOverlayForm.ORB_SHADOW_PAD_LOGICAL * _dpiScale));
+                    int orbPx = OrbPx();
+                    int discX = _orbLocation.X + padPx;
+                    int discY = _orbLocation.Y + padPx;
+                    baseX = _orbAnchorRight ? (discX + orbPx - targetW) : discX;
+                    baseY = discY;
                 } else {
                     baseX = Left;
                     baseY = Top;
                 }
 
-                Point clamped = ClampToWorkingArea(baseX, baseY, targetW, targetH);
-                SetWindowPos(Handle, IntPtr.Zero, clamped.X, clamped.Y, targetW, targetH, SWP_NOZORDER | SWP_NOACTIVATE);
+                clamped = ClampToWorkingArea(baseX, baseY, targetW, targetH);
+                if (leavingOrb) {
+                    _savedConsoleLocation = clamped;
+                    _hasSavedConsoleLocation = true;
+                }
+                if (!animateFromOrb) {
+                    uint flags = leavingOrb ? SWP_SHOWWINDOW : (SWP_NOZORDER | SWP_NOACTIVATE);
+                    IntPtr zAfter = leavingOrb ? (TopMost ? new IntPtr(-1) : new IntPtr(-2)) : IntPtr.Zero;
+                    SetWindowPos(Handle, zAfter, clamped.X, clamped.Y, targetW, targetH, flags);
+                    if (leavingOrb) {
+                        ShowWindow(Handle, 5); // SW_SHOW
+                    }
+                }
             } finally {
                 _inModeTransition = false;
+            }
+
+            if (animateFromOrb) {
+                StartOrbToConsoleFade(new Rectangle(clamped.X, clamped.Y, targetW, targetH));
+                return;
             }
             SyncBounds();
             EmitHostState();
@@ -1094,7 +2115,11 @@ namespace ContextCacheHost {
 
         private void SetPinned(bool pinned) {
             TopMost = pinned;
-            SetWindowPos(Handle, pinned ? new IntPtr(-1) : new IntPtr(-2), 0, 0, 0, 0, SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE);
+            if (_windowMode == WindowMode.Orb && _orbForm != null && !_orbForm.IsDisposed) {
+                _orbForm.SetTopMost(pinned);
+            } else {
+                SetWindowPos(Handle, pinned ? new IntPtr(-1) : new IntPtr(-2), 0, 0, 0, 0, SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE);
+            }
             EmitHostState();
         }
 
@@ -1105,6 +2130,9 @@ namespace ContextCacheHost {
             try { DwmSetWindowAttribute(Handle, DWMWA_USE_IMMERSIVE_DARK_MODE, ref darkFlag, sizeof(int)); } catch {}
             ApplyWebViewBackgroundColor();
             UpdateOrbMenuTheme();
+            if (_orbForm != null && !_orbForm.IsDisposed) {
+                _orbForm.SetTheme(_isDark);
+            }
         }
 
         private void EnsureOrbMenu() {
@@ -1151,7 +2179,10 @@ namespace ContextCacheHost {
                     _orbMenuPinItem.Checked = TopMost;
                     _orbMenuPinItem.Text = TopMost ? "取消置顶固定" : "置顶固定";
                 }
-                SetForegroundWindow(Handle);
+                IntPtr targetHwnd = (_orbForm != null && !_orbForm.IsDisposed && _orbForm.Visible && _orbForm.IsHandleCreated)
+                    ? _orbForm.Handle
+                    : Handle;
+                SetForegroundWindow(targetHwnd);
                 Point pt = Cursor.Position;
                 _orbMenu.Show(pt);
             });
@@ -1160,18 +2191,41 @@ namespace ContextCacheHost {
         private void UpdateOrbTip(string text) {
             string clean = (text ?? "").Replace('\u00b7', '|').Trim();
             _orbTipText = clean;
+            if (_orbForm != null && !_orbForm.IsDisposed) {
+                _orbForm.SetTip(_orbTipText);
+            }
             if (_orbToolTip == null || IsDisposed || !IsHandleCreated) return;
             try {
                 _orbToolTip.SetToolTip(this, _orbTipText);
-                if (_windowMode == WindowMode.Orb && !_inSizeMove) {
-                    Point pt;
-                    if (string.IsNullOrEmpty(_orbTipText)) {
-                        _orbToolTip.Hide(this);
-                    } else if (GetCursorPos(out pt) && Bounds.Contains(pt)) {
-                        Rectangle wa = GetCurrentWorkingArea();
-                        int tipX = (Right + 220 <= wa.Right) ? (Width + 8) : -210;
-                        _orbToolTip.Show(_orbTipText, this, tipX, 4, 4000);
+            } catch {}
+        }
+
+        private void UpdateOrbStateFromJson(string json) {
+            if (string.IsNullOrWhiteSpace(json)) return;
+            try {
+                var mRatio = Regex.Match(json, "\"ratio\"\\s*:\\s*([0-9]+(?:\\.[0-9]+)?)");
+                if (mRatio.Success) {
+                    float r;
+                    if (float.TryParse(mRatio.Groups[1].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out r)) {
+                        _orbRatio = Math.Max(0.05f, Math.Min(1.0f, r));
                     }
+                }
+                var mHealth = Regex.Match(json, "\"health\"\\s*:\\s*\"([^\"]+)\"");
+                if (mHealth.Success) {
+                    string h = mHealth.Groups[1].Value.Trim().ToLowerInvariant();
+                    if (h == "safe" || h == "warn" || h == "danger") _orbHealth = h;
+                }
+                var mActive = Regex.Match(json, "\"active\"\\s*:\\s*(true|false)");
+                if (mActive.Success) {
+                    _orbActiveTurn = string.Equals(mActive.Groups[1].Value, "true", StringComparison.OrdinalIgnoreCase);
+                }
+                var mTip = Regex.Match(json, "\"tip\"\\s*:\\s*\"((?:\\\\.|[^\"])*)\"");
+                if (mTip.Success) {
+                    string rawTip = Regex.Unescape(mTip.Groups[1].Value);
+                    _orbTipText = rawTip.Replace('\u00b7', '|').Trim();
+                }
+                if (_orbForm != null && !_orbForm.IsDisposed) {
+                    _orbForm.UpdateTelemetry(_orbRatio, _orbHealth, _orbActiveTurn, _orbTipText);
                 }
             } catch {}
         }
@@ -1197,6 +2251,20 @@ namespace ContextCacheHost {
 
         private void EnsureVisibleAndPinned() {
             try {
+                if (_windowMode == WindowMode.Orb) {
+                    EnsureOrbForm();
+                    if (_orbForm != null && !_orbForm.Visible) {
+                        int canvasPx = _orbForm.CanvasPx();
+                        Point clamped = ClampToWorkingArea(_orbLocation.X, _orbLocation.Y, canvasPx, canvasPx);
+                        _orbLocation = clamped;
+                        _hasOrbLocation = true;
+                        _orbForm.ShowAt(clamped, TopMost);
+                    }
+                    if (IsHandleCreated && _webview != null) {
+                        ShowWindow(Handle, 0);
+                    }
+                    return;
+                }
                 ForceBringToFront();
             } catch {}
         }
@@ -1238,6 +2306,7 @@ namespace ContextCacheHost {
 
         protected override void OnHandleCreated(EventArgs e) {
             base.OnHandleCreated(e);
+            RefreshWindowDpiScale();
             ApplyDwmChrome();
             if (_focusEvent == null) {
                 try {
@@ -1245,7 +2314,12 @@ namespace ContextCacheHost {
                     _focusEvent = new System.Threading.EventWaitHandle(false, System.Threading.EventResetMode.AutoReset, evName);
                     _focusWaitHandle = System.Threading.ThreadPool.RegisterWaitForSingleObject(_focusEvent, (state, timedOut) => {
                         if (!IsDisposed && IsHandleCreated) {
-                            try { BeginInvoke((MethodInvoker)delegate { ForceBringToFront(); }); } catch {}
+                            try {
+                                BeginInvoke((MethodInvoker)delegate {
+                                    if (_windowMode == WindowMode.Orb) EnterConsoleMode();
+                                    ForceBringToFront();
+                                });
+                            } catch {}
                         }
                     }, null, -1, false);
                 } catch {}
@@ -1299,6 +2373,7 @@ namespace ContextCacheHost {
         }
 
         protected override void OnFormClosed(FormClosedEventArgs e) {
+            CancelMorphAnimation();
             if (_closeFallbackTimer != null) {
                 try { _closeFallbackTimer.Stop(); _closeFallbackTimer.Dispose(); } catch {}
                 _closeFallbackTimer = null;
@@ -1318,6 +2393,10 @@ namespace ContextCacheHost {
             if (_orbToolTip != null) {
                 try { _orbToolTip.Dispose(); } catch {}
                 _orbToolTip = null;
+            }
+            if (_orbForm != null) {
+                try { _orbForm.HideOrb(); _orbForm.Dispose(); } catch {}
+                _orbForm = null;
             }
             if (_controller != null) {
                 try { _controller.put_IsVisible(0); } catch {}
@@ -1483,6 +2562,8 @@ namespace ContextCacheHost {
                 ShowOrbContextMenu();
             } else if (msg.StartsWith("orb:tip:")) {
                 UpdateOrbTip(msg.Substring(8));
+            } else if (msg.StartsWith("orb:state:")) {
+                UpdateOrbStateFromJson(msg.Substring(10));
             } else if (msg == "pin:1") {
                 SetPinned(true);
             } else if (msg == "pin:0") {

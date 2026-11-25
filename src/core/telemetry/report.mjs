@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import { findTranscriptPath, getDataPaths } from '../paths.mjs';
 import { loadConfig } from '../config.mjs';
 import { createLruCache, safeStatSig } from '../fs-utils.mjs';
+import { ensureIndexReady, prepareCached, withIndexDb } from '../index-db.mjs';
 import { listConversations } from '../transcript-parser.mjs';
 import { getTimingsLogPath, registerTimingsInvalidator } from './timings-store.mjs';
 import { syncConversationTelemetry } from './sync-engine.mjs';
@@ -335,4 +336,195 @@ export function getTelemetryReport(params = {}, options = {}) {
   });
 
   return applyReportFilters(baseReport, params);
+}
+
+const VALID_USAGE_RANGES = new Set(['today', '24h', '7d', '30d', 'all']);
+
+/**
+ * Aggregate cross-session cumulative usage statistics directly from the SQLite `calls` table.
+ */
+export function getUsageStats(params = {}, options = {}) {
+  const range = VALID_USAGE_RANGES.has(params.range) ? params.range : 'today';
+  const modelFilter =
+    typeof params.modelFilter === 'string' && params.modelFilter.trim() ? params.modelFilter.trim() : 'all';
+
+  ensureIndexReady(options);
+
+  const now = new Date();
+  const nowMs = now.getTime();
+  let sinceMs = 0;
+  if (range === 'today') {
+    sinceMs = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  } else if (range === '24h') {
+    sinceMs = nowMs - 24 * 3600 * 1000;
+  } else if (range === '7d') {
+    sinceMs = nowMs - 7 * 24 * 3600 * 1000;
+  } else if (range === '30d') {
+    sinceMs = nowMs - 30 * 24 * 3600 * 1000;
+  }
+
+  return withIndexDb(options, (db) => {
+    const modelRows = prepareCached(
+      db,
+      'SELECT DISTINCT model FROM calls WHERE ts_ms >= ? ORDER BY model ASC'
+    ).all(sinceMs);
+    const models = modelRows.map((r) => r.model).filter(Boolean);
+
+    const rows =
+      modelFilter !== 'all'
+        ? prepareCached(
+            db,
+            `SELECT model, input_tokens, cache_read_tokens, output_tokens,
+                    estimated_cost_usd, cache_drop, timing_source,
+                    effective_tps, duration_ms, ttft_ms
+             FROM calls
+             WHERE ts_ms >= ? AND model = ?`
+          ).all(sinceMs, modelFilter)
+        : prepareCached(
+            db,
+            `SELECT model, input_tokens, cache_read_tokens, output_tokens,
+                    estimated_cost_usd, cache_drop, timing_source,
+                    effective_tps, duration_ms, ttft_ms
+             FROM calls
+             WHERE ts_ms >= ?`
+          ).all(sinceMs);
+
+    let inputTokens = 0;
+    let cacheReadTokens = 0;
+    let outputTokens = 0;
+    let totalCostUsdSum = 0;
+    let cacheDropCount = 0;
+
+    let timedCount = 0;
+    let tpsOutSum = 0;
+    let tpsMsSum = 0;
+    let tpsFallbackSum = 0;
+
+    let ttftCount = 0;
+    let ttftSum = 0;
+
+    const byModelMap = new Map();
+
+    for (const r of rows) {
+      const inp = Math.max(0, Number(r.input_tokens) || 0);
+      const cache = Math.max(0, Number(r.cache_read_tokens) || 0);
+      const out = Math.max(0, Number(r.output_tokens) || 0);
+      const cost = Number(r.estimated_cost_usd) || 0;
+      const drop = r.cache_drop ? 1 : 0;
+
+      inputTokens += inp;
+      cacheReadTokens += cache;
+      outputTokens += out;
+      totalCostUsdSum += cost;
+      cacheDropCount += drop;
+
+      const modelName = r.model || 'unknown';
+      let bucket = byModelMap.get(modelName);
+      if (!bucket) {
+        bucket = {
+          model: modelName,
+          requests: 0,
+          inputTokens: 0,
+          cacheReadTokens: 0,
+          outputTokens: 0,
+          costUsd: 0,
+          timedCount: 0,
+          tpsOutSum: 0,
+          tpsMsSum: 0,
+          tpsFallbackSum: 0,
+        };
+        byModelMap.set(modelName, bucket);
+      }
+      bucket.requests += 1;
+      bucket.inputTokens += inp;
+      bucket.cacheReadTokens += cache;
+      bucket.outputTokens += out;
+      bucket.costUsd += cost;
+
+      const effTps = Number(r.effective_tps) || 0;
+      const dur = Math.max(0, Number(r.duration_ms) || 0);
+      const ttft = r.ttft_ms != null && Number.isFinite(Number(r.ttft_ms)) ? Number(r.ttft_ms) : null;
+
+      if (r.timing_source !== 'estimated' && effTps > 0 && out > 0) {
+        const activeMs = ttft != null && dur > ttft ? dur - ttft : dur;
+        timedCount += 1;
+        tpsFallbackSum += effTps;
+        if (activeMs > 0) {
+          tpsOutSum += out;
+          tpsMsSum += activeMs;
+        }
+        bucket.timedCount += 1;
+        bucket.tpsFallbackSum += effTps;
+        if (activeMs > 0) {
+          bucket.tpsOutSum += out;
+          bucket.tpsMsSum += activeMs;
+        }
+      }
+
+      if (ttft != null && ttft > 0) {
+        ttftCount += 1;
+        ttftSum += ttft;
+      }
+    }
+
+    const totalRequests = rows.length;
+    const totalTokens = inputTokens + cacheReadTokens + outputTokens;
+    const totalIn = inputTokens + cacheReadTokens;
+    const cacheHitRate = totalIn > 0 ? Number(((cacheReadTokens / totalIn) * 100).toFixed(1)) : 0;
+
+    const avgTps =
+      tpsMsSum > 0 && tpsOutSum > 0
+        ? Number((tpsOutSum / (tpsMsSum / 1000)).toFixed(1))
+        : timedCount > 0
+          ? Number((tpsFallbackSum / timedCount).toFixed(1))
+          : 0;
+
+    const avgTtftMs = ttftCount > 0 ? Number((ttftSum / ttftCount).toFixed(1)) : 0;
+
+    const byModel = [...byModelMap.values()]
+      .map((m) => {
+        const mTotalTokens = m.inputTokens + m.cacheReadTokens + m.outputTokens;
+        const mTotalIn = m.inputTokens + m.cacheReadTokens;
+        const mCacheHitRate = mTotalIn > 0 ? Number(((m.cacheReadTokens / mTotalIn) * 100).toFixed(1)) : 0;
+        const mAvgTps =
+          m.tpsMsSum > 0 && m.tpsOutSum > 0
+            ? Number((m.tpsOutSum / (m.tpsMsSum / 1000)).toFixed(1))
+            : m.timedCount > 0
+              ? Number((m.tpsFallbackSum / m.timedCount).toFixed(1))
+              : 0;
+        return {
+          model: m.model,
+          requests: m.requests,
+          totalTokens: mTotalTokens,
+          inputTokens: m.inputTokens,
+          cacheReadTokens: m.cacheReadTokens,
+          outputTokens: m.outputTokens,
+          cacheHitRate: mCacheHitRate,
+          costUsd: Number(m.costUsd.toFixed(6)),
+          avgTps: mAvgTps,
+        };
+      })
+      .sort((a, b) => b.totalTokens - a.totalTokens || b.requests - a.requests || a.model.localeCompare(b.model));
+
+    return {
+      range,
+      modelFilter,
+      sinceMs,
+      updatedAt: new Date().toISOString(),
+      totalRequests,
+      totalTokens,
+      inputTokens,
+      cacheReadTokens,
+      outputTokens,
+      totalCostUsd: Number(totalCostUsdSum.toFixed(6)),
+      cacheDropCount,
+      cacheHitRate,
+      avgTps,
+      timedCount,
+      avgTtftMs,
+      ttftCount,
+      models,
+      byModel,
+    };
+  });
 }

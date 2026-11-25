@@ -245,6 +245,7 @@ export function createNativeChromeModule({
 }) {
   let lastTitleBarSig = '';
   let lastOrbTip = '';
+  let lastOrbStateSig = '';
   let heartbeatTimer = null;
   let lastHeartbeatAt = 0;
   let lastSavedBoundsKey = '';
@@ -260,6 +261,7 @@ export function createNativeChromeModule({
   function resetCache() {
     lastTitleBarSig = '';
     lastOrbTip = '';
+    lastOrbStateSig = '';
   }
 
   function renderNativePinButton() {
@@ -310,7 +312,8 @@ export function createNativeChromeModule({
       onModeChanged?.(nextMode, prevMode);
     };
 
-    if (fromHost || prevMode === nextMode || prefersReducedMotion()) {
+    const nativeOrbMorph = isNativePopout && (nextMode === 'orb' || prevMode === 'orb');
+    if (fromHost || prevMode === nextMode || nativeOrbMorph || prefersReducedMotion()) {
       applyModeState();
       if (!fromHost) {
         postMsg(nextMode === 'minibar' ? 'mode:minibar:40' : `mode:${nextMode}`);
@@ -482,39 +485,54 @@ export function createNativeChromeModule({
   }
 
   function updateOrbView(ctx, { pct = 0, cache = 0, kv = null, health = 'safe' } = {}) {
-    if (typeof document === 'undefined') return;
-    const orb = document.getElementById('orbView');
-    if (orb) {
-      orb.dataset.health = health;
-      orb.dataset.activeTurn = String(Boolean(ctx?.isTurnActive));
-      const progressCircle = orb.querySelector('.orb-ring-progress');
-      if (progressCircle) {
-        const ratio =
-          kv && kv.visible && typeof kv.ratio === 'number' && kv.state !== 'safe'
-            ? kv.ratio
-            : Math.max(0.05, Math.min(1, pct / 100));
-        const offset = ORB_RING_CIRCUMFERENCE * (1 - ratio);
-        progressCircle.setAttribute('stroke-dasharray', ORB_RING_CIRCUMFERENCE.toFixed(2));
-        progressCircle.style.strokeDashoffset = offset.toFixed(2);
-      }
-      const brandSvg = orb.querySelector('.hub-brand-svg');
-      if (brandSvg) {
-        brandSvg.dataset.health = health;
-        brandSvg.dataset.kvState = health;
+    const ratio =
+      kv && kv.visible && typeof kv.ratio === 'number' && kv.state !== 'safe'
+        ? Math.max(0.05, Math.min(1, kv.ratio))
+        : Math.max(0.05, Math.min(1, (Number(pct) || 0) / 100));
+    const activeTurn = Boolean(ctx?.isTurnActive);
+
+    if (typeof document !== 'undefined') {
+      const orb = document.getElementById('orbView');
+      if (orb) {
+        orb.dataset.health = health;
+        orb.dataset.activeTurn = String(activeTurn);
+        const progressCircle = orb.querySelector('.orb-ring-progress');
+        if (progressCircle) {
+          const offset = ORB_RING_CIRCUMFERENCE * (1 - ratio);
+          progressCircle.setAttribute('stroke-dasharray', ORB_RING_CIRCUMFERENCE.toFixed(2));
+          progressCircle.style.strokeDashoffset = offset.toFixed(2);
+        }
+        const brandSvg = orb.querySelector('.hub-brand-svg');
+        if (brandSvg) {
+          brandSvg.dataset.health = health;
+          brandSvg.dataset.kvState = health;
+        }
       }
     }
 
     if (isNativePopout) {
       const lang = getUiLang();
       const parts = [
-        lang === 'en' ? `Ctx ${pct.toFixed(1)}%` : `上下文 ${pct.toFixed(1)}%`,
-        lang === 'en' ? `Cache ${cache.toFixed(0)}%` : `缓存 ${cache.toFixed(0)}%`,
+        lang === 'en' ? `Ctx ${(Number(pct) || 0).toFixed(1)}%` : `上下文 ${(Number(pct) || 0).toFixed(1)}%`,
+        lang === 'en' ? `Cache ${(Number(cache) || 0).toFixed(0)}%` : `缓存 ${(Number(cache) || 0).toFixed(0)}%`,
       ];
       if (kv?.visible && kv.text) parts.push(`KV ${kv.text}`);
       const tipText = parts.join(' | ');
       if (tipText !== lastOrbTip) {
         lastOrbTip = tipText;
         postMsg(`orb:tip:${tipText}`);
+      }
+      const orbStateSig = `${ratio.toFixed(3)}|${health}|${activeTurn ? 1 : 0}|${tipText}`;
+      if (orbStateSig !== lastOrbStateSig) {
+        lastOrbStateSig = orbStateSig;
+        postMsg(
+          `orb:state:${JSON.stringify({
+            ratio: Number(ratio.toFixed(3)),
+            health,
+            active: activeTurn,
+            tip: tipText,
+          })}`
+        );
       }
     }
   }
@@ -621,6 +639,9 @@ export function createNativeChromeModule({
       if (msg.mode && MODE_SIZE_RANK[msg.mode] !== undefined && msg.mode !== state.windowMode) {
         setWindowMode(msg.mode, { fromHost: true });
       }
+      if (state.windowMode === 'minibar' || state.windowMode === 'console') {
+        scheduleFit();
+      }
       return;
     }
 
@@ -696,6 +717,11 @@ export function createNativeChromeModule({
 
     const titleBar = document.getElementById('nativeTitleBar');
     if (titleBar) {
+      if (typeof ResizeObserver === 'function') {
+        const titleBarRo = new ResizeObserver(() => scheduleFit());
+        titleBarRo.observe(titleBar);
+        cleanups.push(() => titleBarRo.disconnect());
+      }
       cleanups.push(
         bindNativeDragSurface(titleBar, {
           ignoreSelector: 'button',
@@ -780,7 +806,7 @@ export function createNativeChromeModule({
 
     const sendHeartbeat = async (force = false) => {
       const now = Date.now();
-      if (!force && document.visibilityState !== 'visible' && now - lastHeartbeatAt < 10000) return;
+      if (!force && document.visibilityState !== 'visible' && state.windowMode !== 'orb' && now - lastHeartbeatAt < 10000) return;
       lastHeartbeatAt = now;
       try {
         const resp = await fetch(`/api/popout/heartbeat?token=${encodeURIComponent(popoutToken)}`, {

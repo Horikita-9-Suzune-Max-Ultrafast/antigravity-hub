@@ -16,6 +16,8 @@ export const FEATURE_FLAGS = {
 export function createDefaultUiConfig(defaultLang = 'zh-CN') {
   return {
     uiLanguage: defaultLang,
+    currency: defaultLang === 'zh-CN' ? 'CNY' : 'USD',
+    cnyPerUsd: 7.2,
     pollIntervalSec: 5,
     auxAutoOpen: true,
     popout: {
@@ -87,6 +89,9 @@ export function createUiState({ defaultLang = 'zh-CN', initialPinned = true } = 
     onlyDrop: false,
     expandedCallId: null,
     showAllCalls: false,
+    statsRange: 'today',
+    statsModelFilter: 'all',
+    statsData: null,
     vaultKind: 'all',
     calGroup: 'gemini',
     newMemKind: 'decision',

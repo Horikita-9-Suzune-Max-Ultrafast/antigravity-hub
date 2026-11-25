@@ -12,6 +12,7 @@ import {
   clearReportCache,
   formatUserMarkdownBanner,
   getTelemetryReport,
+  getUsageStats,
   summarizeCallStats,
 } from './telemetry/report.mjs';
 
@@ -35,6 +36,7 @@ export {
   queryCalls,
   evaluateAlerts,
   getTelemetryReport,
+  getUsageStats,
   formatUserMarkdownBanner,
   calcWeightedAvgTps,
 };
