@@ -1393,6 +1393,171 @@ function highlightCtx(id) {
   });
 }
 
+let textMeasureCanvasCtx = null;
+function measureTextPx(text, fontSpec) {
+  const str = String(text || '');
+  if (!str) return 0;
+  try {
+    if (!textMeasureCanvasCtx && typeof document !== 'undefined') {
+      const c = document.createElement('canvas');
+      textMeasureCanvasCtx = c.getContext('2d');
+    }
+    if (textMeasureCanvasCtx) {
+      textMeasureCanvasCtx.font = fontSpec;
+      return Math.ceil(textMeasureCanvasCtx.measureText(str).width);
+    }
+  } catch {
+    // Fallback below
+  }
+  const sizeMatch = /(\d+(?:\.\d+)?)px/.exec(fontSpec);
+  const px = sizeMatch ? Number(sizeMatch[1]) : 13;
+  let w = 0;
+  for (const ch of str) {
+    w += ch.charCodeAt(0) > 127 ? px : px * 0.62;
+  }
+  return Math.ceil(w);
+}
+
+/**
+ * Dynamic boundary-fixed column allocation for .calls-table:
+ * Measures real rendered content across headers & visible rows via canvas text metrics (0 DOM reflow),
+ * guarantees all 6 numeric/step columns never truncate with `...`, allocates remaining width elastically
+ * to the model column (auto-switching full vs short model name), and switches cleanly into 2-row card
+ * layout whenever the container width cannot hold all 7 columns without breaking boundaries.
+ */
+function fitCallsTableLayout() {
+  const wrap = document.getElementById('callsStepWrap');
+  if (!wrap || wrap.classList.contains('hidden')) return;
+  const table = wrap.querySelector('.calls-table');
+  if (!table) return;
+  const availW = Math.floor(wrap.clientWidth);
+  if (availW <= 0) return;
+
+  const list = state.callsData?.calls || [];
+  const visible = list.length > CALLS_INITIAL_RENDER_LIMIT && !state.showAllCalls
+    ? list.slice(0, CALLS_INITIAL_RENDER_LIMIT)
+    : list;
+
+  const ths = [...table.querySelectorAll('thead th')];
+  const getHeaderText = (idx, compact) => {
+    const th = ths[idx];
+    if (!th) return '';
+    if (!compact) return (th.textContent || '').trim();
+    const parts = [];
+    th.childNodes.forEach((n) => {
+      if (n.nodeType === 1 && n.classList?.contains('col-full-lbl')) return;
+      parts.push(n.textContent || '');
+    });
+    return parts.join('').trim();
+  };
+
+  const monoFamily = 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace';
+  const uiFamily = '-apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif';
+
+  const measureTier = (px, compact) => {
+    const monoFont = `500 ${px}px ${monoFamily}`;
+    const monoBold = `600 ${px}px ${monoFamily}`;
+    const hdrFont = `500 ${px}px ${uiFamily}`;
+    const badgeFont = `500 12px ${uiFamily}`;
+    const cellPad = compact ? 12 : 18;
+    const edgePad = compact ? 17 : 24;
+    const badgeExtra = compact ? 18 : 22;
+
+    let stepW = measureTextPx(getHeaderText(0, compact), hdrFont) + edgePad;
+    let tpsW = measureTextPx(getHeaderText(2, compact), hdrFont) + cellPad;
+    let durW = measureTextPx(getHeaderText(3, compact), hdrFont) + cellPad;
+    let tokW = measureTextPx(getHeaderText(4, compact), hdrFont) + cellPad;
+    let cacheW = measureTextPx(getHeaderText(5, compact), hdrFont) + cellPad;
+    let costW = measureTextPx(getHeaderText(6, compact), hdrFont) + edgePad;
+    let shortModelW = measureTextPx(getHeaderText(1, compact), hdrFont) + cellPad;
+    let fullModelW = shortModelW;
+
+    for (const c of visible) {
+      const badgeW = measureTextPx(c.agentTag || '主', badgeFont) + badgeExtra;
+      const stepNumW = measureTextPx(`#${c.stepIndex}`, monoFont);
+      stepW = Math.max(stepW, badgeW + stepNumW + edgePad);
+
+      const tpsStr = `${Number(c.effectiveTps || 0).toFixed(1)} tok/s`;
+      tpsW = Math.max(tpsW, measureTextPx(tpsStr, monoBold) + cellPad);
+
+      const durStr = c.ttftMs != null ? `${(c.ttftMs / 1000).toFixed(2)}s TTFT` : `${(Number(c.durationMs || 0) / 1000).toFixed(1)}s`;
+      durW = Math.max(durW, measureTextPx(durStr, monoFont) + cellPad);
+
+      const tokStr = `${fmtK(c.contextTokens)} / ${fmtK(c.thinkingTokensEst)} / ${fmtK(c.contentTokensEst)}`;
+      tokW = Math.max(tokW, measureTextPx(tokStr, monoFont) + cellPad);
+
+      const cacheStr = `${Number(c.cacheHitRate || 0).toFixed(1)}%`;
+      cacheW = Math.max(cacheW, measureTextPx(cacheStr, monoBold) + cellPad);
+
+      const costStr = `$${Number(c.estimatedCostUsd || 0).toFixed(3)}`;
+      costW = Math.max(costW, measureTextPx(costStr, monoFont) + edgePad);
+
+      const shortM = formatShortModel(c.model);
+      shortModelW = Math.max(shortModelW, measureTextPx(shortM, monoFont) + cellPad);
+      fullModelW = Math.max(fullModelW, measureTextPx(c.model || shortM, monoFont) + cellPad);
+    }
+
+    const cols = {
+      step: Math.ceil(stepW),
+      tps: Math.ceil(tpsW),
+      dur: Math.ceil(durW),
+      tok: Math.ceil(tokW),
+      cache: Math.ceil(cacheW),
+      cost: Math.ceil(costW),
+    };
+    const fixedSum = cols.step + cols.tps + cols.dur + cols.tok + cols.cache + cols.cost;
+    const minModelW = Math.min(Math.max(compact ? 76 : 88, Math.ceil(shortModelW)), compact ? 116 : 136);
+    return { cols, fixedSum, minModelW, shortModelW: Math.ceil(shortModelW), fullModelW: Math.ceil(fullModelW) };
+  };
+
+  const applyCols = (cols) => {
+    const map = [
+      ['col.col-step', `${cols.step}px`],
+      ['col.col-model', 'auto'],
+      ['col.col-tps', `${cols.tps}px`],
+      ['col.col-dur', `${cols.dur}px`],
+      ['col.col-tok', `${cols.tok}px`],
+      ['col.col-cache', `${cols.cache}px`],
+      ['col.col-cost', `${cols.cost}px`],
+    ];
+    for (const [sel, val] of map) {
+      const el = table.querySelector(sel);
+      if (el && el.style.width !== val) el.style.width = val;
+    }
+  };
+
+  const clearCols = () => {
+    table.querySelectorAll('colgroup col').forEach((el) => {
+      if (el.style.width) el.style.width = '';
+    });
+  };
+
+  const wide = measureTier(13, false);
+  if (wide.fixedSum + wide.minModelW <= availW) {
+    table.dataset.layoutMode = 'table';
+    table.dataset.density = 'wide';
+    applyCols(wide.cols);
+    const modelW = availW - wide.fixedSum;
+    table.dataset.modelMode = modelW >= Math.min(wide.fullModelW, 168) ? 'full' : 'short';
+    return;
+  }
+
+  const compact = measureTier(12, true);
+  if (compact.fixedSum + compact.minModelW <= availW) {
+    table.dataset.layoutMode = 'table';
+    table.dataset.density = 'compact';
+    applyCols(compact.cols);
+    const modelW = availW - compact.fixedSum;
+    table.dataset.modelMode = modelW >= Math.min(compact.fullModelW, 158) ? 'full' : 'short';
+    return;
+  }
+
+  table.dataset.layoutMode = 'card';
+  delete table.dataset.density;
+  table.dataset.modelMode = 'short';
+  clearCols();
+}
+
 function renderCalls() {
   const data = state.callsData;
   const list = data?.calls || [];
@@ -1434,7 +1599,10 @@ function renderCalls() {
             <span>#${c.stepIndex}</span>
             <span class="cell-inline-model" title="${esc(c.model)}">${esc(shortModel)}</span>
           </td>
-          <td class="cell-model col-model-cell mono-num text-muted" title="${esc(c.model)}">${esc(shortModel)}</td>
+          <td class="cell-model col-model-cell mono-num text-muted" title="${esc(c.model)}">
+            <span class="col-model-full">${esc(c.model)}</span>
+            <span class="col-model-short">${esc(shortModel)}</span>
+          </td>
           <td class="cell-tps text-right whitespace-nowrap mono-num font-semibold ${c.effectiveTps < 15 ? 'text-warning' : ''}">
             <span>${c.effectiveTps.toFixed(1)} tok/s</span>
             <span class="cell-inline-cost">$${c.estimatedCostUsd.toFixed(3)}</span>
@@ -1578,6 +1746,8 @@ function renderCalls() {
         )
         .join('')
     : `<div class="px-5 py-4 text-xs text-muted">${esc(tr('monitor.calls.summaryEmpty'))}</div>`;
+
+  fitCallsTableLayout();
 }
 
 function ringSvg(pct, ringId) {
@@ -2957,7 +3127,10 @@ function switchModule(mod, subTab = null) {
     if (!state.contextData || Date.now() - lastRefreshAt >= 2000) {
       void refreshAll(false, false);
     }
-    requestAnimationFrame(positionVisibleIndicators);
+    requestAnimationFrame(() => {
+      positionVisibleIndicators();
+      if (state.activeTab === 'calls') fitCallsTableLayout();
+    });
   } else if (safeMod === 'governance') {
     void governanceModule?.activate(subTab);
     requestAnimationFrame(() => governanceModule?.positionSubNav());
@@ -2985,7 +3158,10 @@ function switchTab(tab) {
   positionIndicator('mainSegNav', 'mainSegIndicator');
   if (safeTab === 'calls') {
     renderSelects('calls');
-    requestAnimationFrame(() => positionIndicator('callsModeNav', 'callsModeIndicator'));
+    requestAnimationFrame(() => {
+      positionIndicator('callsModeNav', 'callsModeIndicator');
+      fitCallsTableLayout();
+    });
     if (!state.callsData) void loadCalls(false);
   } else if (safeTab === 'vault') {
     renderSelects('vault');
@@ -3554,6 +3730,7 @@ function bindEvents() {
       positionIndicator('callsModeNav', 'callsModeIndicator');
       document.getElementById('callsStepWrap').classList.toggle('hidden', state.callsMode !== 'step');
       document.getElementById('callsSummaryWrap').classList.toggle('hidden', state.callsMode !== 'summary');
+      if (state.callsMode === 'step') requestAnimationFrame(fitCallsTableLayout);
     });
   });
 
@@ -4483,6 +4660,7 @@ async function init() {
     resizeRafId = requestAnimationFrame(() => {
       resizeRafId = 0;
       positionVisibleIndicators();
+      fitCallsTableLayout();
       if (state.openSelectId) clampOpenSelectMenus();
       if (document.querySelector('.kv-help-popover:not(.hidden)')) clampOpenKvPopovers();
     });
@@ -4494,6 +4672,7 @@ async function init() {
     if (winResizeRafId) return;
     winResizeRafId = requestAnimationFrame(() => {
       winResizeRafId = 0;
+      fitCallsTableLayout();
       if (state.openSelectId) clampOpenSelectMenus();
       if (document.querySelector('.kv-help-popover:not(.hidden)')) clampOpenKvPopovers();
       if (isNativePopout) fitNativeTitleBar();

@@ -741,10 +741,22 @@ test('UI typography & viewport fixed clamping guarantees (zero text-[11px] in mo
   assert.ok(appJs.includes('positionFloatingLayer'), 'src/ui/app.mjs must define viewport positionFloatingLayer clamping');
   assert.ok(appJs.includes('clampOpenSelectMenus'), 'src/ui/app.mjs must clamp open select menus');
   assert.ok(appJs.includes('clampOpenKvPopovers'), 'src/ui/app.mjs must clamp open KV popovers');
+  assert.ok(appJs.includes('fitCallsTableLayout'), 'src/ui/app.mjs must dynamically allocate calls-table columns within container bounds');
+  assert.ok(appJs.includes('col-model-full') && appJs.includes('col-model-short'), 'src/ui/app.mjs must toggle full/short model label dynamically');
   assert.match(
     css,
     /\.agy-select-menu\[data-fixed="true"\]\s*\{[^}]*position\s*:\s*fixed\s*;/s,
     'src/ui/styles.css must style .agy-select-menu[data-fixed="true"] with position: fixed'
+  );
+  assert.match(
+    css,
+    /\.calls-table\[data-layout-mode="card"\]\s*\{[^}]*display\s*:\s*block\s*;/s,
+    'src/ui/styles.css must support dynamic data-layout-mode="card" boundary fallback'
+  );
+  assert.match(
+    css,
+    /\.calls-table\[data-model-mode="short"\]\s+\.col-model-full\s*\{[^}]*display\s*:\s*none\s*;/s,
+    'src/ui/styles.css must switch full/short model visibility by data-model-mode'
   );
 });
 
