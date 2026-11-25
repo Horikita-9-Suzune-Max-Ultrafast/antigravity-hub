@@ -5,7 +5,7 @@ import { atomicWriteJson, ensureDataDirs, readJsonSafe } from './storage.mjs';
 import { parseAnnotationPbtxt } from './transcript-parser.mjs';
 
 const MAX_REGISTRY_ENTRIES = 100;
-const PEEK_ANNOTATION_TTL_MS = 3_000;
+const PEEK_ANNOTATION_TTL_MS = 8_000;
 const PEEK_ANNOTATION_CACHE = new Map(); // cacheKey -> { fingerprint, bestFullPath, bestMtimeMs, result, expiresAt }
 
 export function clearSessionTrackerCache() {

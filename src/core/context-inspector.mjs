@@ -1,388 +1,125 @@
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { getAppDataDir, getConfigRoot, findTranscriptPath, formatDisplayPath } from './paths.mjs';
+import { getAppDataDir, getConfigRoot, findTranscriptPath } from './paths.mjs';
 import { loadConfig, getModelLimit } from './config.mjs';
 import { getGitContext } from './git-context.mjs';
-import { estimateTokens, buildCompactBrief } from './vault.mjs';
+import { buildCompactBrief } from './vault.mjs';
 import { redactText } from './redact.mjs';
-import { parseTranscriptFull, listConversations } from './transcript-parser.mjs';
+import { createLruCache, isPathInsideRoot, previewAuthorizedFile, safeRealpath } from './fs-utils.mjs';
+import { scanEcosystemInventory, clearEcosystemInventoryCache } from './ecosystem-inventory.mjs';
+import { getTranscriptAnalysis, listConversations } from './transcript-parser.mjs';
 import { getTelemetryReport, evaluateAlerts } from './telemetry.mjs';
 import { resolveTargetSession } from './session-tracker.mjs';
 
-const STATIC_SCAN_TTL_MS = 15_000;
-const MCP_FAST_TTL_MS = 5_000;
-const MAX_STATIC_CACHE_ENTRIES = 32;
-const mcpScanCache = new Map();
-const staticRulesCache = new Map();
-const staticSkillsAgentsCache = new Map();
-const skillFileTokensCache = new Map();
+const skillFileTokensCache = createLruCache(128);
 
 export function clearContextInspectorCache() {
-  mcpScanCache.clear();
-  staticRulesCache.clear();
-  staticSkillsAgentsCache.clear();
+  clearEcosystemInventoryCache();
   skillFileTokensCache.clear();
 }
 
-function lruCacheSet(map, key, value, max = MAX_STATIC_CACHE_ENTRIES) {
-  if (map.has(key)) map.delete(key);
-  map.set(key, value);
-  while (map.size > max) {
-    const oldest = map.keys().next().value;
-    if (oldest === undefined) break;
-    map.delete(oldest);
-  }
-}
-
-function safeStatSig(p) {
-  try {
-    const st = fs.statSync(p);
-    return `${st.mtimeMs}:${st.size}`;
-  } catch {
-    return '-';
-  }
-}
-
-function listSubdirsSafe(dir) {
-  try {
-    if (!fs.existsSync(dir)) return [];
-    return fs
-      .readdirSync(dir, { withFileTypes: true })
-      .filter((e) => e.isDirectory())
-      .map((e) => e.name)
-      .sort();
-  } catch {
-    return [];
-  }
-}
-
-function safeReadFile(p) {
-  try {
-    if (fs.existsSync(p) && fs.statSync(p).isFile()) {
-      return fs.readFileSync(p, 'utf8');
-    }
-  } catch {
-    // ignore unreadable file
-  }
-  return '';
-}
-
 function fmtSizeK(tokens) {
-  if (tokens >= 1000000) return `${(tokens / 1000000).toFixed(2)}M`;
-  if (tokens >= 1000) return `${(tokens / 1000).toFixed(1)}K`;
+  if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(2)}M`;
+  if (tokens >= 1_000) return `${(tokens / 1_000).toFixed(1)}K`;
   return `${tokens}`;
 }
 
-function getCachedSkillFileMetrics(skillFile) {
-  try {
-    const st = fs.statSync(skillFile);
-    const key = path.resolve(skillFile).toLowerCase();
-    const cached = skillFileTokensCache.get(key);
-    if (cached && cached.mtimeMs === st.mtimeMs && cached.size === st.size) {
-      return cached;
-    }
-    const fullText = fs.readFileSync(skillFile, 'utf8');
-    const entry = {
-      mtimeMs: st.mtimeMs,
-      size: st.size,
-      tokens: estimateTokens(fullText),
-      bytes: Buffer.byteLength(fullText, 'utf8'),
-    };
-    lruCacheSet(skillFileTokensCache, key, entry, 128);
-    return entry;
-  } catch {
-    return { mtimeMs: 0, size: 0, tokens: 0, bytes: 0 };
-  }
-}
-
 /**
- * Scan documented MCP schema cache directories (<appDataDir>/mcp/<server>/*.json)
- * plus configured MCP servers for eager vs deferred breakdown.
- * Short-circuits for 5s (fast memory TTL, 0 fs syscalls) unless options.force is true,
- * and caches for 15s keyed by directory/config mtimes.
+ * Project unified ecosystem inventory into context-inspector MCP / Rules / Skills / Agents view.
+ * Strictly honors disabled plugins from config.json and separates eager vs deferred MCP tokens.
  */
-function scanMcpTools(options = {}) {
-  const appDir = getAppDataDir(options);
-  const configRoot = getConfigRoot(options);
-  const mcpDir = path.join(appDir, 'mcp');
-  const pluginsDir = path.join(configRoot, 'plugins');
-
-  const cacheKey = `${path.resolve(appDir).toLowerCase()}|${path.resolve(configRoot).toLowerCase()}`;
-  const now = Date.now();
-  const cached = mcpScanCache.get(cacheKey);
-  if (!options.force && cached && now < cached.fastExpiresAt) {
-    return cached.value;
-  }
-
-  const mcpSubdirs = listSubdirsSafe(mcpDir);
-  const pluginSubdirs = listSubdirsSafe(pluginsDir);
-  const fpParts = [
-    safeStatSig(mcpDir),
-    ...mcpSubdirs.map((d) => `${d}:${safeStatSig(path.join(mcpDir, d))}`),
-    safeStatSig(pluginsDir),
-    ...pluginSubdirs.map((d) => `${d}:${safeStatSig(path.join(pluginsDir, d, 'mcp_config.json'))}`),
-  ];
-  const fingerprint = fpParts.join('|');
-  if (!options.force && cached && now < cached.expiresAt && cached.fingerprint === fingerprint) {
-    cached.fastExpiresAt = now + MCP_FAST_TTL_MS;
-    return cached.value;
-  }
-
-  const servers = [];
-  let deferredTokens = 0;
-  let deferredCount = 0;
+function projectInventoryForContext(eco, loadedSkillPaths, workspaceDir, options = {}) {
+  // 1. Active MCP servers (enabled configured + cache-only deferred dirs)
+  const mcpItems = [];
   let eagerTokens = 0;
   let eagerCount = 0;
+  let deferredTokens = 0;
+  let deferredCount = 0;
 
-  if (fs.existsSync(mcpDir)) {
-    for (const serverName of mcpSubdirs) {
-      const serverPath = path.join(mcpDir, serverName);
-      let files = [];
-      try {
-        files = fs.readdirSync(serverPath).filter((f) => f.endsWith('.json'));
-      } catch {
-        files = [];
-      }
-      let sTokens = 0;
-      const tools = [];
-      for (const f of files) {
-        const toolFile = path.join(serverPath, f);
-        const text = safeReadFile(toolFile);
-        const tok = estimateTokens(text);
-        sTokens += tok;
-        let toolName = f.replace(/\.json$/i, '');
-        try {
-          const parsed = JSON.parse(text);
-          if (parsed && typeof parsed.name === 'string' && parsed.name.trim()) {
-            toolName = parsed.name.trim();
-          }
-        } catch {
-          // fallback to filename
-        }
-        tools.push({
-          name: toolName,
-          deferred: true,
-          tokens: tok,
-          size: fmtSizeK(tok),
-        });
-      }
-      tools.sort((a, b) => b.tokens - a.tokens);
-      deferredTokens += sTokens;
-      deferredCount += files.length;
-      servers.push({
-        name: serverName,
-        kind: 'mcp_server',
-        mode: 'deferred',
-        sourceLayer: 'global',
-        filePath: serverPath,
-        displayPath: formatDisplayPath(serverPath),
-        toolCount: files.length,
-        deferredCount: files.length,
-        eagerCount: 0,
-        tokens: sTokens,
-        meta: `${files.length} tools (deferred)`,
-        size: fmtSizeK(sTokens),
-        tools,
-      });
-    }
-  }
+  for (const s of eco.mcpServers || []) {
+    if (!s.enabled) continue;
+    eagerTokens += Number(s.eagerTokens) || 0;
+    eagerCount += Number(s.eagerCount) || 0;
+    deferredTokens += Number(s.deferredTokens) || 0;
+    deferredCount += Number(s.deferredCount) || 0;
 
-  if (fs.existsSync(pluginsDir)) {
-    for (const peName of pluginSubdirs) {
-      const mcpCfgPath = path.join(pluginsDir, peName, 'mcp_config.json');
-      if (!fs.existsSync(mcpCfgPath)) continue;
-      try {
-        const cfg = JSON.parse(fs.readFileSync(mcpCfgPath, 'utf8'));
-        for (const srvKey of Object.keys(cfg.mcpServers || {})) {
-          const fullKey = `${peName}_${srvKey}`;
-          if (servers.some((s) => s.name === fullKey || s.name === srvKey)) continue;
-          if (peName === 'context-cache' || srvKey === 'context-cache-server') {
-            const tok = 600;
-            eagerTokens += tok;
-            eagerCount += 5;
-            const ownTools = [
-              { name: 'ctx_open_monitor', deferred: false, tokens: 140, size: fmtSizeK(140) },
-              { name: 'ctx_brief', deferred: false, tokens: 110, size: fmtSizeK(110) },
-              { name: 'ctx_save', deferred: false, tokens: 130, size: fmtSizeK(130) },
-              { name: 'ctx_search', deferred: false, tokens: 110, size: fmtSizeK(110) },
-              { name: 'ctx_doctor', deferred: false, tokens: 110, size: fmtSizeK(110) },
-            ];
-            servers.push({
-              name: srvKey,
-              kind: 'mcp_server',
-              mode: 'eager',
-              sourceLayer: 'plugin',
-              filePath: mcpCfgPath,
-              displayPath: formatDisplayPath(mcpCfgPath),
-              toolCount: 5,
-              deferredCount: 0,
-              eagerCount: 5,
-              tokens: tok,
-              meta: '5 model + 10 app-only',
-              size: fmtSizeK(tok),
-              tools: ownTools,
-            });
-          } else {
-            const tok = 900;
-            eagerTokens += tok;
-            eagerCount += 4;
-            servers.push({
-              name: fullKey,
-              kind: 'mcp_server',
-              mode: 'eager',
-              sourceLayer: 'plugin',
-              filePath: mcpCfgPath,
-              displayPath: formatDisplayPath(mcpCfgPath),
-              toolCount: 4,
-              deferredCount: 0,
-              eagerCount: 4,
-              tokens: tok,
-              meta: 'configured MCP server',
-              size: fmtSizeK(tok),
-              tools: [],
-            });
-          }
-        }
-      } catch {
-        // ignore malformed mcp_config
-      }
-    }
-  }
+    const displayName = s.isOwnPlugin && s.shortName ? s.shortName : s.name;
+    const meta = s.isOwnPlugin
+      ? '5 model + 11 app-only'
+      : s.mode === 'deferred'
+        ? `${s.toolCount} tools (deferred)`
+        : 'configured MCP server';
 
-  servers.sort((a, b) => b.tokens - a.tokens);
-
-  const result = {
-    servers,
-    eagerTokens,
-    eagerCount,
-    deferredTokens,
-    deferredCount,
-  };
-  lruCacheSet(mcpScanCache, cacheKey, {
-    fingerprint,
-    value: result,
-    fastExpiresAt: now + MCP_FAST_TTL_MS,
-    expiresAt: now + STATIC_SCAN_TTL_MS,
-  });
-  return result;
-}
-
-/**
- * Scan static Rules files across global plugins, global rules, and workspace root (cached 15s by mtime).
- */
-function scanStaticRuleFiles(workspaceDir, options = {}) {
-  const configRoot = getConfigRoot(options);
-  const pluginsDir = path.join(configRoot, 'plugins');
-  const globalRulesDir = path.join(configRoot, 'rules');
-  const wsNorm = workspaceDir ? path.resolve(workspaceDir) : '';
-  const cacheKey = `${path.resolve(configRoot).toLowerCase()}|${wsNorm.toLowerCase()}`;
-
-  const pluginSubdirs = listSubdirsSafe(pluginsDir);
-  const fpParts = [
-    safeStatSig(pluginsDir),
-    ...pluginSubdirs.map((d) => `${d}:${safeStatSig(path.join(pluginsDir, d, 'rules'))}`),
-    safeStatSig(globalRulesDir),
-    wsNorm ? safeStatSig(path.join(wsNorm, 'AGENTS.md')) : '-',
-    wsNorm ? safeStatSig(path.join(wsNorm, 'GEMINI.md')) : '-',
-    wsNorm ? safeStatSig(path.join(wsNorm, '.agents', 'rules')) : '-',
-  ];
-  const fingerprint = fpParts.join('|');
-  const now = Date.now();
-  const cached = staticRulesCache.get(cacheKey);
-  if (cached && now < cached.expiresAt && cached.fingerprint === fingerprint) {
-    return cached.value;
-  }
-
-  const files = [];
-  const seen = new Set();
-
-  const addFile = (absPath, displayName, meta, sourceLayer) => {
-    const norm = path.resolve(absPath).toLowerCase();
-    if (seen.has(norm)) return;
-    const text = safeReadFile(absPath);
-    if (!text) return;
-    seen.add(norm);
-    const tokens = estimateTokens(text);
-    const bytes = Buffer.byteLength(text, 'utf8');
-    files.push({
+    mcpItems.push({
       name: displayName,
-      kind: 'rule',
-      sourceLayer,
-      filePath: absPath,
-      displayPath: formatDisplayPath(absPath),
+      kind: 'mcp_server',
+      mode: s.mode,
+      sourceLayer: s.scope || 'global',
+      filePath: s.filePath || s.configFile || '',
+      displayPath: s.displayPath || s.displayConfigFile || '',
+      toolCount: s.toolCount,
+      deferredCount: s.deferredCount ?? (s.mode === 'deferred' ? s.toolCount : 0),
+      eagerCount: s.eagerCount ?? (s.mode === 'eager' ? s.toolCount : 0),
+      eagerTokens: Number(s.eagerTokens) || 0,
+      deferredTokens: Number(s.deferredTokens) || 0,
+      tokens: Number(s.tokens) || 0,
       meta,
-      tokens,
-      size: fmtSizeK(tokens),
-      bytes,
-      path: absPath,
+      size: fmtSizeK(Number(s.tokens) || 0),
+      tools: Array.isArray(s.tools) ? s.tools : [],
     });
-  };
-
-  for (const peName of pluginSubdirs) {
-    const rDir = path.join(pluginsDir, peName, 'rules');
-    if (!fs.existsSync(rDir)) continue;
-    try {
-      for (const f of fs.readdirSync(rDir)) {
-        if (f.endsWith('.md')) {
-          addFile(
-            path.join(rDir, f),
-            `${peName}/rules/${f}`,
-            peName === 'context-cache' ? 'plugin slim rule' : 'global plugin rule',
-            'plugin'
-          );
-        }
-      }
-    } catch {
-      // ignore
-    }
   }
 
-  if (fs.existsSync(globalRulesDir)) {
-    try {
-      for (const f of fs.readdirSync(globalRulesDir)) {
-        if (f.endsWith('.md')) {
-          addFile(path.join(globalRulesDir, f), `global/rules/${f}`, 'global rule', 'global');
-        }
-      }
-    } catch {
-      // ignore
-    }
+  for (const c of eco.cachedOnlyMcpServers || []) {
+    deferredTokens += Number(c.deferredTokens) || 0;
+    deferredCount += Number(c.deferredCount) || 0;
+    mcpItems.push({
+      name: c.name,
+      kind: 'mcp_server',
+      mode: 'deferred',
+      sourceLayer: 'global',
+      filePath: c.filePath || '',
+      displayPath: c.displayPath || '',
+      toolCount: c.toolCount,
+      deferredCount: c.deferredCount,
+      eagerCount: 0,
+      eagerTokens: 0,
+      deferredTokens: Number(c.deferredTokens) || 0,
+      tokens: Number(c.tokens) || 0,
+      meta: `${c.toolCount} tools (deferred)`,
+      size: fmtSizeK(Number(c.tokens) || 0),
+      tools: Array.isArray(c.tools) ? c.tools : [],
+    });
   }
+  mcpItems.sort((a, b) => b.tokens - a.tokens);
 
-  if (wsNorm && fs.existsSync(wsNorm)) {
-    const baseName = path.basename(wsNorm);
-    for (const fname of ['AGENTS.md', 'GEMINI.md']) {
-      addFile(path.join(wsNorm, fname), `${baseName}/${fname}`, 'workspace rule', 'workspace');
-    }
-    const wsRulesDir = path.join(wsNorm, '.agents', 'rules');
-    if (fs.existsSync(wsRulesDir)) {
-      try {
-        for (const f of fs.readdirSync(wsRulesDir)) {
-          if (f.endsWith('.md')) {
-            addFile(path.join(wsRulesDir, f), `${baseName}/.agents/rules/${f}`, 'workspace rule', 'workspace');
-          }
-        }
-      } catch {
-        // ignore
-      }
-    }
-  }
+  // 2. Active Rules + Vault SessionStart Compact Brief
+  const ruleItems = (eco.rules || [])
+    .filter((r) => r.active)
+    .map((r) => ({
+      name: r.displayName || r.name,
+      kind: 'rule',
+      sourceLayer: r.scope || 'workspace',
+      filePath: r.filePath || '',
+      displayPath: r.displayPath || '',
+      meta:
+        r.scope === 'plugin'
+          ? r.pluginId === 'context-cache'
+            ? 'plugin slim rule'
+            : 'global plugin rule'
+          : r.scope === 'global'
+            ? 'global rule'
+            : 'workspace rule',
+      tokens: r.tokens,
+      size: fmtSizeK(r.tokens),
+      bytes: r.bytes || 0,
+      path: r.filePath || '',
+    }));
 
-  lruCacheSet(staticRulesCache, cacheKey, { fingerprint, value: files, expiresAt: now + STATIC_SCAN_TTL_MS });
-  return files;
-}
-
-/**
- * Scan active Rules & Memory files across global plugins, global rules, and workspace root.
- */
-function scanRulesAndMemory(workspaceDir, options = {}) {
-  const files = [...scanStaticRuleFiles(workspaceDir, options)];
-
-  // Active SessionStart Compact Brief from vault
   const brief = buildCompactBrief({ projectDir: workspaceDir }, options);
   if (brief.tokens > 0) {
     const briefPreview = redactText(brief.text || '');
-    files.push({
+    ruleItems.push({
       name: 'SessionStart Compact Brief',
       kind: 'brief',
       sourceLayer: 'vault',
@@ -395,169 +132,64 @@ function scanRulesAndMemory(workspaceDir, options = {}) {
       previewText: briefPreview,
     });
   }
+  ruleItems.sort((a, b) => b.tokens - a.tokens);
+  const rulesTotalTokens = ruleItems.reduce((s, f) => s + f.tokens, 0);
 
-  files.sort((a, b) => b.tokens - a.tokens);
-  const totalTokens = files.reduce((s, f) => s + f.tokens, 0);
-  return { files, totalTokens };
-}
-
-function scanStaticSkillsAndAgents(workspaceDir, options = {}) {
-  const configRoot = getConfigRoot(options);
-  const appDir = getAppDataDir(options);
-  const pluginsDir = path.join(configRoot, 'plugins');
-  const wsNorm = workspaceDir ? path.resolve(workspaceDir) : '';
-  const cacheKey = `${path.resolve(appDir).toLowerCase()}|${path.resolve(configRoot).toLowerCase()}|${wsNorm.toLowerCase()}`;
-
-  const pluginSubdirs = listSubdirsSafe(pluginsDir);
-  const skillRoots = [
-    { dir: path.join(appDir, 'builtin', 'skills'), sourceLayer: 'builtin' },
-    { dir: path.join(configRoot, 'skills'), sourceLayer: 'global' },
-    ...pluginSubdirs.map((peName) => ({ dir: path.join(pluginsDir, peName, 'skills'), sourceLayer: 'plugin' })),
-  ];
-  if (wsNorm) {
-    skillRoots.push({ dir: path.join(wsNorm, '.agents', 'skills'), sourceLayer: 'workspace' });
-  }
-
-  const agentDirs = [
-    { dir: path.join(configRoot, 'agents'), sourceLayer: 'global' },
-    ...pluginSubdirs.map((peName) => ({ dir: path.join(pluginsDir, peName, 'agents'), sourceLayer: 'plugin' })),
-  ];
-  if (wsNorm) {
-    agentDirs.push({ dir: path.join(wsNorm, '.agents', 'agents'), sourceLayer: 'workspace' });
-  }
-
-  const fingerprint = [
-    safeStatSig(pluginsDir),
-    ...skillRoots.map((r) => safeStatSig(r.dir)),
-    ...agentDirs.map((r) => safeStatSig(r.dir)),
-  ].join('|');
-
-  const now = Date.now();
-  const cached = staticSkillsAgentsCache.get(cacheKey);
-  if (cached && now < cached.expiresAt && cached.fingerprint === fingerprint) {
-    return cached.value;
-  }
-
-  const discoveredSkills = [];
-  const seenSkillNames = new Set();
-  for (const { dir: root, sourceLayer } of skillRoots) {
-    if (!fs.existsSync(root)) continue;
-    let entries = [];
-    try {
-      entries = fs.readdirSync(root, { withFileTypes: true });
-    } catch {
-      continue;
-    }
-    for (const e of entries) {
-      if (!e.isDirectory()) continue;
-      const skillFile = path.join(root, e.name, 'SKILL.md');
-      if (!fs.existsSync(skillFile)) continue;
-      if (seenSkillNames.has(e.name)) continue;
-      seenSkillNames.add(e.name);
-      discoveredSkills.push({
-        name: e.name,
-        sourceLayer,
-        skillFile,
-        normPath: path.resolve(skillFile).toLowerCase(),
-      });
-    }
-  }
-
-  const agents = [];
-  let agentTokens = 0;
-  for (const { dir, sourceLayer } of agentDirs) {
-    if (!fs.existsSync(dir)) continue;
-    try {
-      for (const f of fs.readdirSync(dir)) {
-        if (!f.endsWith('.md')) continue;
-        const fullPath = path.join(dir, f);
-        const text = safeReadFile(fullPath);
-        const tok = Math.min(250, Math.max(60, Math.round(estimateTokens(text) * 0.25)));
-        agentTokens += tok;
-        agents.push({
-          name: f.replace(/\.md$/i, ''),
-          kind: 'agent',
-          sourceLayer,
-          filePath: fullPath,
-          displayPath: formatDisplayPath(fullPath),
-          meta: 'custom subagent',
-          tokens: tok,
-          size: fmtSizeK(tok),
-          bytes: Buffer.byteLength(text, 'utf8'),
-        });
-      }
-    } catch {
-      // ignore
-    }
-  }
-
-  const result = {
-    discoveredSkills,
-    totalDiscoveredSkills: discoveredSkills.length,
-    skillMetadataTokens: discoveredSkills.length * 45,
-    agents,
-    agentTokens,
-  };
-  lruCacheSet(staticSkillsAgentsCache, cacheKey, { fingerprint, value: result, expiresAt: now + STATIC_SCAN_TTL_MS });
-  return result;
-}
-
-/**
- * Scan available skills (metadata summaries) + detect skills loaded in full via read_file in transcript.
- */
-function scanSkillsAndAgents(steps, workspaceDir, options = {}) {
-  const staticData = scanStaticSkillsAndAgents(workspaceDir, options);
-
-  // Detect SKILL.md paths read during transcript
-  const loadedSkillPaths = new Set();
-  for (const s of steps) {
-    for (const tc of s.toolCalls) {
-      const name = String(tc?.name || '').toLowerCase();
-      if (name === 'read_file' || name === 'view_file') {
-        const p = String(tc?.args?.Path || tc?.args?.path || tc?.args?.AbsolutePath || '').replace(/^"|"$/g, '');
-        if (/skill\.md$/i.test(p)) {
-          loadedSkillPaths.add(path.resolve(p).toLowerCase());
-        }
-      }
-    }
-  }
-
-  const skills = [];
+  // 3. Active Skills (metadata summaries + transcript-loaded full skills) & Active Custom Agents
+  const activeSkills = (eco.skills || []).filter((sk) => sk.active && !sk.shadowedBy);
+  const skillMetadataTokens = activeSkills.length * 45;
+  const loadedSkills = [];
   let loadedSkillsTokens = 0;
-  let loadedSkillsCount = 0;
 
-  if (loadedSkillPaths.size > 0) {
-    for (const sk of staticData.discoveredSkills) {
-      if (!loadedSkillPaths.has(sk.normPath)) continue;
-      const metrics = getCachedSkillFileMetrics(sk.skillFile);
-      loadedSkillsTokens += metrics.tokens;
-      loadedSkillsCount++;
-      skills.push({
+  if (loadedSkillPaths && loadedSkillPaths.size > 0) {
+    for (const sk of activeSkills) {
+      const normP = sk.normPath || path.resolve(sk.filePath).toLowerCase();
+      if (!loadedSkillPaths.has(normP)) continue;
+      loadedSkillsTokens += sk.fullTokens;
+      loadedSkills.push({
         name: sk.name,
         kind: 'skill',
-        sourceLayer: sk.sourceLayer,
-        filePath: sk.skillFile,
-        displayPath: formatDisplayPath(sk.skillFile),
+        sourceLayer: sk.scope || 'global',
+        filePath: sk.filePath,
+        displayPath: sk.displayPath,
         meta: 'skill (loaded)',
-        tokens: metrics.tokens,
-        size: fmtSizeK(metrics.tokens),
-        bytes: metrics.bytes,
+        tokens: sk.fullTokens,
+        size: fmtSizeK(sk.fullTokens),
+        bytes: sk.bytes || 0,
       });
     }
   }
+  loadedSkills.sort((a, b) => b.tokens - a.tokens);
+
+  const activeAgents = (eco.agents || []).filter((a) => a.active);
+  const agentTokens = activeAgents.reduce((s, a) => s + a.tokens, 0);
 
   return {
-    skillsTotalTokens: staticData.skillMetadataTokens + loadedSkillsTokens,
-    totalDiscoveredSkills: staticData.totalDiscoveredSkills,
-    loadedSkillsCount,
-    loadedSkills: skills.sort((a, b) => b.tokens - a.tokens),
-    agents: staticData.agents,
-    agentTokens: staticData.agentTokens,
+    mcpScan: {
+      servers: mcpItems,
+      eagerTokens,
+      eagerCount,
+      deferredTokens,
+      deferredCount,
+    },
+    rulesScan: {
+      files: ruleItems,
+      totalTokens: rulesTotalTokens,
+    },
+    skillScan: {
+      skillsTotalTokens: skillMetadataTokens + loadedSkillsTokens,
+      totalDiscoveredSkills: activeSkills.length,
+      loadedSkillsCount: loadedSkills.length,
+      loadedSkills,
+      agents: activeAgents,
+      agentTokens,
+    },
   };
 }
 
 /**
- * Inspect full context breakdown, deferred tools, mounted inventories, and bloat attribution.
+ * Inspect full context breakdown, deferred tools, mounted inventories, bloat attribution,
+ * and deterministic `rev` digest for zero-DOM-recompute polling short-circuiting.
  */
 export function inspectContext(params = {}, options = {}) {
   const config = loadConfig(options);
@@ -583,8 +215,6 @@ export function inspectContext(params = {}, options = {}) {
   const tPath = target.transcriptPath || (convId ? findTranscriptPath(convId, options) : null);
   const git = getGitContext(workspaceDir);
 
-  // If the resolved active conversation was just started (SessionStart before first transcript line),
-  // surface it at the top of the session list so UI dropdowns display it cleanly.
   const sessionList = [...sessions];
   if (convId && !sessionList.some((s) => s.conversationId === convId)) {
     sessionList.unshift({
@@ -597,35 +227,27 @@ export function inspectContext(params = {}, options = {}) {
     });
   }
 
-  const steps = tPath && fs.existsSync(tPath) ? parseTranscriptFull(tPath) : [];
-  const plannerSteps = steps.filter((s) => s.type === 'PLANNER_RESPONSE' && s.inputTokens + s.cacheReadTokens > 0);
-  const latestPlanner = plannerSteps[plannerSteps.length - 1] || null;
+  // O(1) incremental transcript analysis (no full re-parse or JSON.stringify over historical steps)
+  const analysis = tPath && fs.existsSync(tPath) ? getTranscriptAnalysis(tPath) : null;
+  const acc = analysis?.acc || null;
+  const latestPlanner = acc?.latestPlanner || null;
 
   const matchedSession = sessionList.find((s) => s.conversationId === convId);
   const model = latestPlanner?.model || matchedSession?.lastModel || 'gemini-4-neon-high';
   let limitTokens = getModelLimit(model, config);
   const usedTokens = latestPlanner ? latestPlanner.inputTokens + latestPlanner.cacheReadTokens : 0;
-  // Guard against future unknown model names exceeding fallback 200K limit
   if (usedTokens > limitTokens) {
     limitTokens = usedTokens <= 1_000_000 ? 1_000_000 : 2_000_000;
   }
 
-  // Estimate messages & tool outputs from transcript
-  let msgRawTokens = 0;
-  let toolOutputTokens = 0;
-  for (const s of steps) {
-    const textTok = estimateTokens(s.content) + (s.toolCalls.length ? estimateTokens(JSON.stringify(s.toolCalls)) : 0);
-    msgRawTokens += textTok;
-    if (s.type !== 'USER_INPUT' && s.type !== 'PLANNER_RESPONSE') {
-      toolOutputTokens += textTok;
-    }
-  }
+  const msgRawTokens = acc ? acc.msgRawTokens : 0;
+  const toolOutputTokens = acc ? acc.toolOutputTokens : 0;
+  const loadedSkillPaths = acc ? acc.loadedSkillPaths : new Set();
 
-  const mcpScan = scanMcpTools(options);
-  const rulesScan = scanRulesAndMemory(workspaceDir, options);
-  const skillScan = scanSkillsAndAgents(steps, workspaceDir, options);
+  // Unified ecosystem inventory (5s fast-TTL + 15s fingerprint, strictly respects disabled plugins)
+  const eco = scanEcosystemInventory({ projectDir: workspaceDir, force: Boolean(params.force) }, options);
+  const { mcpScan, rulesScan, skillScan } = projectInventoryForContext(eco, loadedSkillPaths, workspaceDir, options);
 
-  // Reconcile breakdown cleanly with actual reported usedTokens (so breakdown sums exactly to usedTokens when usedTokens > 0)
   const fixedActive = mcpScan.eagerTokens + skillScan.skillsTotalTokens + rulesScan.totalTokens + skillScan.agentTokens;
   let messagesTokens = msgRawTokens;
   let systemBaselineTokens = 0;
@@ -634,7 +256,6 @@ export function inspectContext(params = {}, options = {}) {
     if (fixedActive + messagesTokens <= usedTokens) {
       systemBaselineTokens = Math.max(0, usedTokens - fixedActive - messagesTokens);
     } else {
-      // Reserve realistic system baseline (~10K or 10% of usedTokens) and cap messages to remainder
       systemBaselineTokens = Math.min(12000, Math.round(usedTokens * 0.1));
       const budgetForMsg = Math.max(0, usedTokens - fixedActive - systemBaselineTokens);
       messagesTokens = budgetForMsg;
@@ -714,6 +335,8 @@ export function inspectContext(params = {}, options = {}) {
         filePath: s.filePath || '',
         displayPath: s.displayPath || '',
         tokens: s.tokens,
+        eagerTokens: s.eagerTokens,
+        deferredTokens: s.deferredTokens,
         toolCount: s.toolCount,
         deferredCount: s.deferredCount ?? (s.mode === 'deferred' ? s.toolCount : 0),
         eagerCount: s.eagerCount ?? (s.mode === 'eager' ? s.toolCount : 0),
@@ -767,7 +390,9 @@ export function inspectContext(params = {}, options = {}) {
 
   const attrParts = [];
   if (usedPercent >= config.alerts.contextWarningPct) {
-    attrParts.push(`当前上下文已达 ${usedPercent}%（超过 ${config.alerts.contextWarningPct}% 警戒线），建议先生成交接胶囊再执行 /compact`);
+    attrParts.push(
+      `当前上下文已达 ${usedPercent}%（超过 ${config.alerts.contextWarningPct}% 警戒线），建议先生成交接胶囊再执行 /compact`
+    );
   } else if (top1 && effectiveUsed > 0) {
     const share = ((top1.tokens / limitTokens) * 100).toFixed(1);
     const extra = top1.id === 'msg' && toolRatio > 0 ? `（工具返回占比约 ${toolRatio}%）` : '';
@@ -788,12 +413,50 @@ export function inspectContext(params = {}, options = {}) {
     {
       conversationId: isAggregateAll ? '__active_all__' : convId,
       transcriptPath: isAggregateAll ? undefined : tPath,
+      force: Boolean(params.force),
     },
     options
   );
   const alerts = evaluateAlerts(telemetry.calls, config, usedPercent);
 
+  const latestCallTsMs = (() => {
+    const latestCall = (telemetry.calls || []).find((c) => c.agentType === 'main') || (telemetry.calls || [])[0];
+    if (latestCall?.tsMs) {
+      const dur = Number(latestCall.durationMs) || 0;
+      return latestCall.tsMs + (dur > 0 && dur < 600_000 ? dur : 0);
+    }
+    return latestPlanner?.tsMs || matchedSession?.mtimeMs || 0;
+  })();
+
+  const isTurnActive = Boolean(matchedSession?.isActive && target.activeSession?.event === 'PreInvocation');
+
+  // Deterministic 12-hex revision digest for lastRev short-circuiting (§1.3 #3)
+  const revSeed = [
+    isAggregateAll ? '__active_all__' : convId || '',
+    workspaceDir || '',
+    analysis?.offset ?? 0,
+    analysis?.size ?? 0,
+    eco.fingerprint || '',
+    effectiveUsed,
+    limitTokens,
+    mcpScan.eagerTokens,
+    mcpScan.deferredTokens,
+    rulesScan.totalTokens,
+    skillScan.skillsTotalTokens,
+    telemetry.rev || '',
+    latestCallTsMs,
+    isTurnActive ? 1 : 0,
+    git.branch || '',
+    git.head || '',
+    git.dirty ? 1 : 0,
+    sessionList.length,
+    sessionList[0]?.conversationId || '',
+    sessionList[0]?.mtimeMs || 0,
+  ].join('|');
+  const rev = crypto.createHash('sha256').update(revSeed).digest('hex').slice(0, 12);
+
   return {
+    rev,
     conversationId: isAggregateAll ? '__active_all__' : convId,
     projectDir: workspaceDir,
     followResolvedBy: isAggregateAll ? 'aggregate_active' : target.source,
@@ -818,15 +481,8 @@ export function inspectContext(params = {}, options = {}) {
     },
     model,
     latestModel: telemetry.summary.latestModel || latestPlanner?.model || matchedSession?.lastModel || '',
-    latestCallTsMs: (() => {
-      const latestCall = (telemetry.calls || []).find((c) => c.agentType === 'main') || (telemetry.calls || [])[0];
-      if (latestCall?.tsMs) {
-        const dur = Number(latestCall.durationMs) || 0;
-        return latestCall.tsMs + (dur > 0 && dur < 600_000 ? dur : 0);
-      }
-      return latestPlanner?.tsMs || matchedSession?.mtimeMs || 0;
-    })(),
-    isTurnActive: Boolean(matchedSession?.isActive && target.activeSession?.event === 'PreInvocation'),
+    latestCallTsMs,
+    isTurnActive,
     usedTokens: effectiveUsed,
     limitTokens,
     freeTokens,
@@ -844,37 +500,13 @@ export function inspectContext(params = {}, options = {}) {
   };
 }
 
-const BLOCKED_SECRET_FILE_RE = /^(?:\.env(?:\..+)?|id_(?:rsa|ed25519|ecdsa)(?:\.pub)?|.*\.(?:pem|key|p12|pfx|jks))$/i;
-
-function safeRealpath(p) {
-  const abs = path.resolve(p);
-  try {
-    if (fs.existsSync(abs)) {
-      return typeof fs.realpathSync.native === 'function' ? fs.realpathSync.native(abs) : fs.realpathSync(abs);
-    }
-  } catch {
-    // ignore
-  }
-  return abs;
-}
-
-function isPathInsideRoot(targetPath, rootPath) {
-  if (!targetPath || !rootPath) return false;
-  const normTarget = path.resolve(targetPath).toLowerCase();
-  const normRoot = path.resolve(rootPath).toLowerCase();
-  if (normTarget === normRoot || normTarget.startsWith(`${normRoot}${path.sep}`)) return true;
-  const realTarget = safeRealpath(targetPath).toLowerCase();
-  const realRoot = safeRealpath(rootPath).toLowerCase();
-  return realTarget === realRoot || realTarget.startsWith(`${realRoot}${path.sep}`);
-}
-
 function inferAssetSourceLayer(realPath, workspaceDir, options = {}) {
-  const appDir = getAppDataDir(options);
-  const configRoot = getConfigRoot(options);
+  const appDir = safeRealpath(getAppDataDir(options));
+  const configRoot = safeRealpath(getConfigRoot(options));
   if (isPathInsideRoot(realPath, path.join(appDir, 'builtin'))) return 'builtin';
   if (isPathInsideRoot(realPath, path.join(configRoot, 'plugins'))) return 'plugin';
   if (isPathInsideRoot(realPath, configRoot) || isPathInsideRoot(realPath, appDir)) return 'global';
-  if (workspaceDir && isPathInsideRoot(realPath, workspaceDir)) return 'workspace';
+  if (workspaceDir && isPathInsideRoot(realPath, safeRealpath(workspaceDir))) return 'workspace';
   return 'workspace';
 }
 
@@ -890,79 +522,42 @@ function inferAssetKind(realPath) {
 
 /**
  * Strictly read-only, boundary-checked, redacted preview for mounted context assets
- * (rules, skills, custom agents, MCP configs) within authorized Antigravity / workspace roots.
+ * delegating core security checks to `fs-utils.mjs` `previewAuthorizedFile`.
  */
 export function previewContextAsset(params = {}, options = {}) {
-  const rawFilePath = params.filePath;
-  if (!rawFilePath || typeof rawFilePath !== 'string' || rawFilePath.includes('\0')) {
-    throw new Error('无效的资产文件路径');
-  }
-
   const workspaceDir = params.projectDir || options.projectDir || process.cwd();
-  const absPath = path.resolve(rawFilePath);
-
-  // Build authorized root list (both logical and realpath variants to handle OS temp symlinks & Windows 8.3 paths cleanly)
-  const toReal = (p) => (typeof fs.realpathSync.native === 'function' ? fs.realpathSync.native(p) : fs.realpathSync(p));
   const rawRoots = [getConfigRoot(options), getAppDataDir(options), workspaceDir].filter(Boolean);
   const allowedRoots = [];
   for (const r of rawRoots) {
     const resolvedRoot = path.resolve(r);
     allowedRoots.push(resolvedRoot);
-    try {
-      if (fs.existsSync(resolvedRoot)) {
-        const realRoot = toReal(resolvedRoot);
-        if (realRoot.toLowerCase() !== resolvedRoot.toLowerCase()) {
-          allowedRoots.push(realRoot);
-        }
-      }
-    } catch {
-      // ignore
+    const realRoot = safeRealpath(resolvedRoot);
+    if (realRoot.toLowerCase() !== resolvedRoot.toLowerCase()) {
+      allowedRoots.push(realRoot);
     }
   }
 
-  if (!allowedRoots.some((r) => isPathInsideRoot(absPath, r))) {
-    throw new Error('拒绝读取超出工作区或 Antigravity 配置边界的资产文件');
+  let base;
+  try {
+    base = previewAuthorizedFile({
+      filePath: params.filePath,
+      allowedRoots,
+      maxChars: 24000,
+    });
+  } catch (err) {
+    const msg = String(err?.message || '');
+    if (msg.includes('超出工作区') || msg.includes('符号链接')) {
+      throw new Error(`拒绝读取：${msg}`);
+    }
+    throw err;
   }
 
-  const baseName = path.basename(absPath);
-  if (BLOCKED_SECRET_FILE_RE.test(baseName)) {
-    throw new Error('拒绝直接预览敏感凭据或私钥文件');
-  }
-
-  if (!fs.existsSync(absPath)) {
-    throw new Error('目标资产文件不存在');
-  }
-  const stat = fs.statSync(absPath);
-  if (!stat.isFile()) {
-    throw new Error('目标路径不是可预览的普通文件');
-  }
-
-  const realPath = toReal(absPath);
-  if (!allowedRoots.some((r) => isPathInsideRoot(realPath, r))) {
-    throw new Error('拒绝通过符号链接越权读取外部文件');
-  }
-  if (BLOCKED_SECRET_FILE_RE.test(path.basename(realPath))) {
-    throw new Error('拒绝直接预览敏感凭据或私钥文件');
-  }
-
-  const raw = fs.readFileSync(realPath, 'utf8');
-  const MAX_CHARS = 24000;
-  const truncated = raw.length > MAX_CHARS;
-  const content = redactText(truncated ? raw.slice(0, MAX_CHARS) : raw);
-  const tokens = estimateTokens(raw);
-
+  const realPath = safeRealpath(base.filePath);
   return {
+    ...base,
     filePath: realPath,
-    displayPath: formatDisplayPath(realPath),
-    name: path.basename(realPath),
     kind: inferAssetKind(realPath),
     sourceLayer: inferAssetSourceLayer(realPath, workspaceDir, options),
-    bytes: stat.size,
-    lines: raw ? raw.split(/\r?\n/).length : 0,
-    tokens,
-    size: fmtSizeK(tokens),
-    truncated,
-    redacted: true,
-    content,
+    size: fmtSizeK(base.tokens),
   };
 }

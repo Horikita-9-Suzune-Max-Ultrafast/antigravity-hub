@@ -4,10 +4,41 @@ import { formatDisplayPath, getConfigRoot, getDataPaths } from '../paths.mjs';
 import { redactText } from '../redact.mjs';
 import { loadGovernancePreferences } from './guardrails.mjs';
 
-const HEAVY_MCP_TOKENS = 15000;
+const HEAVY_MCP_EAGER_TOKENS = 15000;
+const HEAVY_MCP_DEFERRED_TOKENS = 25000;
 const HEAVY_SKILL_DESC_TOKENS = 180;
+const OVERSIZED_RULE_TOKENS = 3000;
+const SKILL_OVERLAP_THRESHOLD = 0.58;
 
 const PLACEHOLDER_HREF_RE = /^(?:url|link|href|path|file|target|dest|destination|example(?:\.[a-z]+)?|placeholder|<[^>]+>|\{[^}]+\}|path\/to\/.+|\.\.\.)$/i;
+const REDACTED_PLACEHOLDER_RE = /\[REDACTED(?:_[A-Z0-9_]+)?\]/g;
+const CJK_STOP_PHRASES_RE = /(?:当用户|使用|需要|进行|支持|可以|或者|以及|通过)/g;
+
+export const PILLAR_SPECS = {
+  security: { max: 30, scale: 20, pluginFactor: 0.8, ownFactor: 1.0 },
+  integrity: { max: 25, scale: 18, pluginFactor: 0.8, ownFactor: 1.0 },
+  efficiency: { max: 25, scale: 22, pluginFactor: 0.35, ownFactor: 1.0 },
+  hygiene: { max: 20, scale: 16, pluginFactor: 0.35, ownFactor: 1.0 },
+};
+
+export const CODE_SPECS = {
+  SECRET: { pillar: 'security', severity: 'error', baseWeight: 22.0 },
+  CONFIG_PARSE_ERROR: { pillar: 'integrity', severity: 'error', baseWeight: 14.0 },
+  MCP_BROKEN_TARGET: { pillar: 'integrity', severity: 'error', baseWeight: 12.0 },
+  MCP_INVALID_URL: { pillar: 'integrity', severity: 'error', baseWeight: 12.0 },
+  SKILL_BROKEN_LINK: { pillar: 'integrity', severity: 'warn', baseWeight: 6.0 },
+  MCP_EXCESSIVE_EAGER: { pillar: 'efficiency', severity: 'warn', baseWeight: 7.5 },
+  MCP_HEAVY_SCHEMA: { pillar: 'efficiency', severity: 'warn', baseWeight: 8.5, deferredWeight: 1.2 },
+  RULE_OVERSIZED: { pillar: 'efficiency', severity: 'warn', baseWeight: 6.5 },
+  SKILL_LONG_DESC: { pillar: 'efficiency', severity: 'info', baseWeight: 2.5 },
+  HOOK_LONG_TIMEOUT: { pillar: 'hygiene', severity: 'warn', baseWeight: 4.5 },
+  SKILL_SHADOWED: { pillar: 'hygiene', severity: 'warn', baseWeight: 4.0 },
+  SKILL_TRIGGER_OVERLAP: { pillar: 'hygiene', severity: 'info', baseWeight: 2.5 },
+  SKILL_WEAK_DESC: { pillar: 'hygiene', severity: 'info', baseWeight: 2.0 },
+  HOOK_PRE_TOOL_USE: { pillar: 'hygiene', severity: 'info', baseWeight: 1.5 },
+};
+
+const SEVERITY_RANK = { error: 0, warn: 1, info: 2 };
 
 function safeReadText(p) {
   try {
@@ -22,11 +53,9 @@ function safeReadText(p) {
 
 function isCommandLikelyMissing(cmd, args, configFile) {
   if (!cmd || typeof cmd !== 'string') return { missing: true, reason: '缺少 command 可执行命令' };
-  // Absolute path command check
   if (path.isAbsolute(cmd) && !fs.existsSync(cmd)) {
     return { missing: true, reason: `可执行文件不存在: ${formatDisplayPath(cmd)}` };
   }
-  // Check local script paths inside args (e.g. node ${PLUGIN_ROOT}/dist/server.mjs)
   const pluginRoot = configFile ? path.dirname(configFile) : '';
   for (const rawArg of args || []) {
     if (typeof rawArg !== 'string') continue;
@@ -43,24 +72,44 @@ function isCommandLikelyMissing(cmd, args, configFile) {
 }
 
 /**
- * #8 MCP Offline Health & Schema Redundancy Linter
+ * #8 MCP Offline Health & Schema Redundancy Linter (distinguishes eager vs deferred pools).
  */
 export function lintMcpServers(ecosystem) {
   const findings = [];
   for (const srv of ecosystem.mcpServers || []) {
     if (!srv.enabled) continue;
-    if (srv.tokens >= HEAVY_MCP_TOKENS) {
+    const isDeferred = srv.mode === 'deferred';
+    const deferredTok = Number(srv.deferredTokens ?? (isDeferred ? srv.tokens : 0)) || 0;
+    const eagerTok = Number(srv.eagerTokens ?? (isDeferred ? 0 : srv.tokens)) || 0;
+
+    if (isDeferred) {
+      if (deferredTok >= HEAVY_MCP_DEFERRED_TOKENS) {
+        findings.push({
+          category: 'mcp',
+          severity: 'info',
+          code: 'MCP_HEAVY_SCHEMA',
+          target: srv.name,
+          message: `懒加载 MCP「${srv.name}」工具池体积较大（约 ${(deferredTok / 1000).toFixed(1)}K deferred tokens，${srv.toolCount} tools，不占每轮常驻基线）。`,
+          file: srv.displayConfigFile,
+          absFile: srv.configFile,
+          pluginId: srv.pluginId || null,
+          meta: { deferred: true, tokens: deferredTok },
+        });
+      }
+    } else if (eagerTok >= HEAVY_MCP_EAGER_TOKENS) {
       findings.push({
         category: 'mcp',
         severity: 'warn',
         code: 'MCP_HEAVY_SCHEMA',
         target: srv.name,
-        message: `MCP「${srv.name}」工具定义体积偏重（约 ${(srv.tokens / 1000).toFixed(1)}K tokens，${srv.toolCount} tools），建议非必需场景下停用或检查懒加载。`,
+        message: `MCP「${srv.name}」常驻工具定义体积偏重（约 ${(eagerTok / 1000).toFixed(1)}K tokens，${srv.toolCount} tools），建议非必需场景下停用或改用懒加载。`,
         file: srv.displayConfigFile,
         absFile: srv.configFile,
         pluginId: srv.pluginId || null,
+        meta: { deferred: false, tokens: eagerTok },
       });
     }
+
     if (srv.eagerCount >= 8) {
       findings.push({
         category: 'mcp',
@@ -103,14 +152,38 @@ export function lintMcpServers(ecosystem) {
   return findings;
 }
 
-function tokenizeKeywords(text) {
-  const cleaned = String(text || '')
-    .toLowerCase()
-    .replace(/[^a-z0-9\u4e00-\u9fa5]+/g, ' ')
-    .trim();
-  if (!cleaned) return new Set();
-  const stop = new Set(['the', 'and', 'for', 'with', 'use', 'when', 'user', 'asks', 'to', 'of', 'in', 'a', 'an', 'or', 'on', 'is', 'are', 'this', 'that', 'from']);
-  return new Set(cleaned.split(/\s+/).filter((w) => w.length >= 3 && !stop.has(w)));
+/**
+ * Bilingual keyword tokenizer combining English/alphanumeric stems (>= 3 chars)
+ * and CJK character-level 2-grams (bigrams) after stripping common function phrases.
+ */
+export function tokenizeKeywords(text) {
+  const str = String(text || '').toLowerCase();
+  if (!str.trim()) return new Set();
+
+  const stopEn = new Set([
+    'the', 'and', 'for', 'with', 'use', 'when', 'user', 'asks', 'to', 'of',
+    'in', 'a', 'an', 'or', 'on', 'is', 'are', 'this', 'that', 'from',
+  ]);
+  const tokens = new Set();
+
+  // 1. English / alphanumeric tokens (length >= 3)
+  const latinMatches = str.match(/[a-z0-9]+/g) || [];
+  for (const w of latinMatches) {
+    if (w.length >= 3 && !stopEn.has(w)) {
+      tokens.add(w);
+    }
+  }
+
+  // 2. CJK bigrams after stripping high-frequency Chinese function phrases
+  const cjkCleaned = str.replace(CJK_STOP_PHRASES_RE, ' ');
+  const cjkRuns = cjkCleaned.match(/[\u4e00-\u9fff]{2,}/g) || [];
+  for (const run of cjkRuns) {
+    for (let i = 0; i < run.length - 1; i++) {
+      tokens.add(run.slice(i, i + 2));
+    }
+  }
+
+  return tokens;
 }
 
 function stripMarkdownCode(markdown) {
@@ -128,7 +201,6 @@ function findBrokenSkillLinks(skill) {
   const re = /(?<!!)\[[^\]]+\]\(([^)\r\n]+)\)/g;
   let m;
   while ((m = re.exec(text)) !== null) {
-    // Strip optional markdown title: (./file.md "title")
     const rawHref = String(m[1] || '').trim().replace(/\s+["'][^"']*["']\s*$/, '');
     const href = rawHref.split('#')[0].split('?')[0].trim();
     if (!href || /^(https?:|mailto:|file:|data:|#)/i.test(href) || href.includes('://')) continue;
@@ -143,7 +215,7 @@ function findBrokenSkillLinks(skill) {
 }
 
 /**
- * #9 Skill Quality, Trigger Overlap & Broken Reference Linter
+ * #9 Skill Quality, Trigger Overlap (bilingual Jaccard >= 0.58) & Broken Reference Linter.
  */
 export function lintSkills(ecosystem) {
   const findings = [];
@@ -159,6 +231,7 @@ export function lintSkills(ecosystem) {
         message: `Skill「${sk.name}」（${sk.sourceLabel}）被更高优先级的「${sk.shadowedBy}」同名覆盖，当前不会生效。`,
         file: sk.displayPath,
         absFile: sk.filePath,
+        pluginId: sk.pluginId || null,
       });
     }
     if (!sk.description || sk.description.trim().length < 12) {
@@ -170,6 +243,7 @@ export function lintSkills(ecosystem) {
         message: `Skill「${sk.name}」缺少有效 description，模型可能难以在正确时机触发。`,
         file: sk.displayPath,
         absFile: sk.filePath,
+        pluginId: sk.pluginId || null,
       });
     } else if (sk.descTokens >= HEAVY_SKILL_DESC_TOKENS) {
       findings.push({
@@ -180,6 +254,7 @@ export function lintSkills(ecosystem) {
         message: `Skill「${sk.name}」frontmatter 描述较长（约 ${sk.descTokens} tokens），会常驻注入每轮系统提示词。`,
         file: sk.displayPath,
         absFile: sk.filePath,
+        pluginId: sk.pluginId || null,
       });
     }
     const broken = findBrokenSkillLinks(sk);
@@ -192,6 +267,7 @@ export function lintSkills(ecosystem) {
         message: `Skill「${sk.name}」包含 ${broken.length} 处断链引用（如 ${broken.slice(0, 2).join(', ')}）。`,
         file: sk.displayPath,
         absFile: sk.filePath,
+        pluginId: sk.pluginId || null,
         meta: { brokenLinks: broken.slice(0, 10) },
       });
     }
@@ -210,7 +286,7 @@ export function lintSkills(ecosystem) {
         if (b.kws.has(w)) inter++;
       }
       const jaccard = inter / (a.kws.size + b.kws.size - inter);
-      if (jaccard >= 0.62) {
+      if (jaccard >= SKILL_OVERLAP_THRESHOLD) {
         findings.push({
           category: 'skill',
           severity: 'info',
@@ -219,12 +295,37 @@ export function lintSkills(ecosystem) {
           message: `Skill「${a.skill.name}」与「${b.skill.name}」触发描述高度相似（重合度 ${Math.round(jaccard * 100)}%），可能引起模型选错技能。`,
           file: a.skill.displayPath,
           absFile: a.skill.filePath,
-          meta: { otherFile: b.skill.displayPath, otherSkill: b.skill.name },
+          pluginId: a.skill.pluginId || null,
+          meta: { otherFile: b.skill.displayPath, otherSkill: b.skill.name, jaccard: Number(jaccard.toFixed(3)) },
         });
       }
     }
   }
 
+  return findings;
+}
+
+/**
+ * Lint active Rules for oversized prompt baselines (> 3000 tokens).
+ */
+export function lintRules(ecosystem) {
+  const findings = [];
+  for (const r of ecosystem.rules || []) {
+    if (!r.active) continue;
+    if ((Number(r.tokens) || 0) > OVERSIZED_RULE_TOKENS) {
+      findings.push({
+        category: 'rule',
+        severity: 'warn',
+        code: 'RULE_OVERSIZED',
+        target: r.displayName || r.name,
+        message: `规则文件「${r.name}」体积过大（约 ${(r.tokens / 1000).toFixed(1)}K tokens，超出 3K 建议阈值），会常驻注入每轮系统提示词。`,
+        file: r.displayPath,
+        absFile: r.filePath,
+        pluginId: r.pluginId || null,
+        meta: { tokens: r.tokens },
+      });
+    }
+  }
   return findings;
 }
 
@@ -246,9 +347,12 @@ function scanFileForSecrets(absPath) {
   const lines = text.split(/\r?\n/);
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    if (!line || line.includes('[REDACTED')) continue;
+    if (!line) continue;
+    // Strip legitimate [REDACTED...] placeholders first so unredacted secrets on the same line are still caught
+    const remaining = line.replace(REDACTED_PLACEHOLDER_RE, '');
+    if (!remaining.trim()) continue;
     for (const pat of AUDIT_PATTERNS) {
-      if (pat.re.test(line)) {
+      if (pat.re.test(remaining)) {
         hits.push({
           line: i + 1,
           kind: pat.label,
@@ -265,8 +369,8 @@ function scanFileForSecrets(absPath) {
 
 /**
  * #10 Offline Privacy & Secret Leak Auditor
- * Scans host configs, active rules, and external vault files strictly offline;
- * never returns raw secret text (always redacted).
+ * Scans host configs, hooks.json, active rules, MCP configs, and Vault projects/<id>/memories/*.md & events.jsonl.
+ * Never returns raw secret text (always redacted).
  */
 export function auditSecrets(ecosystem, options = {}) {
   const findings = [];
@@ -274,9 +378,21 @@ export function auditSecrets(ecosystem, options = {}) {
   const targets = [];
 
   const configRoot = getConfigRoot(options);
-  for (const rel of ['mcp_config.json', 'config.json']) {
+  for (const rel of ['mcp_config.json', 'config.json', 'hooks.json']) {
     const p = path.join(configRoot, rel);
     if (fs.existsSync(p)) targets.push({ label: `宿主配置 ${rel}`, path: p });
+  }
+  for (const p of ecosystem.plugins || []) {
+    if (!p.enabled || !p.dirPath) continue;
+    const pHooks = path.join(p.dirPath, 'hooks.json');
+    if (fs.existsSync(pHooks)) {
+      targets.push({ label: `插件 Hooks ${p.id}`, path: pHooks });
+    }
+  }
+  for (const h of ecosystem.hooks || []) {
+    if (h.active && h.filePath && fs.existsSync(h.filePath)) {
+      targets.push({ label: `Hook 配置 ${h.sourceLabel || path.basename(h.filePath)}`, path: h.filePath });
+    }
   }
   for (const r of ecosystem.rules || []) {
     if (r.filePath && fs.existsSync(r.filePath)) {
@@ -289,15 +405,30 @@ export function auditSecrets(ecosystem, options = {}) {
     }
   }
 
-  // Also scan Hub's own external projects memories for accidental leaks
+  // Scan Hub's external Vault projects/<projectId>/memories/*.md and events.jsonl
   const { projectsDir } = getDataPaths(options);
   if (fs.existsSync(projectsDir)) {
     try {
       for (const proj of fs.readdirSync(projectsDir, { withFileTypes: true })) {
         if (!proj.isDirectory()) continue;
-        const memFile = path.join(projectsDir, proj.name, 'memories.jsonl');
-        if (fs.existsSync(memFile)) {
-          targets.push({ label: `记忆库 ${proj.name}`, path: memFile });
+        const projPath = path.join(projectsDir, proj.name);
+        const memDir = path.join(projPath, 'memories');
+        if (fs.existsSync(memDir)) {
+          try {
+            for (const entry of fs.readdirSync(memDir, { withFileTypes: true })) {
+              if (!entry.isFile() || !entry.name.toLowerCase().endsWith('.md')) continue;
+              targets.push({
+                label: `记忆库 ${proj.name}/${entry.name}`,
+                path: path.join(memDir, entry.name),
+              });
+            }
+          } catch {
+            // ignore unreadable memory dir
+          }
+        }
+        const eventsFile = path.join(projPath, 'events.jsonl');
+        if (fs.existsSync(eventsFile)) {
+          targets.push({ label: `记忆事件日志 ${proj.name}`, path: eventsFile });
         }
       }
     } catch {
@@ -342,6 +473,144 @@ function makeFindingId(f) {
   return `${f.code || 'LINT'}::${f.target || ''}::${f.file || ''}${linePart}`;
 }
 
+function resolveFindingSpec(finding) {
+  const code = String(finding?.code || '');
+  if (code.startsWith('SECRET_')) {
+    return { pillar: 'security', baseWeight: CODE_SPECS.SECRET.baseWeight };
+  }
+  if (code === 'MCP_HEAVY_SCHEMA') {
+    const isDeferred = Boolean(finding?.meta?.deferred) || finding?.severity === 'info';
+    return {
+      pillar: 'efficiency',
+      baseWeight: isDeferred ? CODE_SPECS.MCP_HEAVY_SCHEMA.deferredWeight : CODE_SPECS.MCP_HEAVY_SCHEMA.baseWeight,
+    };
+  }
+  const spec = CODE_SPECS[code];
+  if (spec) {
+    return { pillar: spec.pillar, baseWeight: spec.baseWeight };
+  }
+  return { pillar: 'hygiene', baseWeight: 2.0 };
+}
+
+/**
+ * Continuous baseline penalty curve B(T) for active eager prompt baseline tokens.
+ */
+export function computeBaselinePenalty(baselineTokens = 0) {
+  const T = Math.max(0, Number(baselineTokens) || 0);
+  if (T <= 8000) return 0;
+  if (T <= 32000) {
+    return 14 * Math.pow((T - 8000) / 24000, 1.35);
+  }
+  return 14 + 10 * (1 - Math.exp(-(T - 32000) / 28000));
+}
+
+function sortCodeGroup(items) {
+  return [...items].sort((a, b) => {
+    const ownDiff = Number(Boolean(a.isPluginManaged)) - Number(Boolean(b.isPluginManaged));
+    if (ownDiff !== 0) return ownDiff;
+    return String(a.id || '').localeCompare(String(b.id || ''));
+  });
+}
+
+function computeGroupPenalty(items) {
+  const ordered = sortCodeGroup(items);
+  let sum = 0;
+  for (let i = 0; i < ordered.length; i++) {
+    const f = ordered[i];
+    const spec = resolveFindingSpec(f);
+    const pSpec = PILLAR_SPECS[spec.pillar];
+    const ownFactor = f.isPluginManaged ? pSpec.pluginFactor : pSpec.ownFactor;
+    sum += (spec.baseWeight * ownFactor) / Math.sqrt(i + 1);
+  }
+  return sum;
+}
+
+/**
+ * Pure 4-pillar continuous diminishing scoring engine (§4.2).
+ * Computes exact pillar scores, overall grade, and counterfactual `+impactPts` per active finding.
+ */
+export function computeGovernanceScore(findings = [], baselineTokens = 0) {
+  const active = (Array.isArray(findings) ? findings : []).filter((f) => !f.ignored);
+  const byCode = new Map();
+  for (const f of active) {
+    const codeKey = String(f.code || 'UNKNOWN');
+    let list = byCode.get(codeKey);
+    if (!list) {
+      list = [];
+      byCode.set(codeKey, list);
+    }
+    list.push(f);
+  }
+
+  const penalties = { security: 0, integrity: 0, efficiency: 0, hygiene: 0 };
+  const groupPenaltyCache = new Map();
+
+  for (const [codeKey, list] of byCode.entries()) {
+    const ordered = sortCodeGroup(list);
+    let groupPen = 0;
+    for (let i = 0; i < ordered.length; i++) {
+      const f = ordered[i];
+      const spec = resolveFindingSpec(f);
+      const pSpec = PILLAR_SPECS[spec.pillar];
+      const ownFactor = f.isPluginManaged ? pSpec.pluginFactor : pSpec.ownFactor;
+      const eff = (spec.baseWeight * ownFactor) / Math.sqrt(i + 1);
+      penalties[spec.pillar] += eff;
+      groupPen += eff;
+    }
+    groupPenaltyCache.set(codeKey, { ordered, groupPen });
+  }
+
+  const basePenalty = computeBaselinePenalty(baselineTokens);
+  penalties.efficiency += basePenalty;
+
+  const pillarExact = {};
+  const pillars = {};
+  let scoreExact = 0;
+  for (const [pillarId, pSpec] of Object.entries(PILLAR_SPECS)) {
+    const pen = penalties[pillarId];
+    const sVal = pSpec.max * Math.exp(-pen / pSpec.scale);
+    pillarExact[pillarId] = sVal;
+    scoreExact += sVal;
+    pillars[pillarId] = {
+      score: Number(sVal.toFixed(2)),
+      max: pSpec.max,
+      penalty: Number(pen.toFixed(2)),
+    };
+  }
+
+  const score = Math.max(0, Math.min(100, Math.round(scoreExact)));
+  const grade = score >= 90 ? 'A' : score >= 75 ? 'B' : score >= 60 ? 'C' : 'D';
+
+  // Counterfactual +impactPts per active finding
+  const impactById = new Map();
+  for (const [codeKey, { ordered }] of groupPenaltyCache.entries()) {
+    for (let idx = 0; idx < ordered.length; idx++) {
+      const target = ordered[idx];
+      const spec = resolveFindingSpec(target);
+      const pSpec = PILLAR_SPECS[spec.pillar];
+      // Recompute penalty for this code group without target (same pillar for all items of a code)
+      const remaining = ordered.filter((_, j) => j !== idx);
+      const oldGroupPen = groupPenaltyCache.get(codeKey).groupPen;
+      const newGroupPen = computeGroupPenalty(remaining);
+      const newPillarPen = Math.max(0, penalties[spec.pillar] - oldGroupPen + newGroupPen);
+      const newPillarScore = pSpec.max * Math.exp(-newPillarPen / pSpec.scale);
+      const delta = newPillarScore - pillarExact[spec.pillar];
+      const impactPts = Math.max(0.1, Number(delta.toFixed(1)));
+      impactById.set(target.id || `${codeKey}#${idx}`, impactPts);
+    }
+  }
+
+  return {
+    score,
+    scoreExact: Number(scoreExact.toFixed(2)),
+    grade,
+    baselineTokens: Math.max(0, Math.round(Number(baselineTokens) || 0)),
+    baselinePenalty: Number(basePenalty.toFixed(2)),
+    pillars,
+    impactById,
+  };
+}
+
 function buildRemediation(finding, { isPluginManaged }) {
   const fileRef = finding.file || finding.target || '目标文件';
   const pluginNote = isPluginManaged
@@ -369,6 +638,18 @@ function buildRemediation(finding, { isPluginManaged }) {
   }
 
   switch (finding.code) {
+    case 'RULE_OVERSIZED':
+      return {
+        strategy: 'agent',
+        summary: '拆分或精简超长常驻规则文件至 3000 tokens 以内，将按需指南迁移至 Skill。',
+        prompt: [
+          `请帮我瘦身以下超长常驻规则文件，降低每轮系统提示词常驻 Token 占用：`,
+          `- 目标：${finding.target}`,
+          `- 文件：${fileRef}`,
+          `- 现状：${finding.message}`,
+          `要求：通读该规则文件，保留必须每轮生效的核心硬约束（控制在 2500 tokens 内），将低频流程与参考手册拆分为按需加载的 Skill 或参考文档。${pluginNote}`,
+        ].join('\n'),
+      };
     case 'SKILL_LONG_DESC':
       return {
         strategy: 'agent',
@@ -485,11 +766,13 @@ function buildRemediation(finding, { isPluginManaged }) {
 }
 
 /**
- * Run all three offline linters (#8 MCP, #9 Skill, #10 Secret Audit) + Hook hygiene checks.
+ * Run all offline linters (#8 MCP, #9 Skill, Rule size, #10 Secret Audit, Hook hygiene)
+ * and compute 4-pillar continuous health score + counterfactual `+impactPts`.
  */
 export function runGovernanceLint(ecosystem, options = {}) {
   const mcpFindings = lintMcpServers(ecosystem);
   const skillFindings = lintSkills(ecosystem);
+  const ruleFindings = lintRules(ecosystem);
   const secretAudit = auditSecrets(ecosystem, options);
 
   const hookFindings = [];
@@ -504,6 +787,7 @@ export function runGovernanceLint(ecosystem, options = {}) {
         message: `检测到 PreToolUse 钩子，每次工具执行前都会触发，请确认其耗时与稳定性。`,
         file: h.displayPath,
         absFile: h.filePath,
+        pluginId: h.pluginId || null,
       });
     }
     if (h.timeout && h.timeout > 15) {
@@ -515,6 +799,7 @@ export function runGovernanceLint(ecosystem, options = {}) {
         message: `钩子超时设置为 ${h.timeout}s，若脚本阻塞可能明显拖慢会话响应。`,
         file: h.displayPath,
         absFile: h.filePath,
+        pluginId: h.pluginId || null,
       });
     }
   }
@@ -531,6 +816,7 @@ export function runGovernanceLint(ecosystem, options = {}) {
       absFile: c.absFile || null,
     })),
     ...mcpFindings,
+    ...ruleFindings,
     ...skillFindings,
     ...hookFindings,
   ];
@@ -540,29 +826,55 @@ export function runGovernanceLint(ecosystem, options = {}) {
 
   const enriched = rawFindings.map((f) => {
     const id = makeFindingId(f);
-    const isPluginManaged = isUnderInstalledPlugins(f.absFile, options);
+    const isPluginManaged = Boolean(f.pluginId) || isUnderInstalledPlugins(f.absFile, options);
     const remediation = buildRemediation(f, { isPluginManaged });
+    const spec = resolveFindingSpec(f);
     return {
       ...f,
       id,
+      pillar: spec.pillar,
       isPluginManaged,
       ignored: ignoredSet.has(id),
       remediation,
     };
   });
 
-  const activeFindings = enriched.filter((f) => !f.ignored);
-  const ignoredFindings = enriched.filter((f) => f.ignored);
+  const baselineTokens = Number(ecosystem?.summary?.estimatedBaselineTokens) || 0;
+  const scoring = computeGovernanceScore(enriched, baselineTokens);
+
+  const activeFindings = enriched
+    .filter((f) => !f.ignored)
+    .map((f) => ({
+      ...f,
+      impactPts: scoring.impactById.get(f.id) ?? 0.1,
+    }))
+    .sort((a, b) => {
+      const rankDiff = (SEVERITY_RANK[a.severity] ?? 9) - (SEVERITY_RANK[b.severity] ?? 9);
+      if (rankDiff !== 0) return rankDiff;
+      const impDiff = (b.impactPts || 0) - (a.impactPts || 0);
+      if (impDiff !== 0) return impDiff;
+      return String(a.id).localeCompare(String(b.id));
+    });
+
+  const ignoredFindings = enriched
+    .filter((f) => f.ignored)
+    .map((f) => ({
+      ...f,
+      impactPts: 0,
+    }));
 
   const errors = activeFindings.filter((f) => f.severity === 'error').length;
   const warnings = activeFindings.filter((f) => f.severity === 'warn').length;
   const infos = activeFindings.filter((f) => f.severity === 'info').length;
   const activeSecretHits = activeFindings.filter((f) => f.category === 'secret').length;
-  const score = Math.max(0, 100 - errors * 20 - warnings * 8 - infos * 2);
 
   return {
     checkedAt: new Date().toISOString(),
-    score,
+    score: scoring.score,
+    scoreExact: scoring.scoreExact,
+    grade: scoring.grade,
+    baselineTokens: scoring.baselineTokens,
+    pillars: scoring.pillars,
     counts: {
       total: activeFindings.length,
       ignored: ignoredFindings.length,
