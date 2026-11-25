@@ -3,12 +3,211 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { spawn } from 'node:child_process';
-import { getDataDir } from './paths.mjs';
+import { spawn, execFileSync } from 'node:child_process';
+import { getDataDir, getDataPaths } from './paths.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const WIN_HOST_SCRIPT = path.join(__dirname, 'win-floating-host.ps1');
+const HOST_ABI_VERSION = 'v1.6.0-native-host-1';
+const MIN_COMPILED_EXE_BYTES = 4096;
+const HOST_EXE_PREFIX = 'floating-host-';
+
+let _hostSourceHashCache = null;
+
+function isCompiledHostDisabled(env = process.env) {
+  const val = String(env?.CONTEXT_CACHE_NO_COMPILED_HOST || '').trim().toLowerCase();
+  return val === '1' || val === 'true' || val === 'yes';
+}
+
+/**
+ * Extract the embedded C# source block from win-floating-host.ps1.
+ */
+export function extractHostCSharpSource(scriptPath = WIN_HOST_SCRIPT) {
+  const raw = fs.readFileSync(scriptPath, 'utf8');
+  const match = raw.match(/\$csharp\s*=\s*@"\r?\n([\s\S]*?)\r?\n"@/);
+  return match ? match[1] : null;
+}
+
+function getHostSourceSignature(scriptPath = WIN_HOST_SCRIPT) {
+  const st = fs.statSync(scriptPath);
+  if (
+    _hostSourceHashCache &&
+    _hostSourceHashCache.scriptPath === scriptPath &&
+    _hostSourceHashCache.mtimeMs === st.mtimeMs &&
+    _hostSourceHashCache.size === st.size
+  ) {
+    return _hostSourceHashCache;
+  }
+  const csharpSource = extractHostCSharpSource(scriptPath);
+  if (!csharpSource) return null;
+  const hash12 = crypto
+    .createHash('sha256')
+    .update(csharpSource)
+    .update('\n')
+    .update(HOST_ABI_VERSION)
+    .digest('hex')
+    .slice(0, 12);
+  _hostSourceHashCache = {
+    scriptPath,
+    mtimeMs: st.mtimeMs,
+    size: st.size,
+    hash12,
+    csharpSource,
+  };
+  return _hostSourceHashCache;
+}
+
+/**
+ * Explicitly locate the built-in .NET Framework 4 csc.exe compiler on Windows (64-bit first).
+ * Avoids PowerShell 7's GetRuntimeDirectory() trap where csc.exe does not exist.
+ */
+export function findWindowsCscCompiler(env = process.env) {
+  const winDir = env?.WINDIR || env?.SystemRoot || 'C:\\Windows';
+  const candidates = [
+    path.join(winDir, 'Microsoft.NET', 'Framework64', 'v4.0.30319', 'csc.exe'),
+    path.join(winDir, 'Microsoft.NET', 'Framework', 'v4.0.30319', 'csc.exe'),
+  ];
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  return null;
+}
+
+function cleanupStaleHostExes(cacheDir, keepFileName) {
+  try {
+    const entries = fs.readdirSync(cacheDir);
+    for (const name of entries) {
+      if (name === keepFileName) continue;
+      if (name.startsWith(HOST_EXE_PREFIX) && name.toLowerCase().endsWith('.exe')) {
+        try {
+          fs.unlinkSync(path.join(cacheDir, name));
+        } catch {
+          // Ignore if an older host process is still running and locks its binary
+        }
+      }
+    }
+  } catch {
+    // Ignore unreadable cache directory
+  }
+}
+
+/**
+ * Compile and cache the Windows native WebView2 floating host C# source into
+ * `<dataDir>/runtime/host-bin/floating-host-<hash12>.exe`.
+ *
+ * - Fast path: returns cached `.exe` path in <1ms if already compiled (>4096 bytes)
+ *   and cleans up stale hash `.exe` files.
+ * - First-run compile: uses `%WINDIR%\Microsoft.NET\Framework64\v4.0.30319\csc.exe`
+ *   with `/target:exe /optimize+` (preserving stdout `READY:` / `CLOSED` handshake
+ *   while `windowsHide: true` + `HideHostConsole()` prevents any console window flash).
+ * - Fail-Open: returns `null` when non-Windows, disabled via `CONTEXT_CACHE_NO_COMPILED_HOST=1`,
+ *   missing compiler, or any compile/policy error, allowing seamless fallback to `.ps1`.
+ */
+export function ensureCompiledWinHostExe(options = {}) {
+  if (process.platform !== 'win32') return null;
+  const env = options.env || process.env;
+  if (isCompiledHostDisabled(env)) return null;
+
+  const scriptPath = options.hostScriptPath || WIN_HOST_SCRIPT;
+  let sig;
+  try {
+    sig = getHostSourceSignature(scriptPath);
+  } catch {
+    return null;
+  }
+  if (!sig || !sig.hash12 || !sig.csharpSource) return null;
+
+  const { hostExeCacheDir } = getDataPaths({ dataDir: options.dataDir || undefined });
+  const targetName = `${HOST_EXE_PREFIX}${sig.hash12}.exe`;
+  const targetExe = path.join(hostExeCacheDir, targetName);
+
+  // Cache hit fast path
+  try {
+    const st = fs.statSync(targetExe);
+    if (st.isFile() && st.size > MIN_COMPILED_EXE_BYTES) {
+      cleanupStaleHostExes(hostExeCacheDir, targetName);
+      return targetExe;
+    }
+  } catch {
+    // Cache miss; proceed to compile
+  }
+
+  const cscExe = options.cscPath ? (fs.existsSync(options.cscPath) ? options.cscPath : null) : findWindowsCscCompiler(env);
+  if (!cscExe) return null;
+
+  let tmpCs = null;
+  let tmpExe = null;
+  try {
+    fs.mkdirSync(hostExeCacheDir, { recursive: true });
+    const suffix = `${process.pid}.${crypto.randomBytes(4).toString('hex')}`;
+    tmpCs = path.join(hostExeCacheDir, `.${HOST_EXE_PREFIX}${sig.hash12}.${suffix}.cs`);
+    tmpExe = path.join(hostExeCacheDir, `.${HOST_EXE_PREFIX}${sig.hash12}.${suffix}.exe`);
+
+    // Prefix UTF-8 BOM so .NET Framework csc.exe decodes non-ASCII UI labels accurately across all system locales
+    fs.writeFileSync(tmpCs, '\uFEFF' + sig.csharpSource, 'utf8');
+
+    execFileSync(
+      cscExe,
+      [
+        '/target:exe',
+        '/optimize+',
+        '/nologo',
+        '/utf8output',
+        `/out:${tmpExe}`,
+        '/r:System.Windows.Forms.dll',
+        '/r:System.Drawing.dll',
+        '/r:System.Core.dll',
+        tmpCs,
+      ],
+      {
+        windowsHide: true,
+        timeout: 15_000,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      }
+    );
+
+    const outStat = fs.statSync(tmpExe);
+    if (!outStat.isFile() || outStat.size <= MIN_COMPILED_EXE_BYTES) {
+      return null;
+    }
+
+    try {
+      fs.renameSync(tmpExe, targetExe);
+      tmpExe = null;
+    } catch {
+      // Another process may have raced and produced the identical hash binary
+      try {
+        const existing = fs.statSync(targetExe);
+        if (!existing.isFile() || existing.size <= MIN_COMPILED_EXE_BYTES) {
+          fs.copyFileSync(tmpExe, targetExe);
+        }
+      } catch {
+        fs.copyFileSync(tmpExe, targetExe);
+      }
+    }
+
+    cleanupStaleHostExes(hostExeCacheDir, targetName);
+    return targetExe;
+  } catch {
+    return null;
+  } finally {
+    if (tmpCs) {
+      try {
+        if (fs.existsSync(tmpCs)) fs.unlinkSync(tmpCs);
+      } catch {
+        // ignore temp cleanup failure
+      }
+    }
+    if (tmpExe) {
+      try {
+        if (fs.existsSync(tmpExe)) fs.unlinkSync(tmpExe);
+      } catch {
+        // ignore temp cleanup failure
+      }
+    }
+  }
+}
 
 const CLIENT_TTL_MS = 18_000;
 const DEFAULT_STOP_GRACE_MS = 400;
@@ -602,6 +801,82 @@ exit 2
     return true;
   }
 
+  async _spawnAndHandshakeWinHost(command, args) {
+    const child = spawn(command, args, {
+      detached: false,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: true,
+    });
+    this.hostPid = child.pid || null;
+    this.hostMode = 'webview2';
+    this.hostStartedAt = Date.now();
+
+    let errBuf = '';
+    const handshakeOk = await new Promise((resolve) => {
+      let settled = false;
+      const finish = (ok) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(ok);
+      };
+      const timer = setTimeout(() => finish(this._isHostProcessAlive()), 2500);
+      timer.unref?.();
+
+      child.stdout?.setEncoding('utf8');
+      child.stdout?.on('data', (chunk) => {
+        const text = String(chunk);
+        if (text.includes('READY:')) finish(true);
+        if (text.includes('CLOSED') && settled && this.hostPid === child.pid) {
+          this._handleHostProcessExited();
+        }
+      });
+      child.stderr?.setEncoding('utf8');
+      child.stderr?.on('data', (chunk) => {
+        if (errBuf.length < 2048) errBuf += String(chunk);
+      });
+      child.once('error', (err) => {
+        errBuf += err?.message || 'spawn error';
+        finish(false);
+      });
+      child.once('exit', (code) => {
+        const wasCurrentHost = this.hostPid === child.pid;
+        if (!settled) {
+          if (wasCurrentHost) {
+            this.hostPid = null;
+            this.hostMode = 'none';
+            this.hostStartedAt = 0;
+            this.activeClients.clear();
+          }
+          finish(code === 0 && this.hasActiveClient());
+          return;
+        }
+        if (wasCurrentHost) {
+          this._handleHostProcessExited();
+        }
+      });
+    });
+
+    child.stdout?.resume();
+    child.stderr?.resume();
+    child.stdout?.unref?.();
+    child.stderr?.unref?.();
+    child.unref();
+
+    const ok = Boolean(handshakeOk && (this.hostPid === child.pid || this.hasActiveClient()));
+    if (!ok && this.hostPid === child.pid) {
+      try {
+        process.kill(child.pid);
+      } catch {
+        // already exited
+      }
+      this.hostPid = null;
+      this.hostMode = 'none';
+      this.hostStartedAt = 0;
+    }
+    return { ok, errBuf: errBuf.trim() };
+  }
+
   async _launchWindowInternal(sizeOrOpts = '460x720', positionArg = null) {
     const opts =
       sizeOrOpts && typeof sizeOrOpts === 'object'
@@ -654,115 +929,87 @@ exit 2
     let launched = false;
     this.lastHostError = null;
 
-    // Preferred on Windows: native frameless WebView2 window (no browser chrome, TopMost fixed)
+    // Preferred on Windows: native frameless WebView2 window (compiled-exe fast path -> PowerShell fail-open -> browser --app)
     if (this._hasWindowsWebView2()) {
       const nativeUrl = `${status.url}&native=1&topmost=${alwaysOnTop ? '1' : '0'}&theme=${encodeURIComponent(theme)}`;
       const posX =
         opts.position && Number.isFinite(Number(opts.position.x))
-          ? Math.max(-2000, Math.min(4000, Math.round(Number(opts.position.x))))
+          ? Math.max(-4000, Math.min(8000, Math.round(Number(opts.position.x))))
           : -99999;
       const posY =
         opts.position && Number.isFinite(Number(opts.position.y))
-          ? Math.max(-1000, Math.min(3000, Math.round(Number(opts.position.y))))
+          ? Math.max(-2000, Math.min(4000, Math.round(Number(opts.position.y))))
           : -99999;
       const userDataDir = path.join(getDataDir({ dataDir: this.dataDir || undefined }), 'runtime', 'webview2');
+      const hostCliArgs = [
+        '-Url',
+        nativeUrl,
+        '-Width',
+        String(width),
+        '-Height',
+        String(height),
+        '-PosX',
+        String(posX),
+        '-PosY',
+        String(posY),
+        '-TopMost',
+        alwaysOnTop ? '1' : '0',
+        '-Theme',
+        theme,
+        '-UserDataDir',
+        userDataDir,
+      ];
+      if (opts.windowMode === 'minibar' || opts.windowMode === 'orb' || opts.windowMode === 'console') {
+        hostCliArgs.push('-Mode', opts.windowMode);
+      }
+      if (
+        opts.orbPosition &&
+        Number.isFinite(Number(opts.orbPosition.x)) &&
+        Number.isFinite(Number(opts.orbPosition.y))
+      ) {
+        hostCliArgs.push(
+          '-OrbX',
+          String(Math.max(-4000, Math.min(8000, Math.round(Number(opts.orbPosition.x))))),
+          '-OrbY',
+          String(Math.max(-2000, Math.min(4000, Math.round(Number(opts.orbPosition.y)))))
+        );
+      }
 
-      const child = spawn(
-        'powershell.exe',
-        [
+      const hostErrors = [];
+
+      // Tier 1: Locally compiled cached .exe (~140ms cold start, zero PowerShell startup overhead)
+      const compiledExe = ensureCompiledWinHostExe({ dataDir: this.dataDir || undefined });
+      if (compiledExe) {
+        const res = await this._spawnAndHandshakeWinHost(compiledExe, hostCliArgs);
+        if (res.ok) {
+          launched = true;
+        } else {
+          hostErrors.push(res.errBuf || 'Compiled WebView2 host exited before ready');
+        }
+      }
+
+      // Tier 2: Fail-Open fallback to PowerShell Add-Type host script
+      if (!launched) {
+        const psArgs = [
           '-NoProfile',
           '-STA',
           '-ExecutionPolicy',
           'Bypass',
           '-File',
           WIN_HOST_SCRIPT,
-          '-Url',
-          nativeUrl,
-          '-Width',
-          String(width),
-          '-Height',
-          String(height),
-          '-PosX',
-          String(posX),
-          '-PosY',
-          String(posY),
-          '-TopMost',
-          alwaysOnTop ? '1' : '0',
-          '-Theme',
-          theme,
-          '-UserDataDir',
-          userDataDir,
-        ],
-        {
-          detached: false,
-          stdio: ['ignore', 'pipe', 'pipe'],
-          windowsHide: true,
+          ...hostCliArgs,
+        ];
+        const res = await this._spawnAndHandshakeWinHost('powershell.exe', psArgs);
+        if (res.ok) {
+          launched = true;
+        } else {
+          hostErrors.push(res.errBuf || 'PowerShell WebView2 host exited before ready');
         }
-      );
-      this.hostPid = child.pid || null;
-      this.hostMode = 'webview2';
-      this.hostStartedAt = Date.now();
+      }
 
-      let errBuf = '';
-      const handshakeOk = await new Promise((resolve) => {
-        let settled = false;
-        const finish = (ok) => {
-          if (settled) return;
-          settled = true;
-          clearTimeout(timer);
-          resolve(ok);
-        };
-        const timer = setTimeout(() => finish(this._isHostProcessAlive()), 2500);
-        timer.unref?.();
-
-        child.stdout?.setEncoding('utf8');
-        child.stdout?.on('data', (chunk) => {
-          const text = String(chunk);
-          if (text.includes('READY:')) finish(true);
-          if (text.includes('CLOSED') && settled && this.hostPid === child.pid) {
-            this._handleHostProcessExited();
-          }
-        });
-        child.stderr?.setEncoding('utf8');
-        child.stderr?.on('data', (chunk) => {
-          if (errBuf.length < 2048) errBuf += String(chunk);
-        });
-        child.once('error', (err) => {
-          errBuf += err?.message || 'spawn error';
-          finish(false);
-        });
-        child.once('exit', (code) => {
-          const wasCurrentHost = this.hostPid === child.pid;
-          if (!settled) {
-            if (wasCurrentHost) {
-              this.hostPid = null;
-              this.hostMode = 'none';
-              this.hostStartedAt = 0;
-              this.activeClients.clear();
-            }
-            finish(code === 0 && this.hasActiveClient());
-            return;
-          }
-          if (wasCurrentHost) {
-            this._handleHostProcessExited();
-          }
-        });
-      });
-
-      child.stdout?.resume();
-      child.stderr?.resume();
-      child.stdout?.unref?.();
-      child.stderr?.unref?.();
-      child.unref();
-
-      if (handshakeOk && (this.hostPid === child.pid || this.hasActiveClient())) {
-        launched = true;
-      } else {
-        this.lastHostError = errBuf.trim() || 'WebView2 host exited before ready';
-        if (this.hostPid === child.pid) {
-          this.hostPid = null;
-          this.hostMode = 'none';
-        }
+      // Tier 3: Browser --app fallback
+      if (!launched) {
+        this.lastHostError = hostErrors.filter(Boolean).join(' | ') || 'WebView2 host exited before ready';
         launched = this._launchBrowserFallback(status, { width, height, theme, position: opts.position });
       }
     } else {
