@@ -10,6 +10,7 @@ import { getTelemetryReport, evaluateAlerts } from './telemetry.mjs';
 import { resolveTargetSession } from './session-tracker.mjs';
 
 const STATIC_SCAN_TTL_MS = 15_000;
+const MCP_FAST_TTL_MS = 5_000;
 const MAX_STATIC_CACHE_ENTRIES = 32;
 const mcpScanCache = new Map();
 const staticRulesCache = new Map();
@@ -97,7 +98,8 @@ function getCachedSkillFileMetrics(skillFile) {
 /**
  * Scan documented MCP schema cache directories (<appDataDir>/mcp/<server>/*.json)
  * plus configured MCP servers for eager vs deferred breakdown.
- * Cached for 15s keyed by directory/config mtimes.
+ * Short-circuits for 5s (fast memory TTL, 0 fs syscalls) unless options.force is true,
+ * and caches for 15s keyed by directory/config mtimes.
  */
 function scanMcpTools(options = {}) {
   const appDir = getAppDataDir(options);
@@ -106,6 +108,12 @@ function scanMcpTools(options = {}) {
   const pluginsDir = path.join(configRoot, 'plugins');
 
   const cacheKey = `${path.resolve(appDir).toLowerCase()}|${path.resolve(configRoot).toLowerCase()}`;
+  const now = Date.now();
+  const cached = mcpScanCache.get(cacheKey);
+  if (!options.force && cached && now < cached.fastExpiresAt) {
+    return cached.value;
+  }
+
   const mcpSubdirs = listSubdirsSafe(mcpDir);
   const pluginSubdirs = listSubdirsSafe(pluginsDir);
   const fpParts = [
@@ -115,9 +123,8 @@ function scanMcpTools(options = {}) {
     ...pluginSubdirs.map((d) => `${d}:${safeStatSig(path.join(pluginsDir, d, 'mcp_config.json'))}`),
   ];
   const fingerprint = fpParts.join('|');
-  const now = Date.now();
-  const cached = mcpScanCache.get(cacheKey);
-  if (cached && now < cached.expiresAt && cached.fingerprint === fingerprint) {
+  if (!options.force && cached && now < cached.expiresAt && cached.fingerprint === fingerprint) {
+    cached.fastExpiresAt = now + MCP_FAST_TTL_MS;
     return cached.value;
   }
 
@@ -251,7 +258,12 @@ function scanMcpTools(options = {}) {
     deferredTokens,
     deferredCount,
   };
-  lruCacheSet(mcpScanCache, cacheKey, { fingerprint, value: result, expiresAt: now + STATIC_SCAN_TTL_MS });
+  lruCacheSet(mcpScanCache, cacheKey, {
+    fingerprint,
+    value: result,
+    fastExpiresAt: now + MCP_FAST_TTL_MS,
+    expiresAt: now + STATIC_SCAN_TTL_MS,
+  });
   return result;
 }
 

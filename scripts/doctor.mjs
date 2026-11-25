@@ -4,10 +4,11 @@ import { runDoctor, repairLocalState } from '../src/core/doctor.mjs';
 import { deployPlugin } from './deploy.mjs';
 
 function parseArgs(argv) {
-  const flags = { repair: false, json: false };
+  const flags = { repair: false, resyncTelemetry: false, json: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--repair') flags.repair = true;
+    else if (a === '--resync-telemetry') flags.resyncTelemetry = true;
     else if (a === '--json') flags.json = true;
     else if (a === '--data-dir' && argv[i + 1]) flags.dataDir = argv[++i];
     else if (a.startsWith('--data-dir=')) flags.dataDir = a.slice('--data-dir='.length);
@@ -21,6 +22,7 @@ export async function runDoctorCli(flags = {}) {
   const opts = {};
   if (flags.dataDir) opts.dataDir = flags.dataDir;
   if (flags.pluginDir) opts.pluginDir = flags.pluginDir;
+  if (flags.resyncTelemetry) opts.resyncTelemetry = true;
 
   let deployResult = null;
   let repairResult = null;
@@ -30,7 +32,9 @@ export async function runDoctorCli(flags = {}) {
     if (!pre.deployment.exists || pre.deployment.missingFiles.length > 0 || !pre.deployment.zeroNodeModules) {
       deployResult = await deployPlugin({ targetDir: flags.pluginDir });
     }
-    repairResult = repairLocalState(opts);
+    repairResult = await repairLocalState(opts);
+  } else if (flags.resyncTelemetry) {
+    repairResult = await repairLocalState(opts);
   }
 
   const report = repairResult ? repairResult.report : runDoctor(opts);
@@ -49,10 +53,13 @@ if (isMain) {
     console.log(`  Data Dir:   ${r.dataDir}`);
     console.log(`  Plugin Dir: ${r.pluginDir}`);
     console.log(`  Drift:      ${r.drift.count} | Circuit: ${r.circuit.state} (${r.circuit.failures}/${r.circuit.threshold})`);
-    console.log(`  Index:      ${r.index.ok ? 'SYNCED' : 'OUT_OF_SYNC'} (memories ${r.index.dbMemories}/${r.index.truthMemories}, calls ${r.index.dbCalls}/${r.index.truthCalls})`);
+    console.log(`  Index:      ${r.index.ok ? 'SYNCED' : 'OUT_OF_SYNC'} (memories ${r.index.dbMemories}/${r.index.truthMemories}, calls ${r.index.dbCalls}/${r.index.truthUniqueCalls} (${r.index.truthRawCallLines} raw))`);
     console.log(`  Deployment: zeroNodeModules=${r.deployment.zeroNodeModules}, uiSelfContained=${r.deployment.uiSelfContained}, uiBytes=${r.deployment.uiSizeBytes}`);
     if (out.deployResult) {
       console.log(`  Repaired deployment -> ${out.deployResult.targetDir}`);
+    }
+    if (out.repairResult?.telemetryResync) {
+      console.log(`  Resynced historical telemetry: ${JSON.stringify(out.repairResult.telemetryResync)}`);
     }
     if (out.repairResult) {
       console.log(`  Rebuilt SQLite index in ${out.repairResult.rebuild.elapsedMs}ms`);

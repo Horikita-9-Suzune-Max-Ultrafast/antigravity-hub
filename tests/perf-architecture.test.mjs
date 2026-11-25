@@ -6,7 +6,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
-import { PopoutServerManager } from '../src/core/popout-server.mjs';
+import { PopoutServerManager, timingSafeTokenEqual } from '../src/core/popout-server.mjs';
 import { getGitContext, clearGitContextCache } from '../src/core/git-context.mjs';
 import { listConversations, clearTranscriptCache } from '../src/core/transcript-parser.mjs';
 import {
@@ -14,7 +14,9 @@ import {
   getTelemetryReport,
   clearTelemetryCache,
 } from '../src/core/telemetry.mjs';
-import { withIndexDb, closeIndexDb } from '../src/core/index-db.mjs';
+import { withIndexDb, closeIndexDb, rebuildIndex } from '../src/core/index-db.mjs';
+import { runDoctor, repairLocalState } from '../src/core/doctor.mjs';
+import { inspectContext, clearContextInspectorCache } from '../src/core/context-inspector.mjs';
 import {
   buildThumbDataUri,
   getAppearanceStatus,
@@ -574,6 +576,207 @@ test('payload-templates.mjs: time-guarded rotation, NodeFilter.FILTER_REJECT, pr
       'when filter is omitted, will-change should only be opacity'
     );
   } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('PopoutServerManager constant-time token verification rejects mismatched/malformed tokens safely', async () => {
+  // Static guarantee: popout-server.mjs uses crypto.timingSafeEqual
+  const popoutSrc = fs.readFileSync(path.join(ROOT_DIR, 'src', 'core', 'popout-server.mjs'), 'utf8');
+  assert.ok(popoutSrc.includes('timingSafeEqual'), 'popout-server.mjs must use crypto.timingSafeEqual');
+
+  // Unit checks for helper edge cases (length/type mismatches must never throw)
+  const expected = 'a'.repeat(48);
+  assert.equal(timingSafeTokenEqual(expected, expected), true);
+  assert.equal(timingSafeTokenEqual('b'.repeat(48), expected), false);
+  assert.equal(timingSafeTokenEqual('a'.repeat(10), expected), false);
+  assert.equal(timingSafeTokenEqual('a'.repeat(64), expected), false);
+  assert.equal(timingSafeTokenEqual('', expected), false);
+  assert.equal(timingSafeTokenEqual(null, expected), false);
+  assert.equal(timingSafeTokenEqual(undefined, expected), false);
+  assert.equal(timingSafeTokenEqual(['a'.repeat(48)], expected), false);
+  assert.equal(timingSafeTokenEqual('🚀'.repeat(24), expected), false);
+
+  const mgr = new PopoutServerManager({
+    getHtml: () => '<!doctype html><html><body>ok</body></html>',
+    handleAppTool: async () => ({ ok: true }),
+    stopGraceMs: 120,
+  });
+
+  try {
+    const started = await mgr.start();
+    const token = mgr.token;
+    const baseUrl = `http://127.0.0.1:${started.port}`;
+
+    // Missing token -> 403
+    assert.equal((await fetch(`${baseUrl}/`)).status, 403);
+
+    // Shorter token (length mismatch) -> 403 (must not throw 500 RangeError)
+    assert.equal((await fetch(`${baseUrl}/?token=${token.slice(0, 12)}`)).status, 403);
+
+    // Longer token (length mismatch) -> 403
+    assert.equal((await fetch(`${baseUrl}/?token=${token}deadbeef`)).status, 403);
+
+    // Same-length wrong token (flipped last hex char) -> 403
+    const flipped = token.slice(0, -1) + (token.endsWith('0') ? '1' : '0');
+    assert.equal((await fetch(`${baseUrl}/?token=${flipped}`)).status, 403);
+
+    // Wrong x-cc-token header -> 403
+    assert.equal((await fetch(`${baseUrl}/`, { headers: { 'x-cc-token': flipped } })).status, 403);
+
+    // Valid token via x-cc-token header -> 200
+    assert.equal((await fetch(`${baseUrl}/`, { headers: { 'x-cc-token': token } })).status, 200);
+
+    // Valid token via query param -> 200
+    assert.equal((await fetch(`${baseUrl}/?token=${token}`)).status, 200);
+  } finally {
+    await mgr.stop();
+  }
+});
+
+test('Doctor reports deduplicated truthUniqueCalls matching dbCalls alongside truthRawCallLines', async () => {
+  const root = makeTmpDir('cc-doctor-dedup-');
+  const dataDir = path.join(root, 'data');
+  const pluginDir = path.join(root, 'plugin');
+  fs.mkdirSync(dataDir, { recursive: true });
+
+  try {
+    const { callsLogFile } = getDataPaths({ dataDir });
+    fs.mkdirSync(path.dirname(callsLogFile), { recursive: true });
+
+    // Append 3 raw JSONL lines representing only 2 unique callUids (1 revised/upgraded callUid)
+    const call1Initial = {
+      callUid: 'conv-dedup-1:1',
+      conversationId: 'conv-dedup-1',
+      rootConversationId: 'conv-dedup-1',
+      agentType: 'main',
+      agentTag: '主',
+      stepIndex: 1,
+      model: 'gemini-4-neon-high',
+      createdAt: '2026-11-25T00:00:01Z',
+      tsMs: 1795478401000,
+      durationMs: 2500,
+      timingSource: 'estimated',
+      inputTokens: 1000,
+      cacheReadTokens: 4000,
+      outputTokens: 200,
+      contextTokens: 5000,
+      effectiveTps: 80,
+      cacheHitRate: 80,
+      estimatedCostUsd: 0.002,
+      quotaGroup: 'gemini',
+    };
+    const call1Revised = {
+      ...call1Initial,
+      durationMs: 2000,
+      timingSource: 'hook_ms',
+      effectiveTps: 100,
+    };
+    const call2 = {
+      ...call1Initial,
+      callUid: 'conv-dedup-1:2',
+      stepIndex: 2,
+      createdAt: '2026-11-25T00:00:05Z',
+      tsMs: 1795478405000,
+      timingSource: 'hook_ms',
+    };
+
+    fs.writeFileSync(
+      callsLogFile,
+      `${JSON.stringify(call1Initial)}\n${JSON.stringify(call1Revised)}\n${JSON.stringify(call2)}\n`,
+      'utf8'
+    );
+
+    rebuildIndex({ dataDir });
+    const report = runDoctor({ dataDir, pluginDir });
+    assert.equal(report.index.dbCalls, 2);
+    assert.equal(report.index.truthUniqueCalls, 2);
+    assert.equal(report.index.truthRawCallLines, 3);
+    assert.equal(report.index.truthCalls, 3, 'truthCalls preserved for backward compatibility');
+    assert.equal(report.index.dbCalls, report.index.truthUniqueCalls);
+
+    // repairLocalState returns async result with matching deduplicated doctor report
+    const repaired = await repairLocalState({ dataDir, pluginDir });
+    assert.equal(repaired.repaired, true);
+    assert.equal(repaired.report.index.dbCalls, 2);
+    assert.equal(repaired.report.index.truthUniqueCalls, 2);
+    assert.equal(repaired.report.index.truthRawCallLines, 3);
+
+    // repairLocalState({ resyncTelemetry: true }) reuses telemetryResync.rebuild without double rebuild
+    const resynced = await repairLocalState({ dataDir, pluginDir, appDataDir: path.join(root, 'empty-app'), resyncTelemetry: true });
+    assert.equal(resynced.repaired, true);
+    assert.ok(resynced.telemetryResync, 'Expected telemetryResync payload when resyncTelemetry: true');
+    assert.strictEqual(resynced.rebuild, resynced.telemetryResync.rebuild, 'repairLocalState must reuse telemetryResync.rebuild');
+    assert.equal(resynced.report.index.dbCalls, 2);
+    assert.equal(resynced.report.index.truthUniqueCalls, 2);
+    assert.equal(resynced.report.index.truthRawCallLines, 2, 'Compacted calls.jsonl should deduplicate raw call lines');
+
+    // Static guarantee: index-db.mjs performs DELETE inside BEGIN IMMEDIATE (no empty committed window)
+    const indexDbSrc = fs.readFileSync(path.join(ROOT_DIR, 'src', 'core', 'index-db.mjs'), 'utf8');
+    const beginIdx = indexDbSrc.indexOf("db.exec('BEGIN IMMEDIATE')");
+    const deleteIdx = indexDbSrc.indexOf("db.exec('DELETE FROM memories; DELETE FROM memories_fts; DELETE FROM calls;')");
+    assert.ok(beginIdx > 0 && deleteIdx > beginIdx, 'rebuildIndex must run DELETE FROM inside BEGIN IMMEDIATE transaction');
+  } finally {
+    closeIndexDb();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('UI typography & viewport fixed clamping guarantees (zero text-[11px] in modules, fixed clamping in app/styles)', () => {
+  const modulesDir = path.join(ROOT_DIR, 'src', 'ui', 'modules');
+  const moduleFiles = fs.readdirSync(modulesDir).filter((f) => f.endsWith('.mjs'));
+  assert.ok(moduleFiles.length >= 3, 'Expected UI module files in src/ui/modules');
+  for (const file of moduleFiles) {
+    const src = fs.readFileSync(path.join(modulesDir, file), 'utf8');
+    assert.equal(
+      src.includes('text-[11px]'),
+      false,
+      `src/ui/modules/${file} must not contain legacy text-[11px] classes`
+    );
+  }
+
+  const appJs = fs.readFileSync(path.join(ROOT_DIR, 'src', 'ui', 'app.mjs'), 'utf8');
+  const css = fs.readFileSync(path.join(ROOT_DIR, 'src', 'ui', 'styles.css'), 'utf8');
+
+  assert.ok(appJs.includes('positionFloatingLayer'), 'src/ui/app.mjs must define viewport positionFloatingLayer clamping');
+  assert.ok(appJs.includes('clampOpenSelectMenus'), 'src/ui/app.mjs must clamp open select menus');
+  assert.ok(appJs.includes('clampOpenKvPopovers'), 'src/ui/app.mjs must clamp open KV popovers');
+  assert.match(
+    css,
+    /\.agy-select-menu\[data-fixed="true"\]\s*\{[^}]*position\s*:\s*fixed\s*;/s,
+    'src/ui/styles.css must style .agy-select-menu[data-fixed="true"] with position: fixed'
+  );
+});
+
+test('context-inspector scanMcpTools 5s fast-TTL skips redundant fs scans unless options.force is true', () => {
+  const root = makeTmpDir('cc-mcp-fastttl-');
+  const dataDir = path.join(root, 'data');
+  const appDataDir = path.join(root, 'antigravity');
+  const configDir = path.join(root, 'config');
+  const mcpSrvDir = path.join(appDataDir, 'mcp', 'demo-srv');
+  fs.mkdirSync(mcpSrvDir, { recursive: true });
+  fs.mkdirSync(dataDir, { recursive: true });
+  fs.mkdirSync(configDir, { recursive: true });
+  fs.writeFileSync(path.join(mcpSrvDir, 'tool_a.json'), JSON.stringify({ name: 'tool_a', description: 'a' }), 'utf8');
+
+  try {
+    clearContextInspectorCache();
+    const opts = { dataDir, appDataDir, configDir, projectDir: root };
+
+    const first = inspectContext({}, opts);
+    assert.equal(first.deferred[0].toolCount, 1);
+
+    // Add a second deferred MCP tool within 5s fast-TTL window:
+    // without force, fast-TTL short-circuits before readdir/stat syscalls and returns cached count (1)
+    fs.writeFileSync(path.join(mcpSrvDir, 'tool_b.json'), JSON.stringify({ name: 'tool_b', description: 'b' }), 'utf8');
+    const fastCached = inspectContext({}, opts);
+    assert.equal(fastCached.deferred[0].toolCount, 1, 'Expected 5s fast-TTL cache hit without rescanning MCP dir');
+
+    // With force: true, bypasses fast-TTL and picks up newly added tool (2)
+    const forced = inspectContext({}, { ...opts, force: true });
+    assert.equal(forced.deferred[0].toolCount, 2, 'Expected options.force=true to bypass 5s fast-TTL');
+  } finally {
+    clearContextInspectorCache();
     fs.rmSync(root, { recursive: true, force: true });
   }
 });

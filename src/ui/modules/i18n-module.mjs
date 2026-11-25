@@ -259,6 +259,13 @@ export function createI18nModule({
     const verEl = document.getElementById('i18nAppVersion');
     if (verEl) {
       verEl.textContent = data?.appVersion ? `Antigravity v${data.appVersion}` : '版本未探测';
+      if (data?.electronVersion) {
+        verEl.title = data?.appVersion
+          ? `Antigravity v${data.appVersion} · Electron v${data.electronVersion}`
+          : `Electron v${data.electronVersion}`;
+      } else {
+        verEl.removeAttribute?.('title');
+      }
     }
 
     const titleEl = document.getElementById('i18nStatusTitle');
@@ -278,6 +285,8 @@ export function createI18nModule({
     const jobRunning =
       (data?.lastJob?.status === 'running' || data?.lastJob?.status === 'queued') && jobIsFresh;
 
+    const hasMatchingCleanBackup = Boolean(data?.hasMatchingCleanBackup);
+
     // Third-party patch remediation card
     const tpCard = document.getElementById('i18nThirdPartyPlanCard');
     const tpBadge = document.getElementById('i18nThirdPartyBadge');
@@ -292,19 +301,47 @@ export function createI18nModule({
           ? `${data.thirdPartyMeta.tool}${data.thirdPartyMeta.toolVersion ? ` v${data.thirdPartyMeta.toolVersion}` : ''}`
           : '未知第三方汉化补丁';
         if (tpBadge) tpBadge.textContent = tpName;
-        const cleanBak = (data?.backups || []).find((b) => b.valid && b.isCleanOriginal);
-        if (data?.hasCleanBackup && cleanBak) {
+        const matchingCleanBak = (data?.backups || []).find(
+          (b) => b.valid && b.isCleanOriginal && b.matchesCurrentVersion
+        );
+        const cleanBak =
+          matchingCleanBak || (data?.backups || []).find((b) => b.valid && b.isCleanOriginal);
+        if (hasMatchingCleanBackup && matchingCleanBak) {
           if (tpDesc) {
-            tpDesc.textContent = `已检测到纯净原版备份（${cleanBak.name}）。点击「隔离替换」将自动把纯净原版收归 Hub 托管、把第三方旧备份归档隔离至 ~/.context-cache/i18n/quarantine/（不硬删），再基于纯净原版重打 Hub 汉化与壁纸运行时，绝不叠加冲突。`;
+            tpDesc.textContent = `已检测到同版本纯净原版备份（${matchingCleanBak.name}）。点击「隔离替换」将自动把纯净原版收归 Hub 托管、把第三方旧备份归档隔离至 ~/.context-cache/i18n/quarantine/（不硬删），再基于纯净原版重打 Hub 汉化与壁纸运行时，绝不叠加冲突。`;
           }
-          if (tpReplaceBtn) tpReplaceBtn.disabled = st.busyPatch || jobRunning;
-          if (tpRestoreBtn) tpRestoreBtn.disabled = st.busyPatch || jobRunning;
+          if (tpReplaceBtn) {
+            tpReplaceBtn.disabled = st.busyPatch || jobRunning;
+            tpReplaceBtn.removeAttribute?.('title');
+          }
+          if (tpRestoreBtn) {
+            tpRestoreBtn.disabled = st.busyPatch || jobRunning;
+            tpRestoreBtn.removeAttribute?.('title');
+          }
+        } else if (data?.hasCleanBackup && cleanBak) {
+          if (tpDesc) {
+            tpDesc.textContent = `仅检测到旧版原版备份（${cleanBak.name}${cleanBak.appVersion ? `，v${cleanBak.appVersion}` : ''}），与当前客户端版本不匹配。为防止误覆盖降级，已锁定隔离替换与直接还原；建议先重新运行一次官方 Antigravity 安装程序恢复同版本原版，再回到此处一键应用。`;
+          }
+          if (tpReplaceBtn) {
+            tpReplaceBtn.disabled = true;
+            tpReplaceBtn.title = '已有备份版本与当前客户端版本不匹配，已锁定隔离替换以防误覆盖降级';
+          }
+          if (tpRestoreBtn) {
+            tpRestoreBtn.disabled = true;
+            tpRestoreBtn.title = '已有备份版本与当前客户端版本不匹配，已锁定还原以防误覆盖降级';
+          }
         } else {
           if (tpDesc) {
             tpDesc.textContent = '未检测到可用的纯净原版 app.asar 备份。为防止叠加损坏，已锁定直接替换；建议先重新运行一次官方 Antigravity 安装程序恢复原版文件，再回到此处一键应用。';
           }
-          if (tpReplaceBtn) tpReplaceBtn.disabled = true;
-          if (tpRestoreBtn) tpRestoreBtn.disabled = true;
+          if (tpReplaceBtn) {
+            tpReplaceBtn.disabled = true;
+            tpReplaceBtn.title = '缺少纯净原版备份，已锁定隔离替换';
+          }
+          if (tpRestoreBtn) {
+            tpRestoreBtn.disabled = true;
+            tpRestoreBtn.title = '缺少纯净原版备份，已锁定还原';
+          }
         }
       }
     }
@@ -312,14 +349,20 @@ export function createI18nModule({
     const applyBtn = document.getElementById('i18nApplyBtn');
     const restoreBtn = document.getElementById('i18nRestoreBtn');
     if (applyBtn) {
-      applyBtn.disabled = st.busyPatch || jobRunning || code === 'not_found' || (code === 'patched_by_other' && !data?.hasCleanBackup);
+      applyBtn.disabled =
+        st.busyPatch ||
+        jobRunning ||
+        code === 'not_found' ||
+        (code === 'patched_by_other' && (!data?.hasCleanBackup || !hasMatchingCleanBackup));
       applyBtn.title = jobRunning
         ? '后台补丁任务正在执行，请稍候...'
         : code === 'not_found'
           ? '未检测到 Antigravity 安装目录，请在下方手动指定路径'
           : code === 'patched_by_other' && !data?.hasCleanBackup
             ? '检测到第三方补丁且缺少纯净原版备份，为防叠加损坏已锁定'
-            : '自动备份纯净原版 app.asar 并注入热加载运行时';
+            : code === 'patched_by_other' && !hasMatchingCleanBackup
+              ? '检测到第三方补丁，但已有原版备份版本与当前客户端不匹配，已锁定替换以防误覆盖降级'
+              : '自动备份纯净原版 app.asar 并注入热加载运行时';
       applyBtn.textContent =
         code === 'patched_by_console'
           ? '重新应用汉化'
@@ -330,14 +373,27 @@ export function createI18nModule({
               : '一键应用汉化';
     }
     if (restoreBtn) {
-      restoreBtn.disabled = st.busyPatch || jobRunning || code === 'not_found' || !data?.hasCleanBackup || code === 'unpatched';
+      restoreBtn.disabled =
+        st.busyPatch ||
+        jobRunning ||
+        code === 'not_found' ||
+        code === 'unpatched' ||
+        code === 'outdated_after_update' ||
+        !data?.hasCleanBackup ||
+        !hasMatchingCleanBackup;
       restoreBtn.title = jobRunning
         ? '后台补丁任务正在执行，请稍候...'
-        : !data?.hasCleanBackup
-          ? '未检测到可用的纯净原版备份'
-          : code === 'unpatched'
-            ? '当前已为原版英文客户端，无需还原'
-            : '基于纯净原版备份无损还原 app.asar';
+        : code === 'not_found'
+          ? '未检测到 Antigravity 安装目录'
+          : code === 'outdated_after_update'
+            ? '官方更新后当前客户端已是新版原版，已锁定还原以防旧版备份误覆盖降级'
+            : code === 'unpatched'
+              ? '当前已为原版英文客户端，无需还原'
+              : !data?.hasCleanBackup
+                ? '未检测到可用的纯净原版备份'
+                : !hasMatchingCleanBackup
+                  ? '已有备份版本与当前客户端版本不匹配，已锁定还原以防误覆盖降级'
+                  : '基于同版本纯净原版备份无损还原 app.asar';
     }
 
     // Install path info
@@ -374,19 +430,27 @@ export function createI18nModule({
         backupsEl.innerHTML = backups
           .map((b) => {
             const clean = Boolean(b.isCleanOriginal);
-            const tone = clean ? 'success' : 'warning';
+            const isMismatched = Boolean(b.valid && b.matchesCurrentVersion === false);
+            const tone = clean && !isMismatched ? 'success' : 'warning';
             const badgeText = clean ? '纯净原版' : '含补丁';
             const name = b.name || b.fileName || b.path || 'app.asar.bak';
             const subParts = [];
+            if (b.appVersion) subParts.push(`v${b.appVersion}`);
             if (b.size) subParts.push(fmtBytes(b.size));
             if (b.mtime || b.updatedAt) subParts.push(fmtDateTime(b.mtime || b.updatedAt));
+            const mismatchBadge = isMismatched
+              ? `<span class="agy-pill i18n-status-pill shrink-0" data-tone="warning" title="该备份版本与当前客户端不匹配，已禁止直接还原覆盖">旧版备份</span>`
+              : '';
             return `
             <div class="px-5 py-3 flex items-center justify-between gap-3 text-xs">
               <div class="min-w-0">
                 <div class="mono-num font-medium text-fg truncate" title="${esc(b.path || name)}">${esc(name)}</div>
                 ${subParts.length ? `<div class="text-muted mono-num mt-0.5">${esc(subParts.join(' / '))}</div>` : ''}
               </div>
-              <span class="agy-pill i18n-status-pill shrink-0" data-tone="${tone}">${badgeText}</span>
+              <div class="flex items-center gap-1.5 shrink-0">
+                ${mismatchBadge}
+                <span class="agy-pill i18n-status-pill shrink-0" data-tone="${tone}">${badgeText}</span>
+              </div>
             </div>`;
           })
           .join('');
@@ -468,7 +532,7 @@ export function createI18nModule({
       packHost.innerHTML = packs
         .map(
           (pk) =>
-            `<span class="agy-pill mono-num text-[11px]" title="${esc(pk.description || pk.name)}">${esc(pk.name)} (${pk.total})</span>`
+            `<span class="agy-pill mono-num text-xs" title="${esc(pk.description || pk.name)}">${esc(pk.name)} (${pk.total})</span>`
         )
         .join('');
     }
@@ -665,8 +729,8 @@ export function createI18nModule({
     if (metaEl) {
       metaEl.innerHTML = `
         <div>目标目录：${esc(data.installDir || '未探测')}</div>
-        <div>客户端版本：${esc(data.appVersion || '未知')}</div>
-        <div>纯净原版备份：${data.hasCleanBackup ? '已就绪' : isApply ? '将自动创建' : '缺失'}</div>
+        <div>客户端版本：${esc(data.appVersion ? `v${data.appVersion}` : '未知')}${data.electronVersion ? `（Electron v${esc(data.electronVersion)}）` : ''}</div>
+        <div>纯净原版备份：${data.hasMatchingCleanBackup ? '同版本已就绪' : data.hasCleanBackup ? '仅存在旧版备份（已防降级锁定）' : isApply ? '将自动创建' : '缺失'}</div>
         ${isQuarantine ? '<div>第三方补丁对策：以纯净原版重打（绝不叠加），旧备份归档隔离至 ~/.context-cache/i18n/quarantine/</div>' : ''}
       `;
     }

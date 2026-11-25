@@ -24,6 +24,23 @@ const WALLPAPER_MIME_BY_EXT = {
 };
 
 /**
+ * Constant-time token comparison using crypto.timingSafeEqual, safely handling
+ * non-string inputs, empty strings, and byte-length mismatches without throwing.
+ */
+export function timingSafeTokenEqual(provided, expected) {
+  if (typeof provided !== 'string' || typeof expected !== 'string' || !provided || !expected) {
+    return false;
+  }
+  const a = Buffer.from(provided, 'utf8');
+  const b = Buffer.from(expected, 'utf8');
+  if (a.length !== b.length) {
+    crypto.timingSafeEqual(b, b);
+    return false;
+  }
+  return crypto.timingSafeEqual(a, b);
+}
+
+/**
  * On-demand localhost-only (127.0.0.1) frameless floating popout window server.
  * On Windows, prefers a native borderless WebView2 host (zero browser titlebar, TopMost pin,
  * Win11 rounded corners, native drag & 8-edge resize). Falls back cleanly to --app mode.
@@ -202,8 +219,9 @@ export class PopoutServerManager {
     this.server = http.createServer(async (req, res) => {
       try {
         const urlObj = new URL(req.url || '/', 'http://127.0.0.1');
-        const reqToken = urlObj.searchParams.get('token') || req.headers['x-cc-token'];
-        if (!reqToken || reqToken !== this.token) {
+        const headerToken = req.headers['x-cc-token'];
+        const reqToken = urlObj.searchParams.get('token') || (typeof headerToken === 'string' ? headerToken : '');
+        if (!timingSafeTokenEqual(reqToken, this.token)) {
           res.writeHead(403, { 'Content-Type': 'application/json; charset=utf-8' });
           res.end(JSON.stringify({ error: 'Forbidden' }));
           return;

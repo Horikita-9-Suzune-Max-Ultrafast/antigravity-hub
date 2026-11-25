@@ -4,7 +4,7 @@
 
 **专为 Google Antigravity 打造的模块化原生控制中心（MCP App）：集上下文监控与跨会话记忆、生态治理与场景预设、本地壁纸引擎、零依赖界面汉化于一体**
 
-[![Version: v1.5.4](https://img.shields.io/badge/Version-v1.5.4-0ea5e9.svg)](https://github.com/Horikita-9-Suzune-Max-Ultrafast/antigravity-hub/releases/tag/v1.5.4)
+[![Version: v1.5.5](https://img.shields.io/badge/Version-v1.5.5-0ea5e9.svg)](https://github.com/Horikita-9-Suzune-Max-Ultrafast/antigravity-hub/releases/tag/v1.5.5)
 [![Antigravity 2.35.1 Update Verified](https://img.shields.io/badge/Antigravity%202.35.1-Update%20Verified-10b981.svg)](#实测验证官方更新防破坏实录)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 [![Node.js >= 24](https://img.shields.io/badge/Node.js-%3E%3D24-339933.svg)](https://nodejs.org/)
@@ -18,7 +18,7 @@
 
 - [四大核心模块一览](#四大核心模块一览)
 - [实测验证：官方更新防破坏实录](#实测验证官方更新防破坏实录)
-- [v1.5.4 新版亮点](#v154-新版亮点)
+- [v1.5.5 新版亮点](#v155-新版亮点)
 - [零门槛快速上手（3 步解压即用）](#快速开始)
 - [核心功能详解](#核心特性)
 - [架构与安全设计](#架构与设计原则)
@@ -61,15 +61,26 @@
 
 ---
 
-## v1.5.4 新版亮点
+## v1.5.5 新版亮点
 
-如果你是从旧版本升级或刚了解本项目，以下为近期核心升级内容：
+如果你是从旧版本升级或刚了解本项目，以下为 `v1.5.5` 核心升级内容：
+
+- **GPU 99% 峰值清零与悬浮窗即时同步（v1.5.5）**：彻底清除 CSS `backdrop-filter` 与常驻 60fps 无限动画，移除强制同步 `offsetWidth` 回流与 5s 窗口坐标轮询，按需启停 KV 1s 倒计时并新增低功耗壁纸模式；单文件 UI 精简至 `< 700 KiB`；关闭悬浮窗或 WebView2 宿主退出时 `0ms` 立即切回离线态并释放端口。
+- **视口防裁切浮层与标题栏自适应（v1.5.5）**：全部下拉菜单与 KV 帮助气泡升级为视口 `position: fixed` 自动夹紧（窗口缩放实时重算、滚动工作区自动收起、`Esc` 键关闭）；扩展态原生标题栏溢出时按序降级并始终保持 `Antigravity Hub` 标题完整；调用明细默认首屏渲染 120 行并支持一键展开全部（预警跳转超 120 行自动展开）。
+- **TPS 计时引擎 v2 全面重构（v1.5.5）**：删除引发 `800–29,404 tok/s` 虚假尖峰的 `cur - prev` 回退分支，排除 `USER_INPUT` / `SYSTEM_MESSAGE` 等待间隔（根除 `0.7 tok/s` 误报），完整扫描多工具并行组跨度（`hybrid_tool_split`）并收紧 `hook_ms` 匹配窗口（`<= 5s`）与下界校验；保守估算步标记为 `estimated` 并在存在实测步时不污染均速与低速预警；新增 `doctor --repair --resync-telemetry` 一键全量历史重算与去重压缩。
+- **真实 `app.asar` 版本探测与防降级护栏（v1.5.5）**：汉化状态优先读取 `app.asar` 内部 `package.json` 真实版本（同时保留 Electron 版本字段并向后兼容旧版元数据，杜绝误报过期）；应用与还原双链路均校验 `.bak` 内部版本，锁定过期旧版备份并在当前已是干净原版时主动阻止还原，彻底杜绝误覆盖降级风险。
+- **SQLite WAL 原子重建与后端安全加固（v1.5.5）**：`rebuildIndex` 将清理与回填合并进同一 `BEGIN IMMEDIATE` 事务（消除并发轮询空窗），`doctor` 清晰展示去重/原始调用数（`dbCalls/truthUniqueCalls (raw)`），`scanMcpTools` 新增 5s 快速内存缓存短接，悬浮窗 HTTP 令牌校验升级为常量时间 `crypto.timingSafeEqual`。
+
+<details>
+<summary><strong>回顾 v1.5.4 核心亮点</strong></summary>
 
 - **已挂载资产点击穿透检视（v1.5.4）**：点击任意规则、技能或子代理卡片，直接弹出只读脱敏原文检视窗（支持复制路径 / 打开文件，严格白名单防越权且自动脱敏密钥）；点击任意 MCP 服务，展开全部工具明细表与单工具 Token 占比条，并支持一键跳转生态治理页。
 - **异常预警一键精准跳转（v1.5.4）**：预警栏每条异常均可点击——点击缓存击穿/连续低速/子代理异常自动收起预警并定位到对应步骤、展开单步解剖抽屉附脉冲高亮；点击上下文超限直达构成拆解区。
 - **三源自动聚合交接胶囊（v1.5.4）**：0 模型 Token 自动聚合「Vault 决策 + 当前会话 `transcript.jsonl`（近期诉求、编辑文件、Artifact 路径）+ 实时 Git 改动与最近 2 条 commit」；支持 **紧凑（500t）/ 标准（1200t）/ 完整（2500t）** 三档预算实时重算，弹窗内可直接编辑当前目标与下一步，并逐项勾选要带走的内容。
-- **迷你悬浮条 Radix 语义色框与全界面设计统一（v1.5.3 → v1.5.4）**：Windows 原生无框悬浮窗支持随 Antigravity 启动自动弹出、跟手拖拽排序与 5 级快捷长度；v1.5.4 为迷你条 5 模块（上下文、TPS、KV 倒计时、模型名、缓存命中）分配深浅自适应 Radix UI Colors 独立语义色框，清零全界面原生裸按钮与中点分隔符。
+- **迷你悬浮条 Radix 语义色框与全界面设计统一（v1.5.3 → v1.5.4）**：Windows 原生无框悬浮窗支持随 Antigravity 启动自动弹出、跟手拖拽排序与 5 级快捷长度；为迷你条 5 模块分配深浅自适应 Radix UI Colors 独立语义色框，清零全界面原生裸按钮与中点分隔符。
 - **聚焦本地壁纸库（v1.5.4）**：移除内置氛围渐变预设，界面更干净纯粹；老用户旧配置若指向历史渐变预设 ID 会自动静默回退至首张本地壁纸或关闭态，零报错零白屏。
+
+</details>
 
 > [!NOTE]
 > **已知宿主边界说明**
@@ -88,16 +99,16 @@
 
 ### 方式一：下载 Release 免构建插件包（推荐，3 步解压即用，零 `npm install`）
 
-1. 前往 [Releases 页面](https://github.com/Horikita-9-Suzune-Max-Ultrafast/antigravity-hub/releases/latest) 下载 `context-cache-v1.5.4-plugin.zip`（约 433 KiB，全明文 `.mjs` 源码 + 预编译单文件 UI，零 `node_modules`）。
+1. 前往 [Releases 页面](https://github.com/Horikita-9-Suzune-Max-Ultrafast/antigravity-hub/releases/latest) 下载 `context-cache-v1.5.5-plugin.zip`（全明文 `.mjs` 源码 + 预编译单文件 UI，零 `node_modules`）。
 2. 解压至 Antigravity 本地插件目录，确保目录结构为 `~/.gemini/config/plugins/context-cache/plugin.json`：
    - **Windows PowerShell**：
      ```powershell
-     Expand-Archive -Path .\context-cache-v1.5.4-plugin.zip -DestinationPath "$env:USERPROFILE\.gemini\config\plugins" -Force
+     Expand-Archive -Path .\context-cache-v1.5.5-plugin.zip -DestinationPath "$env:USERPROFILE\.gemini\config\plugins" -Force
      ```
    - **macOS / Linux**：
      ```bash
      mkdir -p ~/.gemini/config/plugins
-     unzip -o context-cache-v1.5.4-plugin.zip -d ~/.gemini/config/plugins
+     unzip -o context-cache-v1.5.5-plugin.zip -d ~/.gemini/config/plugins
      ```
 3. Antigravity 会自动发现并加载插件（无需重启）：
    - **左侧边栏**：点击 **`Antigravity Hub`** 打开全页控制台（带左侧窄图标导航栏）；
@@ -114,7 +125,7 @@ cd antigravity-hub
 # 2. 安装开发期 UI 打包依赖（仅 devDependencies，绝不进入部署产物）
 npm install
 
-# 3. 运行全套 15 个自动化测试文件（41 项用例，完全隔离临时目录，零真实数据污染）
+# 3. 运行全套 18 个自动化测试文件（63 项用例，完全隔离临时目录，零真实数据污染）
 npm test
 
 # 4. 构建单文件 MCP App UI 并幂等部署至 ~/.gemini/config/plugins/context-cache
@@ -216,9 +227,10 @@ node --no-warnings bin/ctx.mjs search "缓存击穿"
 node --no-warnings bin/ctx.mjs calls
 node --no-warnings bin/ctx.mjs quota
 
-# 健康体检 / 一键自愈（重建 SQLite FTS5 索引 + 复位熔断器）
+# 健康体检 / 一键自愈（重建 SQLite FTS5 索引 + 复位熔断器；可选 --resync-telemetry 重算历史 TPS）
 node --no-warnings bin/ctx.mjs doctor
 node --no-warnings scripts/doctor.mjs --repair
+node --no-warnings bin/ctx.mjs doctor --repair --resync-telemetry
 
 # 导出脱敏备份至 ~/.context-cache/exports/
 node --no-warnings bin/ctx.mjs export
@@ -247,7 +259,7 @@ node --no-warnings bin/ctx.mjs i18n restore
 
 ### 平滑升级到最新版
 - **插件内一键更新（v1.5.4+ 推荐）**：进入 **「插件设置 → 维护与操作」** 点击 **「检查更新」**，发现新版后点击 **「一键更新（SHA-256 校验）」** 即可完成强校验下载、原子目录切换与安全重启引导（如遇网络超时或文件占用自动回滚并可跳转 Release 手动下载）。
-- **Release 包手动覆盖**：也可直接下载新版 `context-cache-v1.5.4-plugin.zip` 并覆盖解压到 `~/.gemini/config/plugins`。你的记忆库、壁纸库、汉化词典、治理偏好与配置快照全部存放在 `%USERPROFILE%\.context-cache`，**升级零数据丢失**。
+- **Release 包手动覆盖**：也可直接下载新版 `context-cache-v1.5.5-plugin.zip` 并覆盖解压到 `~/.gemini/config/plugins`。你的记忆库、壁纸库、汉化词典、治理偏好与配置快照全部存放在 `%USERPROFILE%\.context-cache`，**升级零数据丢失**。
 - **源码用户**：在仓库目录执行 `git pull && npm run deploy`。
 
 ### 完整卸载与无损还原
@@ -333,7 +345,7 @@ context-cache/
 │       └── modules/                     # appearance-module / governance-module / i18n-module
 ├── plugin/                              # Antigravity 插件清单、Hooks、Rules、Skills 与图标
 ├── scripts/                             # deploy.mjs、pack-release.mjs 与 doctor.mjs
-├── tests/                               # 15 个自动化测试文件（41 项端到端 / 单元 / 韧性用例）
+├── tests/                               # 18 个自动化测试文件（63 项端到端 / 单元 / 韧性用例）
 ├── LICENSE                              # MIT License
 ├── README.md                            # 简体中文文档
 ├── README.en.md                         # English documentation

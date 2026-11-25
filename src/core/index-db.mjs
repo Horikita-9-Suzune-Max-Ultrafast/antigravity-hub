@@ -352,9 +352,9 @@ export function rebuildIndex(options = {}) {
   const calls = readJsonlSafe(paths.callsLogFile);
 
   withIndexDb(options, (db) => {
-    db.exec('DELETE FROM memories; DELETE FROM memories_fts; DELETE FROM calls;');
     db.exec('BEGIN IMMEDIATE');
     try {
+      db.exec('DELETE FROM memories; DELETE FROM memories_fts; DELETE FROM calls;');
       for (const mem of memories) {
         upsertMemoryRow(db, mem);
       }

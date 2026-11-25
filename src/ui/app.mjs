@@ -21,7 +21,8 @@ const FEATURE_FLAGS = {
   showQuotaUi: false,
 };
 
-const APP_VERSION = '1.5.5-beta.1';
+const APP_VERSION = '1.5.5';
+const CALLS_INITIAL_RENDER_LIMIT = 120;
 const MINI_BAR_DEFAULT_ORDER = ['context', 'cache', 'kv', 'tps', 'model'];
 const MINI_BAR_PRESET_COUNTS = { minimal: 1, compact: 2, standard: 3, wide: 4, full: 5, custom: 5 };
 const MINI_BAR_PRESET_WIDTHS = { minimal: 255, compact: 340, standard: 440, wide: 540, full: 650 };
@@ -70,6 +71,7 @@ const state = {
   modelFilter: 'all',
   onlyDrop: false,
   expandedCallId: null,
+  showAllCalls: false,
   vaultKind: 'all',
   calGroup: 'gemini',
   newMemKind: 'decision',
@@ -119,7 +121,6 @@ const activeAnims = new WeakMap();
 let pollTimer = null;
 let launcherTimer = null;
 let heartbeatTimer = null;
-let boundsTimer = null;
 let kvCountdownTimer = null;
 let toastTimer = null;
 let refreshInFlight = false;
@@ -243,16 +244,21 @@ function showToast(msg, tone = 'info') {
   }, 2600);
 }
 
-function animateNumber(el, from, to, fmt, dur = 480) {
+function animateNumber(el, from, to, fmt, dur = 220) {
   if (!el) return;
   if (activeAnims.has(el)) cancelAnimationFrame(activeAnims.get(el));
-  if (!Number.isFinite(from) || Math.abs(to - from) < 0.0001) {
+  if (
+    !Number.isFinite(from) ||
+    Math.abs(to - from) < 0.0001 ||
+    (typeof document !== 'undefined' && document.visibilityState !== 'visible')
+  ) {
     el.textContent = fmt(to);
     return;
   }
+  const safeDur = Math.max(80, Math.min(250, Number(dur) || 220));
   const start = performance.now();
   function frame(now) {
-    const t = Math.min(1, (now - start) / dur);
+    const t = Math.min(1, (now - start) / safeDur);
     const eased = 1 - Math.pow(1 - t, 3);
     el.textContent = fmt(from + (to - from) * eased);
     if (t < 1) {
@@ -433,31 +439,79 @@ function formatShortModel(model) {
   return s;
 }
 
+function positionFloatingLayer(triggerEl, layerEl, { alignRight = false, maxWidthCap = 340, maxHeightCap = 320, gap = 6, pad = 8, matchTriggerMinWidth = true } = {}) {
+  if (!triggerEl || !layerEl) return;
+  const vw = window.innerWidth || document.documentElement.clientWidth || 360;
+  const vh = window.innerHeight || document.documentElement.clientHeight || 480;
+  const tRect = triggerEl.getBoundingClientRect();
+  if (tRect.width === 0 && tRect.height === 0) return;
+
+  const availW = Math.max(160, vw - pad * 2);
+  const cappedW = Math.min(maxWidthCap, availW);
+  const minW = matchTriggerMinWidth ? Math.min(Math.round(tRect.width), cappedW) : 0;
+
+  layerEl.dataset.fixed = 'true';
+  layerEl.style.position = 'fixed';
+  layerEl.style.right = 'auto';
+  layerEl.style.bottom = 'auto';
+  layerEl.style.minWidth = minW > 0 ? `${minW}px` : '';
+  layerEl.style.maxWidth = `${cappedW}px`;
+  layerEl.style.left = `${pad}px`;
+  layerEl.style.top = `${pad}px`;
+
+  const measuredW = Math.min(Math.ceil(layerEl.getBoundingClientRect().width), cappedW);
+  const rawLeft = alignRight ? tRect.right - measuredW : tRect.left;
+  const clampedLeft = Math.max(pad, Math.min(rawLeft, vw - pad - measuredW));
+
+  const spaceBelow = Math.max(0, vh - tRect.bottom - gap - pad);
+  const spaceAbove = Math.max(0, tRect.top - gap - pad);
+  const flipUp = spaceBelow < 180 && spaceAbove > spaceBelow;
+  const availH = Math.max(110, Math.min(maxHeightCap, flipUp ? spaceAbove : spaceBelow));
+
+  layerEl.style.maxHeight = `${Math.floor(availH)}px`;
+  const renderedH = Math.min(Math.ceil(layerEl.scrollHeight) + 2, availH);
+  const clampedTop = flipUp
+    ? Math.max(pad, tRect.top - gap - renderedH)
+    : Math.max(pad, Math.min(tRect.bottom + gap, vh - pad - Math.min(renderedH, 44)));
+
+  layerEl.style.left = `${Math.round(clampedLeft)}px`;
+  layerEl.style.top = `${Math.round(clampedTop)}px`;
+  layerEl.style.transformOrigin = `${flipUp ? 'bottom' : 'top'} ${alignRight ? 'right' : 'left'}`;
+}
+
 function clampOpenSelectMenus() {
   requestAnimationFrame(() => {
-    const vw = window.innerWidth || document.documentElement.clientWidth || 360;
-    const pad = 8;
     document.querySelectorAll('.agy-select-menu[data-open="true"]').forEach((menu) => {
-      menu.style.left = '';
-      menu.style.right = '';
-      menu.style.maxWidth = `${Math.max(160, vw - pad * 2)}px`;
-      const rect = menu.getBoundingClientRect();
-      if (rect.left < pad) {
-        // Menu overflowed left edge (e.g. align-right menu wrapped to left column): anchor to left
-        menu.style.left = '0';
-        menu.style.right = 'auto';
-        const r2 = menu.getBoundingClientRect();
-        if (r2.right > vw - pad) {
-          menu.style.left = `${Math.max(pad - r2.left, vw - pad - r2.right)}px`;
-        }
-      } else if (rect.right > vw - pad) {
-        menu.style.left = 'auto';
-        menu.style.right = '0';
-        const r2 = menu.getBoundingClientRect();
-        if (r2.left < pad) {
-          menu.style.right = `${Math.max(0, r2.left - pad)}px`;
-        }
-      }
+      const wrap = menu.closest('.agy-select-wrap');
+      const trigger = wrap?.querySelector('.agy-select-trigger');
+      if (!trigger) return;
+      const isSession = wrap?.id === 'sessionSelectHost';
+      const triggerW = trigger.getBoundingClientRect().width || 240;
+      const maxWidthCap = isSession ? Math.min(420, Math.max(320, Math.round(triggerW))) : Math.max(340, Math.round(triggerW));
+      menu.classList.add('scroll-thin');
+      positionFloatingLayer(trigger, menu, {
+        alignRight: menu.classList.contains('align-right'),
+        maxWidthCap,
+        maxHeightCap: isSession ? 340 : 280,
+      });
+    });
+  });
+}
+
+function clampOpenKvPopovers() {
+  requestAnimationFrame(() => {
+    document.querySelectorAll('.kv-help-popover:not(.hidden)').forEach((pop) => {
+      const wrap = pop.closest('.kv-pill-wrap, .kv-help-inline-wrap');
+      const trigger = wrap?.querySelector('.kv-help-btn') || wrap;
+      if (!trigger) return;
+      positionFloatingLayer(trigger, pop, {
+        alignRight: !pop.classList.contains('kv-help-popover-left'),
+        maxWidthCap: 300,
+        maxHeightCap: 260,
+        gap: 8,
+        pad: 10,
+        matchTriggerMinWidth: false,
+      });
     });
   });
 }
@@ -831,10 +885,12 @@ function fitNativeTitleBar() {
   modelEl?.classList.remove('titlebar-fit-hidden');
   if (hasModel) modelEl.textContent = modelEl.dataset.fullModel;
 
-  const overflows = () => dragZone.scrollWidth > dragZone.clientWidth + 1;
+  const overflows = () =>
+    dragZone.scrollWidth > dragZone.clientWidth + 1 ||
+    Boolean(nameEl && !nameEl.classList.contains('titlebar-fit-hidden') && nameEl.scrollWidth > nameEl.clientWidth + 1);
   if (!overflows()) return;
 
-  // Expanded mode: keep brand visible; degrade model/TPS cleanly without clipping
+  // Expanded mode: keep brand ('Antigravity Hub') uncrushed; degrade model -> shortModel -> hide model -> hide TPS
   if (hasModel && modelEl.dataset.shortModel) {
     modelEl.textContent = modelEl.dataset.shortModel;
     if (!overflows()) return;
@@ -923,10 +979,35 @@ function computeGeminiKvState() {
   return { visible: true, isGemini: true, state: kvState, text, title, ttlMin, remMs, idleMs };
 }
 
+function shouldTickKvCountdown(kv) {
+  return Boolean(
+    kv &&
+      kv.visible &&
+      !kv.active &&
+      !kv.waiting &&
+      (kv.remMs || 0) > 0 &&
+      !state.launcherMode &&
+      (typeof document === 'undefined' || document.visibilityState === 'visible')
+  );
+}
+
 function syncKvCountdownUi() {
   const kv = computeGeminiKvState();
+  const needsTick = shouldTickKvCountdown(kv);
+  if (needsTick && !kvCountdownTimer) {
+    kvCountdownTimer = setInterval(() => {
+      if (document.visibilityState === 'visible' && !state.launcherMode) {
+        syncKvCountdownUi();
+      } else {
+        stopKvCountdownTimer();
+      }
+    }, 1000);
+  } else if (!needsTick && kvCountdownTimer) {
+    stopKvCountdownTimer();
+  }
+
   const sig = `${kv.visible ? 1 : 0}|${kv.state}|${kv.text}|${kv.title}`;
-  if (sig === lastKvSig) return;
+  if (sig === lastKvSig) return kv;
   lastKvSig = sig;
 
   document.querySelectorAll('.hub-brand-svg').forEach((svg) => {
@@ -1143,12 +1224,12 @@ function renderContext(animated = false) {
   const tpsChanged = Math.abs(tps - prevDisplay.tps) >= 0.05;
 
   if (animated) {
-    animateNumber(pctEl, prevDisplay.pct, pct, (v) => `${v.toFixed(1)}%`, 520);
-    animateNumber(ratioEl, prevDisplay.used, used, (v) => `${fmtK(Math.round(v))} / ${fmtK(limit)}`, 520);
-    animateNumber(cacheEl, prevDisplay.cache, cache, (v) => `${v.toFixed(1)}%`, 500);
-    animateNumber(tpsEl, prevDisplay.tps, tps, (v) => `${v.toFixed(1)} tok/s`, 500);
-    animateNumber(freeEl, prevDisplay.free, free, (v) => fmtK(Math.round(v)), 520);
-    animateNumber(costEl, prevDisplay.cost, cost, (v) => `$${v.toFixed(3)}`, 500);
+    animateNumber(pctEl, prevDisplay.pct, pct, (v) => `${v.toFixed(1)}%`, 220);
+    animateNumber(ratioEl, prevDisplay.used, used, (v) => `${fmtK(Math.round(v))} / ${fmtK(limit)}`, 220);
+    animateNumber(cacheEl, prevDisplay.cache, cache, (v) => `${v.toFixed(1)}%`, 220);
+    animateNumber(tpsEl, prevDisplay.tps, tps, (v) => `${v.toFixed(1)} tok/s`, 220);
+    animateNumber(freeEl, prevDisplay.free, free, (v) => fmtK(Math.round(v)), 220);
+    animateNumber(costEl, prevDisplay.cost, cost, (v) => `$${v.toFixed(3)}`, 220);
     if (pctChanged) pulseEl(pctEl);
     if (cacheChanged) pulseEl(cacheEl);
     if (tpsChanged) pulseEl(tpsEl);
@@ -1317,7 +1398,7 @@ function renderCalls() {
   const list = data?.calls || [];
   const byAgent = data?.summary?.byAgent || [];
   const byModel = data?.summary?.byModel || [];
-  const callsSig = `${getUiLang()}|${state.expandedCallId || ''}|${state.freshCallId || ''}|${data?.totalCallsCount ?? 0}|${list.map((c) => `${c.callUid}:${c.effectiveTps}:${c.cacheHitRate}:${c.estimatedCostUsd}:${c.durationMs}:${c.cacheDrop ? 1 : 0}`).join(',')}|${byAgent.map((a) => `${a.agentTag}:${a.steps}:${a.cost}`).join(',')}|${byModel.map((m) => `${m.model}:${m.steps}:${m.cost}`).join(',')}`;
+  const callsSig = `${getUiLang()}|${state.expandedCallId || ''}|${state.freshCallId || ''}|${state.showAllCalls ? 1 : 0}|${data?.totalCallsCount ?? 0}|${list.map((c) => `${c.callUid}:${c.effectiveTps}:${c.cacheHitRate}:${c.estimatedCostUsd}:${c.durationMs}:${c.timingSource || ''}:${c.cacheDrop ? 1 : 0}`).join(',')}|${byAgent.map((a) => `${a.agentTag}:${a.steps}:${a.cost}`).join(',')}|${byModel.map((m) => `${m.model}:${m.steps}:${m.cost}`).join(',')}`;
   if (callsSig === lastCallsRenderSig) return;
   lastCallsRenderSig = callsSig;
   const tbody = document.getElementById('callsTbody');
@@ -1325,7 +1406,9 @@ function renderCalls() {
   if (!list.length) {
     tbody.innerHTML = `<tr><td colspan="7" class="py-8 text-center text-xs text-muted">${esc(tr('monitor.calls.empty'))}</td></tr>`;
   } else {
-    tbody.innerHTML = list
+    const hasMore = list.length > CALLS_INITIAL_RENDER_LIMIT;
+    const visibleList = !hasMore || state.showAllCalls ? list : list.slice(0, CALLS_INITIAL_RENDER_LIMIT);
+    const rowsHtml = visibleList
       .map((c) => {
         const isExp = state.expandedCallId === c.callUid;
         const badgeStyle =
@@ -1411,16 +1494,29 @@ function renderCalls() {
         }`;
       })
       .join('');
+    const toggleLabel = state.showAllCalls
+      ? getUiLang() === 'en'
+        ? `Show latest ${CALLS_INITIAL_RENDER_LIMIT}`
+        : `仅显示前 ${CALLS_INITIAL_RENDER_LIMIT} 条`
+      : getUiLang() === 'en'
+        ? `Show all (${list.length})`
+        : `显示全部 (${list.length})`;
+    const toggleRowHtml = hasMore
+      ? `<tr class="calls-toggle-all-row"><td colspan="7" class="py-2.5 px-4 text-center"><button type="button" data-toggle-all-calls="1" class="agy-btn agy-btn-secondary agy-btn-sm text-xs">${esc(toggleLabel)}</button></td></tr>`
+      : '';
+    tbody.innerHTML = rowsHtml + toggleRowHtml;
   }
 
   const totalCost = list.reduce((s, c) => s + c.estimatedCostUsd, 0);
-  const totalOutTokens = list.reduce((s, c) => s + (c.outputTokens || 0), 0);
-  const totalDurMs = list.reduce((s, c) => s + (c.durationMs || 0), 0);
+  const realTimedList = list.filter((c) => c.timingSource !== 'estimated');
+  const tpsPool = realTimedList.length > 0 ? realTimedList : list;
+  const totalOutTokens = tpsPool.reduce((s, c) => s + (c.outputTokens || 0), 0);
+  const totalDurMs = tpsPool.reduce((s, c) => s + (c.durationMs || 0), 0);
   const avgTps =
     totalDurMs > 0 && totalOutTokens > 0
       ? totalOutTokens / (totalDurMs / 1000)
-      : list.length
-        ? list.reduce((s, c) => s + c.effectiveTps, 0) / list.length
+      : tpsPool.length
+        ? tpsPool.reduce((s, c) => s + c.effectiveTps, 0) / tpsPool.length
         : 0;
   const heroSteps = document.getElementById('callsHeroSteps');
   const heroTps = document.getElementById('callsHeroTps');
@@ -1644,6 +1740,7 @@ function renderVault() {
 
 function resetSessionViewState() {
   state.expandedCallId = null;
+  state.showAllCalls = false;
   state.knownCallIds.clear();
   state.freshCallId = null;
   state.modelFilter = 'all';
@@ -1878,25 +1975,12 @@ function startPopoutClientLifecycle() {
   };
 
   window.addEventListener('resize', scheduleBoundsSave);
-  const startBoundsTimer = () => {
-    if (boundsTimer) clearInterval(boundsTimer);
-    if (document.visibilityState !== 'visible') {
-      boundsTimer = null;
-      return;
-    }
-    boundsTimer = setInterval(() => {
-      if (document.visibilityState === 'visible') scheduleBoundsSave();
-    }, 5000);
-  };
-  startBoundsTimer();
+  window.addEventListener('blur', scheduleBoundsSave);
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') {
       void sendHeartbeat(true);
-      startBoundsTimer();
-    } else if (boundsTimer) {
-      clearInterval(boundsTimer);
-      boundsTimer = null;
     }
+    scheduleBoundsSave();
   });
 }
 
@@ -2714,11 +2798,6 @@ function startKvCountdownTimer() {
   stopKvCountdownTimer();
   if (state.launcherMode || document.visibilityState !== 'visible') return;
   syncKvCountdownUi();
-  kvCountdownTimer = setInterval(() => {
-    if (document.visibilityState === 'visible' && !state.launcherMode) {
-      syncKvCountdownUi();
-    }
-  }, 1000);
 }
 
 function scheduleIdleModuleChecks() {
@@ -3070,6 +3149,11 @@ async function handleAlertJump(alertIdx) {
   }
 
   if (matched) {
+    const callsList = state.callsData?.calls || [];
+    const matchedIdx = callsList.findIndex((c) => c.callUid === matched.callUid);
+    if (matchedIdx >= CALLS_INITIAL_RENDER_LIMIT) {
+      state.showAllCalls = true;
+    }
     state.expandedCallId = matched.callUid;
     renderCalls();
     requestAnimationFrame(() => {
@@ -3397,6 +3481,13 @@ function bindEvents() {
       return;
     }
 
+    const toggleAllCallsBtn = e.target.closest('[data-toggle-all-calls]');
+    if (toggleAllCallsBtn) {
+      state.showAllCalls = !state.showAllCalls;
+      renderCalls();
+      return;
+    }
+
     const callRow = e.target.closest('[data-call-id]');
     if (callRow) {
       const id = callRow.dataset.callId;
@@ -3434,6 +3525,7 @@ function bindEvents() {
         state.openSelectId = null;
         renderSelects();
       }
+      document.querySelectorAll('.kv-help-popover').forEach((p) => p.classList.add('hidden'));
       ['capsuleModal', 'quotaModal', 'addMemModal', 'i18nPatchConfirmModal', 'i18nEntryModal', 'i18nImportModal', 'appRotationPoolModal', 'restartIdeModal', 'assetInspectorModal'].forEach(closeModal);
       document.getElementById('govLintFixModal')?.classList.add('hidden');
     }
@@ -4116,6 +4208,7 @@ function bindEvents() {
       const willOpen = pop.classList.contains('hidden');
       document.querySelectorAll('.kv-help-popover').forEach((p) => p.classList.add('hidden'));
       pop.classList.toggle('hidden', !willOpen);
+      if (willOpen) clampOpenKvPopovers();
     });
   };
   bindHelpPopover('kvHelpBtn', 'kvHelpPopover');
@@ -4125,6 +4218,21 @@ function bindEvents() {
       document.querySelectorAll('.kv-help-popover').forEach((p) => p.classList.add('hidden'));
     }
   });
+
+  document.getElementById('consoleWorkspace')?.addEventListener(
+    'scroll',
+    (e) => {
+      if (e.target instanceof Element && e.target.closest('.agy-select-menu')) return;
+      if (state.openSelectId) {
+        state.openSelectId = null;
+        renderSelects();
+      }
+      if (document.querySelector('.kv-help-popover:not(.hidden)')) {
+        clampOpenKvPopovers();
+      }
+    },
+    { passive: true, capture: true }
+  );
 
   document.getElementById('sidebarAutoPopoutSwitch')?.addEventListener('click', () => {
     const next = state.config.popout?.autoLaunchFromSidebar === false;
@@ -4376,9 +4484,21 @@ async function init() {
       resizeRafId = 0;
       positionVisibleIndicators();
       if (state.openSelectId) clampOpenSelectMenus();
+      if (document.querySelector('.kv-help-popover:not(.hidden)')) clampOpenKvPopovers();
     });
   });
   ro.observe(document.getElementById('consoleWorkspace') || document.getElementById('appShell'));
+
+  let winResizeRafId = 0;
+  window.addEventListener('resize', () => {
+    if (winResizeRafId) return;
+    winResizeRafId = requestAnimationFrame(() => {
+      winResizeRafId = 0;
+      if (state.openSelectId) clampOpenSelectMenus();
+      if (document.querySelector('.kv-help-popover:not(.hidden)')) clampOpenKvPopovers();
+      if (isNativePopout) fitNativeTitleBar();
+    });
+  });
 
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') {

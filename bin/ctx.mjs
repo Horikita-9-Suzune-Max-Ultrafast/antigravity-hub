@@ -120,15 +120,19 @@ async function main() {
       break;
     }
     case 'doctor': {
-      const res = flags.repair ? repairLocalState(opts) : { report: runDoctor(opts) };
+      if (flags['resync-telemetry']) opts.resyncTelemetry = true;
+      const res = flags.repair || flags['resync-telemetry']
+        ? await repairLocalState(opts)
+        : { report: runDoctor(opts) };
       const r = res.report;
       const lines = [
         `Status: ${r.healthy ? 'HEALTHY' : 'ATTENTION'} (v${r.version})`,
         `Data Dir: ${r.dataDir}`,
         `Plugin Dir: ${r.pluginDir}`,
         `Drift: ${r.drift.count} | Circuit: ${r.circuit.state} (${r.circuit.failures}/${r.circuit.threshold})`,
-        `Index: ${r.index.ok ? 'OK' : 'NEEDS REBUILD'} (memories ${r.index.dbMemories}/${r.index.truthMemories}, calls ${r.index.dbCalls}/${r.index.truthCalls})`,
+        `Index: ${r.index.ok ? 'OK' : 'NEEDS REBUILD'} (memories ${r.index.dbMemories}/${r.index.truthMemories}, calls ${r.index.dbCalls}/${r.index.truthUniqueCalls} (${r.index.truthRawCallLines} raw))`,
         `Deploy: zero_node_modules=${r.deployment.zeroNodeModules}, ui_bytes=${r.deployment.uiSizeBytes}, missing=${r.deployment.missingFiles.length}`,
+        ...(res.telemetryResync ? [`Telemetry Resync: ${JSON.stringify(res.telemetryResync)}`] : []),
         ...r.issues.map((i) => `  ! ${i}`),
       ];
       print(res, lines.join('\n'));
@@ -247,7 +251,7 @@ Commands:
   search  <query> [--kind <kind>] [--json]
   calls   [--session <id>] [--agent main|sub] [--drops] [--json]
   quota   [--json]
-  doctor  [--repair] [--json]
+  doctor  [--repair] [--resync-telemetry] [--json]
   export  [--json]
   i18n    <status|refresh|apply|restore> [--json]`);
     }

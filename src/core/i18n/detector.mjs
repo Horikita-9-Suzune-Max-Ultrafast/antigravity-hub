@@ -152,11 +152,24 @@ function findExecutablePath(installDir, platform = process.platform) {
   return null;
 }
 
-function readAppVersion(installDir, resourcesDir, asarPath) {
-  const versionFiles = [
-    path.join(installDir, 'version'),
-    path.join(resourcesDir, 'version'),
-  ];
+export function readAsarPackageVersion(asarPath) {
+  if (!asarPath) return null;
+  try {
+    const pkgBuf = readAsarFile(asarPath, 'package.json');
+    const pkg = JSON.parse(pkgBuf.toString('utf8'));
+    if (typeof pkg?.version === 'string' && pkg.version.trim()) {
+      return pkg.version.trim();
+    }
+  } catch {
+    // ignore missing or unreadable package.json
+  }
+  return null;
+}
+
+export function readElectronVersionFile(installDir, resourcesDir) {
+  const versionFiles = [];
+  if (installDir) versionFiles.push(path.join(installDir, 'version'));
+  if (resourcesDir) versionFiles.push(path.join(resourcesDir, 'version'));
   for (const vf of versionFiles) {
     try {
       if (fs.existsSync(vf) && fs.statSync(vf).isFile()) {
@@ -167,19 +180,16 @@ function readAppVersion(installDir, resourcesDir, asarPath) {
       // ignore unreadable version file
     }
   }
-
-  // Fallback: read package.json inside app.asar
-  try {
-    const pkgBuf = readAsarFile(asarPath, 'package.json');
-    const pkg = JSON.parse(pkgBuf.toString('utf8'));
-    if (typeof pkg?.version === 'string' && pkg.version.trim()) {
-      return pkg.version.trim();
-    }
-  } catch {
-    // ignore
-  }
-
   return null;
+}
+
+function readAppVersion(installDir, resourcesDir, asarPath) {
+  const pkgVersion = readAsarPackageVersion(asarPath);
+  const electronVersion = readElectronVersionFile(installDir, resourcesDir);
+  return {
+    appVersion: pkgVersion || electronVersion || null,
+    electronVersion: electronVersion || null,
+  };
 }
 
 /**
@@ -195,6 +205,7 @@ export function detectAntigravityInstall(options = {}) {
   if (explicitOverride) {
     const layout = resolveInstallLayout(explicitOverride);
     if (layout) {
+      const versions = readAppVersion(layout.installDir, layout.resourcesDir, layout.asarPath);
       return {
         found: true,
         source: 'override',
@@ -202,7 +213,8 @@ export function detectAntigravityInstall(options = {}) {
         resourcesDir: layout.resourcesDir,
         asarPath: layout.asarPath,
         exePath: findExecutablePath(layout.installDir, options.platform || process.platform),
-        appVersion: readAppVersion(layout.installDir, layout.resourcesDir, layout.asarPath),
+        appVersion: versions.appVersion,
+        electronVersion: versions.electronVersion,
       };
     }
     return {
@@ -213,6 +225,7 @@ export function detectAntigravityInstall(options = {}) {
       asarPath: null,
       exePath: null,
       appVersion: null,
+      electronVersion: null,
     };
   }
 
@@ -225,6 +238,7 @@ export function detectAntigravityInstall(options = {}) {
       asarPath: null,
       exePath: null,
       appVersion: null,
+      electronVersion: null,
     };
   }
 
@@ -232,6 +246,7 @@ export function detectAntigravityInstall(options = {}) {
   for (const candidate of candidates) {
     const layout = resolveInstallLayout(candidate);
     if (layout) {
+      const versions = readAppVersion(layout.installDir, layout.resourcesDir, layout.asarPath);
       return {
         found: true,
         source: 'auto',
@@ -239,7 +254,8 @@ export function detectAntigravityInstall(options = {}) {
         resourcesDir: layout.resourcesDir,
         asarPath: layout.asarPath,
         exePath: findExecutablePath(layout.installDir, options.platform || process.platform),
-        appVersion: readAppVersion(layout.installDir, layout.resourcesDir, layout.asarPath),
+        appVersion: versions.appVersion,
+        electronVersion: versions.electronVersion,
       };
     }
   }
@@ -252,6 +268,7 @@ export function detectAntigravityInstall(options = {}) {
     asarPath: null,
     exePath: null,
     appVersion: null,
+    electronVersion: null,
   };
 }
 
@@ -340,9 +357,9 @@ export function inspectAsarMarkers(asarPath) {
 }
 
 /**
- * Scan known app.asar backup files in resourcesDir and inspect each for cleanliness.
+ * Scan known app.asar backup files in resourcesDir and inspect each for cleanliness and version match.
  */
-export function scanBackups(resourcesDir) {
+export function scanBackups(resourcesDir, currentAppVersion = null) {
   if (!resourcesDir || !fs.existsSync(resourcesDir)) return [];
   const results = [];
 
@@ -353,6 +370,12 @@ export function scanBackups(resourcesDir) {
       const stat = fs.statSync(filePath);
       if (!stat.isFile()) continue;
       const markers = inspectAsarMarkers(filePath);
+      const bakVer = markers.valid ? readAsarPackageVersion(filePath) : null;
+      const matchesCurrentVersion = !markers.valid
+        ? false
+        : !currentAppVersion
+          ? true
+          : Boolean(bakVer && bakVer === currentAppVersion);
       const isoTime = new Date(stat.mtimeMs).toISOString();
       results.push({
         name: candidate.name,
@@ -365,6 +388,8 @@ export function scanBackups(resourcesDir) {
         isCleanOriginal: markers.valid && markers.isCleanOriginal,
         hasConsolePatch: markers.hasConsolePatch,
         hasThirdPartyPatch: markers.hasThirdPartyPatch,
+        appVersion: bakVer,
+        matchesCurrentVersion,
       });
     } catch {
       // Ignore unreadable backup file
@@ -425,10 +450,12 @@ export function getI18nStatus(options = {}) {
       exePath: null,
       asarPath: null,
       appVersion: null,
+      electronVersion: null,
       consolePatchMeta: null,
       thirdPartyMeta: null,
       backups: [],
       hasCleanBackup: false,
+      hasMatchingCleanBackup: false,
       state,
       lastJob,
       config: fullConfig.i18n,
@@ -437,13 +464,23 @@ export function getI18nStatus(options = {}) {
   }
 
   const markers = inspectAsarMarkers(install.asarPath);
-  const backups = scanBackups(install.resourcesDir);
+  const backups = scanBackups(install.resourcesDir, install.appVersion);
   const hasCleanBackup = backups.some((b) => b.valid && b.isCleanOriginal);
+  const hasMatchingCleanBackup = backups.some(
+    (b) => b.valid && b.isCleanOriginal && b.matchesCurrentVersion
+  );
 
   let status = 'unpatched';
   if (markers.hasConsolePatch) {
     const patchedVer = markers.consolePatchMeta?.appVersion || null;
-    if (patchedVer && install.appVersion && patchedVer !== install.appVersion) {
+    const matchesCurrentApp = Boolean(
+      patchedVer && install.appVersion && patchedVer === install.appVersion
+    );
+    // Backward compatibility: pre-v1.5.5 metadata recorded Electron version file as appVersion
+    const matchesLegacyElectron = Boolean(
+      patchedVer && install.electronVersion && patchedVer === install.electronVersion
+    );
+    if (patchedVer && install.appVersion && !matchesCurrentApp && !matchesLegacyElectron) {
       status = 'outdated_after_update';
     } else {
       status = 'patched_by_console';
@@ -464,10 +501,12 @@ export function getI18nStatus(options = {}) {
     exePath: install.exePath,
     asarPath: install.asarPath,
     appVersion: install.appVersion,
+    electronVersion: install.electronVersion,
     consolePatchMeta: markers.consolePatchMeta,
     thirdPartyMeta: markers.thirdPartyMeta,
     backups,
     hasCleanBackup,
+    hasMatchingCleanBackup,
     state,
     lastJob,
     config: fullConfig.i18n,

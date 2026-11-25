@@ -35,7 +35,7 @@ export const APP_RESOURCE_URI = 'ui://context-cache/dashboard.html';
 export const APP_RESOURCE_MIME = 'text/html;profile=mcp-app';
 export const SERVER_INFO = {
   name: 'context-cache-server',
-  version: '1.5.5-beta.1',
+  version: '1.5.5',
 };
 
 const APP_ONLY_META = { ui: { visibility: ['app'] } };
@@ -697,7 +697,7 @@ export function createMcpDispatcher(options = {}) {
         }
 
         case 'ctx_doctor': {
-          const data = args.repair ? repairLocalState(options) : { report: runDoctor(options) };
+          const data = args.repair ? await repairLocalState(options) : { report: runDoctor(options) };
           const rep = data.report;
           const text = `Doctor 状态：${rep.healthy ? '健康' : '需关注'} | 漂移 ${rep.drift.count} | 熔断 ${rep.circuit.state} | 记忆 ${rep.index.dbMemories}/${rep.index.truthMemories}`;
           return toolOk(text, data);
@@ -962,7 +962,7 @@ export function createMcpDispatcher(options = {}) {
             return toolOk('reset', { circuit, report: runDoctor(options) });
           }
           if (args.action === 'repair') {
-            return toolOk('repaired', repairLocalState(options));
+            return toolOk('repaired', await repairLocalState(options));
           }
           return toolErr(`Unsupported doctor action: ${args.action}`);
         }
