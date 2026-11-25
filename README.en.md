@@ -63,9 +63,9 @@ We intentionally ran a live, in-place official upgrade to **Antigravity `2.35.1`
 
 ## What's New in v1.5.5
 
-- **GPU 99% Spike Elimination & Instant Popout Close Sync (v1.5.5)**: Removed all CSS `backdrop-filter` rules, infinite 60fps animations, forced `offsetWidth` reflows, and 5s window-bounds polling; gated the 1s KV countdown timer to active countdowns only, added `lowPowerMode` for wallpapers, and slimmed the single-file UI bundle to `< 700 KiB`. Closing the floating window or exiting the WebView2 host flips to offline state immediately (`0ms`) and releases the ephemeral port.
-- **Viewport-Clamped Floating Menus & Responsive Titlebar Fit (v1.5.5)**: All select dropdowns and KV help popovers now use viewport `position: fixed` clamping (re-clamping on resize, auto-closing on workspace scroll, and closing on `Escape`). The expanded native titlebar degrades gracefully (`model -> shortModel -> hide model -> hide TPS`) while keeping `Antigravity Hub` uncrushed. Live Calls caps initial rows to 120 with a one-click **Show all** toggle (auto-expanding on alert jumps).
-- **TPS Timing Engine v2 Overhaul (v1.5.5)**: Deleted the broken `cur - prev` fallback branch (eliminating `800–29,404 tok/s` spikes), excluded `USER_INPUT`/`SYSTEM_MESSAGE` pause gaps (eliminating `0.7 tok/s` false lows), scanned full multi-tool streaming group spans (`hybrid_tool_split`), and tightened `hook_ms` matching (`<= 5s`) with a lower-bound guard. Conservative fallbacks are tagged `estimated` and excluded from `avgTps` and low-TPS alerts when real-timed steps exist; added `doctor --repair --resync-telemetry` for lossless historical recomputation and compaction.
+- **GPU 99% Spike Elimination & Instant Popout Close Sync (v1.5.5)**: Removed all CSS `backdrop-filter` rules, infinite 60fps animations, forced `offsetWidth` reflows, and 5s window-bounds polling; gated the 1s KV countdown timer to active countdowns only, added `lowPowerMode` for wallpapers, and slimmed the single-file UI bundle to `~706 KiB` (`< 750 KiB`). Closing the floating window or exiting the WebView2 host flips to offline state immediately (`0ms`) and releases the ephemeral port.
+- **Viewport-Clamped Floating Menus, Responsive Titlebar & Dynamic Calls Table (v1.5.5)**: All select dropdowns and KV help popovers now use viewport `position: fixed` clamping (re-clamping on resize, auto-closing on workspace scroll, and closing on `Escape`). The expanded native titlebar degrades gracefully (`model -> shortModel -> hide model -> hide TPS`) while keeping `Antigravity Hub` uncrushed. Live Calls uses boundary-fixed dynamic column allocation (protecting numeric columns from premature `...` ellipsis, elastically shortening model labels, and falling back cleanly to 2-row cards on narrow widths) and caps initial rows to 120 with a one-click **Show all** toggle.
+- **Native SQLite Nanosecond TTFT & Decode TPS Engine (v1.5.5)**: Added zero-dep read-only `native-step-metrics.mjs` (Node 24 built-in `node:sqlite` + pure-JS Protobuf wire reader) to extract nanosecond per-step TTFT, pure decode duration, and self-verified exact thinking/content token splits directly from Antigravity's local conversation DB. Table rows and anatomy drawers display **`TTFT / Duration`** alongside pure Decode TPS (`—` for `< 1s` decode windows or `< 15 tok` outputs). When the native DB is absent or changes schema, it fails open to **Plan A tool-execution stripping** (`hybrid_tool_split`), removing local tool execution time (`npm test`, `git push`) and eliminating spikes/false lows; added `doctor --repair --resync-telemetry` for lossless historical recomputation and compaction.
 - **True `app.asar` Version Detection & Anti-Downgrade Guard (v1.5.5)**: Localization now prioritizes `package.json` inside `app.asar` over Electron's version file (preserving `electronVersion` and backward-compatible legacy metadata so patched users never get false update alerts). Both apply and restore paths validate `.bak` versions and lock stale backups or already-clean `app.asar` files to prevent accidental downgrade.
 - **Atomic SQLite WAL Rebuild & Backend Security Hardening (v1.5.5)**: `rebuildIndex()` now executes `DELETE FROM` inside `BEGIN IMMEDIATE ... COMMIT` (eliminating empty-DB race windows under concurrent polling), `doctor` displays deduplicated vs. raw call counts (`dbCalls/truthUniqueCalls (raw)`), `scanMcpTools()` adds a 5s fast-TTL memory short-circuit, and popout HTTP token verification uses constant-time `crypto.timingSafeEqual`.
 
@@ -82,7 +82,7 @@ We intentionally ran a live, in-place official upgrade to **Antigravity `2.35.1`
 
 > [!NOTE]
 > **Known Host Boundaries**
-> - **Time-to-First-Token (TTFT)**: Official `transcript.jsonl` files do not currently expose streaming TTFT. The latency column reports per-step model duration and automatically switches if `ttft_ms` / `ttftMs` appears in future host logs.
+> - **Time-to-First-Token (TTFT) & Exact Thinking Split**: Since `v1.5.5`, Antigravity Hub reads nanosecond-level TTFT, pure Decode TPS, and self-verified thinking/content token splits read-only (`node:sqlite` `{ readOnly: true }`) from Antigravity's local `conversations/<id>.db`, automatically failing open to transcript + tool-execution stripping if the DB is unavailable or changes schema.
 > - **Conversation Auto-Follow**: Whenever you start or send a message in any conversation, hooks immediately record the active session and all open monitors follow automatically along with the conversation's Git branch and vault. When passively browsing an older conversation without sending a message, picking it once in any monitor's dropdown syncs all open views.
 > - **Quota View Hidden**: Because Antigravity does not yet expose a public Quota API, the **Quota** tab is hidden from user-facing UI while preserving all core code and the pluggable `QuotaProvider` interface for future activation.
 
@@ -123,7 +123,7 @@ cd antigravity-hub
 # 2. Install dev-only UI build tools (never copied into deployed bundle)
 npm install
 
-# 3. Run full 18-file automated test suite (63 test cases, isolated temp dirs)
+# 3. Run full 18-file automated test suite (65 test cases, isolated temp dirs)
 npm test
 
 # 4. Build single-file MCP App UI and deploy to ~/.gemini/config/plugins/context-cache
@@ -312,7 +312,8 @@ context-cache/
 │   │   ├── vault.mjs                    # Cross-session memory CRUD, Compact Brief & 3-source Handoff Capsule
 │   │   ├── context-inspector.mjs        # Context breakdown, asset metadata, redacted preview & bloat analysis
 │   │   ├── transcript-parser.mjs        # Incremental multi-version transcript parser & sub-agent discovery
-│   │   ├── telemetry.mjs                # Multi-agent calls, TPS, cache-drop attribution & 4 alert classes
+│   │   ├── native-step-metrics.mjs      # Zero-dep read-only native DB reader (nanosecond TTFT, decode duration & exact thinking split)
+│   │   ├── telemetry.mjs                # Multi-agent calls, Decode TPS, tool-exec stripping, cache-drop attribution & 4 alert classes
 │   │   ├── session-tracker.mjs          # Active conversation auto-follow & cross-view sync
 │   │   ├── quota.mjs                    # 5h/7d sliding window, calibration & QuotaProvider hook
 │   │   ├── popout-server.mjs            # 127.0.0.1 token-authenticated floating host server
@@ -334,7 +335,7 @@ context-cache/
 │       └── modules/                     # appearance-module / governance-module / i18n-module
 ├── plugin/                              # Antigravity plugin manifest, hooks, rules, skills & logo
 ├── scripts/                             # deploy.mjs, pack-release.mjs & doctor.mjs
-├── tests/                               # 18 automated test suites (63 E2E / unit / resilience test cases)
+├── tests/                               # 18 automated test suites (65 E2E / unit / resilience test cases)
 ├── LICENSE                              # MIT License
 ├── README.md                            # Simplified Chinese documentation
 ├── README.en.md                         # English documentation

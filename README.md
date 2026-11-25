@@ -65,9 +65,9 @@
 
 如果你是从旧版本升级或刚了解本项目，以下为 `v1.5.5` 核心升级内容：
 
-- **GPU 99% 峰值清零与悬浮窗即时同步（v1.5.5）**：彻底清除 CSS `backdrop-filter` 与常驻 60fps 无限动画，移除强制同步 `offsetWidth` 回流与 5s 窗口坐标轮询，按需启停 KV 1s 倒计时并新增低功耗壁纸模式；单文件 UI 精简至 `< 700 KiB`；关闭悬浮窗或 WebView2 宿主退出时 `0ms` 立即切回离线态并释放端口。
-- **视口防裁切浮层与标题栏自适应（v1.5.5）**：全部下拉菜单与 KV 帮助气泡升级为视口 `position: fixed` 自动夹紧（窗口缩放实时重算、滚动工作区自动收起、`Esc` 键关闭）；扩展态原生标题栏溢出时按序降级并始终保持 `Antigravity Hub` 标题完整；调用明细默认首屏渲染 120 行并支持一键展开全部（预警跳转超 120 行自动展开）。
-- **TPS 计时引擎 v2 全面重构（v1.5.5）**：删除引发 `800–29,404 tok/s` 虚假尖峰的 `cur - prev` 回退分支，排除 `USER_INPUT` / `SYSTEM_MESSAGE` 等待间隔（根除 `0.7 tok/s` 误报），完整扫描多工具并行组跨度（`hybrid_tool_split`）并收紧 `hook_ms` 匹配窗口（`<= 5s`）与下界校验；保守估算步标记为 `estimated` 并在存在实测步时不污染均速与低速预警；新增 `doctor --repair --resync-telemetry` 一键全量历史重算与去重压缩。
+- **GPU 99% 峰值清零与悬浮窗即时同步（v1.5.5）**：彻底清除 CSS `backdrop-filter` 与常驻 60fps 无限动画，移除强制同步 `offsetWidth` 回流与 5s 窗口坐标轮询，按需启停 KV 1s 倒计时并新增低功耗壁纸模式；单文件 UI 精简至 `~706 KiB`（`< 750 KiB`）；关闭悬浮窗或 WebView2 宿主退出时 `0ms` 立即切回离线态并释放端口。
+- **视口防裁切浮层、标题栏自适应与调用表动态列宽（v1.5.5）**：全部下拉菜单与 KV 帮助气泡升级为视口 `position: fixed` 自动夹紧（窗口缩放实时重算、滚动工作区自动收起、`Esc` 键关闭）；扩展态原生标题栏溢出时按序降级并始终保持 `Antigravity Hub` 标题完整；调用明细表升级为「数值列保底 + 模型名弹性缩略 + 窄宽双行卡片兜底」动态列宽分配，彻底消除数字列提早出现 `...` 省略号，默认首屏渲染 120 行并支持一键展开全部（预警跳转自动展开）。
+- **原生 SQLite 纳秒级 TTFT 与纯解码 TPS 引擎（v1.5.5）**：新增零依赖只读模块 `native-step-metrics.mjs`（Node 24 内置 `node:sqlite` + 纯 JS Protobuf 解析），直接提取本地会话库每步纳秒级首字耗时（TTFT）、纯解码耗时与精确思考/正文 Token 拆分；调用表与解剖抽屉升级为 **`首字 / 耗时`** 双维度展示，按纯解码速度计算 Decode TPS（解码 `< 1s` 或输出 `< 15 tok` 静默显示 `—` 不误报低速）；本地库不可用时自动 Fail-Open 降级至 **Plan A 工具耗时剥离引擎**（自动剔除 `npm test`/`git push` 等本地工具执行时长，彻底根除虚假尖峰与 `0.7 tok/s` 误报）；新增 `doctor --repair --resync-telemetry` 一键全量历史重算与去重压缩。
 - **真实 `app.asar` 版本探测与防降级护栏（v1.5.5）**：汉化状态优先读取 `app.asar` 内部 `package.json` 真实版本（同时保留 Electron 版本字段并向后兼容旧版元数据，杜绝误报过期）；应用与还原双链路均校验 `.bak` 内部版本，锁定过期旧版备份并在当前已是干净原版时主动阻止还原，彻底杜绝误覆盖降级风险。
 - **SQLite WAL 原子重建与后端安全加固（v1.5.5）**：`rebuildIndex` 将清理与回填合并进同一 `BEGIN IMMEDIATE` 事务（消除并发轮询空窗），`doctor` 清晰展示去重/原始调用数（`dbCalls/truthUniqueCalls (raw)`），`scanMcpTools` 新增 5s 快速内存缓存短接，悬浮窗 HTTP 令牌校验升级为常量时间 `crypto.timingSafeEqual`。
 
@@ -84,7 +84,7 @@
 
 > [!NOTE]
 > **已知宿主边界说明**
-> - **首字延迟（TTFT）**：官方 `transcript.jsonl` 暂未暴露流式 TTFT，调用明细中的耗时列如实展示**单步模型耗时**（已预留 `ttft_ms` / `ttftMs` 字段兼容，未来官方补充后自动切换）。
+> - **首字延迟（TTFT）与精确思考拆分**：`v1.5.5` 起通过零依赖只读模式（`node:sqlite` `{ readOnly: true }`）从 Antigravity 本地 `conversations/<id>.db` 提取每步纳秒级 TTFT、纯解码速度与精确思考/正文 Token 拆分；若未来宿主变更库结构或本地库不可用，自动 Fail-Open 回退至 Transcript + 工具耗时剥离估算，绝不影响使用。
 > - **多对话自动跟随**：只要在任意对话新建或发送消息，Hook 会第一时间记录活跃会话并让侧边栏与独立悬浮窗自动切换（同步对齐对应项目 Git 分支与记忆库）；若仅鼠标点选旧对话浏览（未发消息），在任一面板顶部下拉框点选即可让所有视图同步联动。
 > - **额度模块**：由于 Antigravity 暂未提供公开额度查询 API，界面默认隐藏「额度」页（核心代码与 `QuotaProvider` 扩展口仍完整保留在源码中，待官方接口开放后可无痛启用）。
 
@@ -125,7 +125,7 @@ cd antigravity-hub
 # 2. 安装开发期 UI 打包依赖（仅 devDependencies，绝不进入部署产物）
 npm install
 
-# 3. 运行全套 18 个自动化测试文件（63 项用例，完全隔离临时目录，零真实数据污染）
+# 3. 运行全套 18 个自动化测试文件（65 项用例，完全隔离临时目录，零真实数据污染）
 npm test
 
 # 4. 构建单文件 MCP App UI 并幂等部署至 ~/.gemini/config/plugins/context-cache
@@ -320,7 +320,8 @@ context-cache/
 │   │   ├── vault.mjs                    # 跨会话记忆 CRUD、Compact Brief 与三源三档交接胶囊
 │   │   ├── context-inspector.mjs        # 上下文构成拆解、资产元数据、安全只读脱敏预览与膨胀归因
 │   │   ├── transcript-parser.mjs        # 多版本增量游标解析、子 Agent 发现与流水提取
-│   │   ├── telemetry.mjs                # 多 Agent 调用明细、TPS、缓存击穿与 4 类预警
+│   │   ├── native-step-metrics.mjs      # 零依赖只读原生会话库（纳秒级 TTFT、纯解码耗时与精确思考拆分）
+│   │   ├── telemetry.mjs                # 多 Agent 调用明细、Decode TPS、工具耗时剥离、缓存击穿与 4 类预警
 │   │   ├── session-tracker.mjs          # 活跃对话自动跟随、跨视图联动与工作区对齐
 │   │   ├── quota.mjs                    # 5h/7d 滑动窗口、基线校准与 QuotaProvider 扩展口
 │   │   ├── popout-server.mjs            # 127.0.0.1 令牌鉴权悬浮小窗服务、握手与自动降级
@@ -345,7 +346,7 @@ context-cache/
 │       └── modules/                     # appearance-module / governance-module / i18n-module
 ├── plugin/                              # Antigravity 插件清单、Hooks、Rules、Skills 与图标
 ├── scripts/                             # deploy.mjs、pack-release.mjs 与 doctor.mjs
-├── tests/                               # 18 个自动化测试文件（63 项端到端 / 单元 / 韧性用例）
+├── tests/                               # 18 个自动化测试文件（65 项端到端 / 单元 / 韧性用例）
 ├── LICENSE                              # MIT License
 ├── README.md                            # 简体中文文档
 ├── README.en.md                         # English documentation
