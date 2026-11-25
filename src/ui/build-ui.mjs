@@ -18,6 +18,14 @@ function minifyHtmlTemplate(html) {
 
   const compacted = masked
     .replace(/<!--[\s\S]*?-->/g, '')
+    .replace(/<[^>]+>/g, (tag) => {
+      let t = tag;
+      if (/\bdata-i18n-title="/.test(t)) t = t.replace(/\s+title="[^"]*"/g, '');
+      if (/\bdata-i18n-placeholder="/.test(t)) t = t.replace(/\s+placeholder="[^"]*"/g, '');
+      if (/\bdata-i18n-aria="/.test(t)) t = t.replace(/\s+aria-label="[^"]*"/g, '');
+      return t;
+    })
+    .replace(/(<[^>]*\bdata-i18n="[^"]+"[^>]*>)[^<]+(<\/(?:span|div|button|p|h[1-6]|th|label|option|strong)>)/g, '$1$2')
     .replace(/>[ \t]*\r?\n[ \t]*</g, '><')
     .replace(/>[ \t]*\r?\n[ \t]*/g, '>')
     .replace(/[ \t]*\r?\n[ \t]*</g, '<')
@@ -41,6 +49,171 @@ export async function buildUi(options = {}) {
     /@modelcontextprotocol\/ext-apps/.test(entrySrc) &&
     fs.existsSync(nativeClientPath);
 
+  function compactHtmlTemplateQuasis(src) {
+    // Safely compact whitespace ONLY inside HTML template literal chunks containing markup tags
+    // (never touches JS code, comments, or plain-text prompts without HTML closing tags)
+    let out = '';
+    let i = 0;
+    const n = src.length;
+    while (i < n) {
+      const ch = src[i];
+      if (ch === "'" || ch === '"') {
+        const q = ch;
+        let j = i + 1;
+        while (j < n && src[j] !== q) {
+          if (src[j] === '\\') j++;
+          j++;
+        }
+        out += src.slice(i, j + 1);
+        i = j + 1;
+        continue;
+      }
+      if (ch === '/' && src[i + 1] === '/') {
+        const nl = src.indexOf('\n', i + 2);
+        const end = nl === -1 ? n : nl + 1;
+        out += src.slice(i, end);
+        i = end;
+        continue;
+      }
+      if (ch === '/' && src[i + 1] === '*') {
+        const end = src.indexOf('*/', i + 2);
+        const stop = end === -1 ? n : end + 2;
+        out += src.slice(i, stop);
+        i = stop;
+        continue;
+      }
+      if (ch === '`') {
+        // Scan until matching unescaped backtick (skipping ${...} expressions cleanly)
+        let j = i + 1;
+        let depth = 0;
+        let hasHtmlTag = false;
+        const segments = [];
+        let segStart = j;
+        while (j < n) {
+          const c = src[j];
+          if (depth === 0) {
+            if (c === '\\') {
+              j += 2;
+              continue;
+            }
+            if (c === '`') {
+              segments.push({ raw: true, text: src.slice(segStart, j) });
+              if (/<\/[a-z][a-z0-9-]*>/i.test(src.slice(segStart, j))) hasHtmlTag = true;
+              break;
+            }
+            if (c === '$' && src[j + 1] === '{') {
+              const txt = src.slice(segStart, j);
+              if (/<\/[a-z][a-z0-9-]*>/i.test(txt)) hasHtmlTag = true;
+              segments.push({ raw: true, text: txt });
+              depth = 1;
+              segStart = j;
+              j += 2;
+              continue;
+            }
+            j++;
+          } else {
+            if (c === "'" || c === '"') {
+              const q = c;
+              j++;
+              while (j < n && src[j] !== q) {
+                if (src[j] === '\\') j++;
+                j++;
+              }
+              j++;
+              continue;
+            }
+            if (c === '`') {
+              // Nested template literal inside ${...}: skip cleanly
+              j++;
+              let subDepth = 0;
+              while (j < n) {
+                if (src[j] === '\\') {
+                  j += 2;
+                  continue;
+                }
+                if (subDepth === 0 && src[j] === '`') {
+                  j++;
+                  break;
+                }
+                if (src[j] === '$' && src[j + 1] === '{') {
+                  subDepth++;
+                  j += 2;
+                  continue;
+                }
+                if (subDepth > 0 && src[j] === '}') subDepth--;
+                j++;
+              }
+              continue;
+            }
+            if (c === '{') depth++;
+            else if (c === '}') {
+              depth--;
+              if (depth === 0) {
+                segments.push({ raw: false, text: src.slice(segStart, j + 1) });
+                segStart = j + 1;
+              }
+            }
+            j++;
+          }
+        }
+        if (hasHtmlTag && j < n && src[j] === '`') {
+          out += '`';
+          for (const seg of segments) {
+            if (seg.raw) {
+              out += seg.text
+                .replace(/>[ \t]*\r?\n[ \t]*</g, '><')
+                .replace(/>[ \t]*\r?\n[ \t]+/g, '>')
+                .replace(/[ \t]*\r?\n[ \t]+</g, '<')
+                .replace(/[ \t]*\r?\n[ \t]+/g, ' ');
+            } else {
+              out += compactHtmlTemplateQuasis(seg.text);
+            }
+          }
+          out += '`';
+        } else {
+          out += src.slice(i, j + 1);
+        }
+        i = j + 1;
+        continue;
+      }
+      out += ch;
+      i++;
+    }
+    return out;
+  }
+
+  const compactHtmlLiteralsPlugin = {
+    name: 'compact-ui-html-literals',
+    setup(build) {
+      build.onLoad({ filter: /[\\/]src[\\/]ui[\\/]i18n-ui\.mjs$/ }, async (args) => {
+        const src = fs.readFileSync(args.path, 'utf8');
+        const m = src.match(/const ZH_CN\s*=\s*\{[\s\S]*?\r?\n\};\s*\r?\nconst EN\s*=\s*\{[\s\S]*?\r?\n\};/);
+        if (m) {
+          const mod = await import(`${pathToFileURL(args.path).href}?v=${Date.now()}`);
+          const dicts = mod.UI_DICTIONARIES;
+          if (dicts?.['zh-CN'] && dicts?.en) {
+            const paired = {};
+            for (const k of Object.keys(dicts['zh-CN'])) {
+              paired[k] = [dicts['zh-CN'][k], dicts.en[k] ?? dicts['zh-CN'][k]];
+            }
+            for (const k of Object.keys(dicts.en)) {
+              if (!paired[k]) paired[k] = [dicts.en[k], dicts.en[k]];
+            }
+            const packedCode =
+              `const _P=${JSON.stringify(paired)};` +
+              `const ZH_CN={},EN={};for(const k in _P){ZH_CN[k]=_P[k][0];EN[k]=_P[k][1];}`;
+            return { contents: src.replace(m[0], () => packedCode), loader: 'js' };
+          }
+        }
+        return { contents: src, loader: 'js' };
+      });
+      build.onLoad({ filter: /[\\/]src[\\/]ui[\\/].*\.mjs$/ }, (args) => {
+        const src = fs.readFileSync(args.path, 'utf8');
+        return { contents: compactHtmlTemplateQuasis(src), loader: 'js' };
+      });
+    },
+  };
+
   const esbuildOpts = {
     entryPoints: [entryPoint],
     bundle: true,
@@ -51,6 +224,7 @@ export async function buildUi(options = {}) {
     minify: true,
     legalComments: 'none',
     metafile: true,
+    plugins: [compactHtmlLiteralsPlugin],
   };
 
   if (usesLegacyExtApps) {

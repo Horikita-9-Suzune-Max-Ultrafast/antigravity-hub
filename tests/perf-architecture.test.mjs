@@ -50,17 +50,25 @@ function makeFakeGitRepo(dir) {
   execFileSync('git', ['commit', '-m', 'init'], { cwd: dir, stdio: 'ignore' });
 }
 
-test('Bundle slimming: dist/dashboard.html < 750 KB and strips unused zod/v4/locales bloat', () => {
+test('Bundle slimming: dist/dashboard.html <= 475 KiB (486,400 B), 0 bytes zod, 0 middle-dots, and valid design tokens', () => {
   const htmlPath = path.join(ROOT_DIR, 'dist', 'dashboard.html');
   assert.ok(fs.existsSync(htmlPath), 'dist/dashboard.html must exist (run npm run build:ui)');
   const html = fs.readFileSync(htmlPath, 'utf8');
   const bytes = Buffer.byteLength(html, 'utf8');
 
   assert.ok(
-    bytes < 750_000,
-    `Expected dist/dashboard.html to be < 750,000 B (baseline 1,004,627 B), got ${bytes} B`
+    bytes <= 486_400,
+    `Expected dist/dashboard.html to be <= 486,400 B (475 KiB), got ${bytes} B (${(bytes / 1024).toFixed(1)} KiB)`
   );
-  // Ensure non-English zod/v4/locales strings were stubbed out
+
+  // Zero zod residue in built bundle (SEP-1865 lightweight client replaces @modelcontextprotocol/ext-apps)
+  const scriptMatch = /<script>([\s\S]*?)<\/script>/i.exec(html);
+  assert.ok(scriptMatch && scriptMatch[1].length > 1000, 'Inline script must exist in dist/dashboard.html');
+  assert.equal(
+    /zod/i.test(scriptMatch[1]),
+    false,
+    'dist/dashboard.html inline script must contain 0 bytes of zod'
+  );
   for (const snippet of [
     'Entrada inválida',
     'Ungültige Eingabe',
@@ -74,6 +82,42 @@ test('Bundle slimming: dist/dashboard.html < 750 KB and strips unused zod/v4/loc
       `dist/dashboard.html must not contain unused zod locale string: ${snippet}`
     );
   }
+
+  // Zero literal middle-dot (U+00B7) and zero var(--danger) across all src/ files
+  const walkSrc = (dir, acc = []) => {
+    for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, ent.name);
+      if (ent.isDirectory()) walkSrc(full, acc);
+      else if (/\.(mjs|css|html)$/i.test(ent.name)) acc.push(full);
+    }
+    return acc;
+  };
+  const srcFiles = walkSrc(path.join(ROOT_DIR, 'src'));
+  for (const f of srcFiles) {
+    const content = fs.readFileSync(f, 'utf8');
+    assert.equal(
+      content.includes('\u00b7'),
+      false,
+      `Source file must not contain literal middle-dot U+00B7: ${path.relative(ROOT_DIR, f)}`
+    );
+    assert.equal(
+      /var\(\s*--danger\s*\)/.test(content),
+      false,
+      `Source file must not reference undefined var(--danger): ${path.relative(ROOT_DIR, f)}`
+    );
+  }
+
+  // Formal token definitions for --muted, --popover, --error must exist in styles.css
+  const css = fs.readFileSync(path.join(ROOT_DIR, 'src', 'ui', 'styles.css'), 'utf8');
+  assert.match(css, /--muted\s*:/, 'styles.css must formally define --muted');
+  assert.match(css, /--popover\s*:/, 'styles.css must formally define --popover');
+  assert.match(css, /--error\s*:/, 'styles.css must formally define --error');
+
+  // Modular thin entry point budgets
+  const serverLines = fs.readFileSync(path.join(ROOT_DIR, 'src', 'mcp', 'server.mjs'), 'utf8').split(/\r?\n/).length;
+  const appLines = fs.readFileSync(path.join(ROOT_DIR, 'src', 'ui', 'app.mjs'), 'utf8').split(/\r?\n/).length;
+  assert.ok(serverLines < 550, `src/mcp/server.mjs must stay < 550 lines, got ${serverLines}`);
+  assert.ok(appLines < 650, `src/ui/app.mjs must stay < 650 lines, got ${appLines}`);
 });
 
 test('CSS GPU & compositor guarantees: zero backdrop-filter, zero infinite 60fps animations, closed modals display:none', () => {

@@ -261,7 +261,7 @@ export function createI18nModule({
       verEl.textContent = data?.appVersion ? `Antigravity v${data.appVersion}` : '版本未探测';
       if (data?.electronVersion) {
         verEl.title = data?.appVersion
-          ? `Antigravity v${data.appVersion} · Electron v${data.electronVersion}`
+          ? `Antigravity v${data.appVersion} / Electron v${data.electronVersion}`
           : `Electron v${data.electronVersion}`;
       } else {
         verEl.removeAttribute?.('title');

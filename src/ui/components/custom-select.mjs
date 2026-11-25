@@ -236,3 +236,61 @@ export function renderModelSimSelect(fromPoll, { state, tr }) {
     clampOpenSelectMenus();
   }
 }
+
+export function renderCallsSelects({ state, tr }) {
+  const models = [...new Set((state.callsData?.calls || []).map((c) => c.model).filter(Boolean))];
+  renderCustomSelect(
+    'callsModelFilterHost',
+    {
+      id: 'callsModel',
+      value: state.callsModelFilter,
+      options: [{ value: '', label: tr('monitor.calls.allModels') }, ...models.map((m) => ({ value: m, label: m }))],
+      compact: true,
+    },
+    { state, tr }
+  );
+  renderCustomSelect(
+    'callsAgentFilterHost',
+    {
+      id: 'callsAgent',
+      value: state.callsAgentFilter,
+      options: [
+        { value: 'all', label: tr('monitor.calls.allAgents') },
+        { value: 'main', label: tr('monitor.calls.mainOnly') },
+        { value: 'sub', label: tr('monitor.calls.subOnly') },
+      ],
+      compact: true,
+    },
+    { state, tr }
+  );
+}
+
+export function renderVaultSelects({ state, tr }) {
+  const kinds = [
+    { value: 'decision', label: tr('monitor.vault.kindDecision') },
+    { value: 'architecture', label: tr('monitor.vault.kindArch') },
+    { value: 'constraint', label: tr('monitor.vault.kindConstraint') },
+    { value: 'pitfall', label: tr('monitor.vault.kindPitfall') },
+    { value: 'checkpoint', label: tr('monitor.vault.kindCheckpoint') },
+  ];
+  renderCustomSelect(
+    'vaultKindHost',
+    {
+      id: 'vaultKind',
+      value: state.vaultKindFilter,
+      options: [{ value: '', label: tr('monitor.vault.allKinds') }, ...kinds],
+      compact: true,
+    },
+    { state, tr }
+  );
+  renderCustomSelect(
+    'newMemKindHost',
+    {
+      id: 'newMemKind',
+      value: state.newMemKind,
+      options: kinds,
+      fullWidth: true,
+    },
+    { state, tr }
+  );
+}

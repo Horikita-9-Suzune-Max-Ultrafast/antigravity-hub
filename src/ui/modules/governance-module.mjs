@@ -65,6 +65,8 @@ function fmtTime(iso) {
 export function createGovernanceModule({
   callAppTool,
   esc,
+  tr,
+  getUiLang,
   showToast,
   positionIndicator,
   onOpenSettings,
@@ -72,6 +74,8 @@ export function createGovernanceModule({
   canSendMessage,
   sendToAgent,
 }) {
+  const t = (key, vars = null) => (typeof tr === 'function' ? tr(key, vars) : key);
+  const isEn = () => (typeof getUiLang === 'function' ? getUiLang() === 'en' : false);
   const state = {
     activeSubTab: 'overview', // 'overview' | 'extensions' | 'harness' | 'profiles'
     loaded: false,
@@ -133,10 +137,11 @@ export function createGovernanceModule({
     const topDot = byId('topBarGovDot');
     if (!state.overview) return;
     const score = state.overview.lint?.score ?? 100;
+    const grade = state.overview.lint?.grade || (score >= 90 ? 'A' : score >= 75 ? 'B' : score >= 60 ? 'C' : 'D');
     const errCount = state.overview.lint?.counts?.errors ?? 0;
     if (pill) {
-      pill.textContent = `体检 ${score} 分`;
-      pill.dataset.tone = errCount > 0 ? 'error' : score < 85 ? 'warning' : 'success';
+      pill.textContent = isEn() ? `Score ${score} (${grade})` : `体检 ${score} 分 (${grade})`;
+      pill.dataset.tone = errCount > 0 ? 'error' : score < 75 ? 'warning' : 'success';
     }
     const showDot = errCount > 0;
     if (railDot) railDot.classList.toggle('hidden', !showDot);
@@ -148,24 +153,67 @@ export function createGovernanceModule({
     if (!ov) return;
     const s = ov.ecosystem.summary;
     const lint = ov.lint;
+    const en = isEn();
+    const grade = lint.grade || (lint.score >= 90 ? 'A' : lint.score >= 75 ? 'B' : lint.score >= 60 ? 'C' : 'D');
 
     const scoreEl = byId('govHealthScoreBig');
     if (scoreEl) {
       scoreEl.textContent = `${lint.score}`;
       scoreEl.className = `text-3xl font-semibold mono-num tracking-tight ${
-        lint.counts.errors > 0 ? 'text-danger' : lint.score < 85 ? 'text-warning' : 'text-success'
+        lint.counts.errors > 0 ? 'text-error' : lint.score < 75 ? 'text-warning' : 'text-success'
       }`;
+    }
+
+    const gradeEl = byId('govGradeBadge');
+    if (gradeEl) {
+      gradeEl.textContent = grade;
+      gradeEl.dataset.grade = grade;
+      gradeEl.classList.remove('hidden');
+    }
+
+    const pillarsHost = byId('govPillarsGrid');
+    if (pillarsHost && lint.pillars) {
+      const pillarOrder = [
+        { id: 'security', label: en ? 'Security' : '隐私安全' },
+        { id: 'integrity', label: en ? 'Integrity' : '结构完整' },
+        { id: 'efficiency', label: en ? 'Efficiency' : '上下文效率' },
+        { id: 'hygiene', label: en ? 'Hygiene' : '规范秩序' },
+      ];
+      pillarsHost.innerHTML = pillarOrder
+        .map(({ id, label }) => {
+          const p = lint.pillars[id] || { score: 0, max: 25, penalty: 0 };
+          const ratio = p.max > 0 ? Math.max(0, Math.min(1, p.score / p.max)) : 0;
+          const tone = ratio < 0.6 ? 'error' : ratio < 0.82 ? 'warn' : 'ok';
+          return `
+            <div class="gov-pillar-card" data-pillar="${id}" data-tone="${tone}">
+              <div class="gov-pillar-head">
+                <span class="text-muted truncate">${esc(label)}</span>
+                <span class="mono-num font-semibold text-fg">${Number(p.score).toFixed(1)}/${p.max}</span>
+              </div>
+              <div class="gov-pillar-bar-track">
+                <div class="gov-pillar-bar-fill" style="--ratio: ${ratio.toFixed(4)};"></div>
+              </div>
+            </div>`;
+        })
+        .join('');
     }
 
     const metaEl = byId('govHealthSummaryText');
     if (metaEl) {
-      const parts = [
-        `严重 ${lint.counts.errors}`,
-        `警告 ${lint.counts.warnings}`,
-        `提示 ${lint.counts.infos}`,
-        `隐私扫描 ${lint.counts.scannedFiles} 份文件（${lint.counts.secretHits} 处告警）`,
-      ];
-      if (lint.counts.ignored > 0) parts.push(`已忽略 ${lint.counts.ignored} 项`);
+      const parts = en
+        ? [
+            `Errors ${lint.counts.errors}`,
+            `Warnings ${lint.counts.warnings}`,
+            `Infos ${lint.counts.infos}`,
+            `Secrets scanned ${lint.counts.scannedFiles} files (${lint.counts.secretHits} hits)`,
+          ]
+        : [
+            `严重 ${lint.counts.errors}`,
+            `警告 ${lint.counts.warnings}`,
+            `提示 ${lint.counts.infos}`,
+            `隐私扫描 ${lint.counts.scannedFiles} 份文件（${lint.counts.secretHits} 处告警）`,
+          ];
+      if (lint.counts.ignored > 0) parts.push(en ? `Ignored ${lint.counts.ignored}` : `已忽略 ${lint.counts.ignored} 项`);
       metaEl.textContent = parts.join('  ');
     }
 
@@ -174,12 +222,21 @@ export function createGovernanceModule({
 
     const countsGrid = byId('govAssetKpis');
     if (countsGrid) {
-      countsGrid.innerHTML = [
-        { label: '已启插件', val: `${s.pluginsEnabled}/${s.pluginsTotal}` },
-        { label: '活跃 MCP', val: `${s.mcpEnabled}/${s.mcpTotal}` },
-        { label: '生效 Skills', val: `${s.skillsActive}/${s.skillsTotal}` },
-        { label: '生效 Rules / Hooks', val: `${s.rulesActive} / ${s.hooksActive}` },
-      ]
+      countsGrid.innerHTML = (
+        en
+          ? [
+              { label: 'Plugins', val: `${s.pluginsEnabled}/${s.pluginsTotal}` },
+              { label: 'Active MCP', val: `${s.mcpEnabled}/${s.mcpTotal}` },
+              { label: 'Skills', val: `${s.skillsActive}/${s.skillsTotal}` },
+              { label: 'Rules / Hooks', val: `${s.rulesActive} / ${s.hooksActive}` },
+            ]
+          : [
+              { label: '已启插件', val: `${s.pluginsEnabled}/${s.pluginsTotal}` },
+              { label: '活跃 MCP', val: `${s.mcpEnabled}/${s.mcpTotal}` },
+              { label: '生效 Skills', val: `${s.skillsActive}/${s.skillsTotal}` },
+              { label: '生效 Rules / Hooks', val: `${s.rulesActive} / ${s.hooksActive}` },
+            ]
+      )
         .map(
           (k) => `
           <div class="space-y-0.5">
@@ -199,8 +256,12 @@ export function createGovernanceModule({
       fixAllBtn.classList.toggle('hidden', agentFixable.length === 0);
       if (agentFixable.length > 0) {
         fixAllBtn.textContent = hasDirectSend
-          ? `打包交给 Agent (${agentFixable.length})`
-          : `复制全部修复提示词 (${agentFixable.length})`;
+          ? en
+            ? `Send All to Agent (${agentFixable.length})`
+            : `打包交给 Agent (${agentFixable.length})`
+          : en
+            ? `Copy All Fix Prompts (${agentFixable.length})`
+            : `复制全部修复提示词 (${agentFixable.length})`;
       }
     }
 
@@ -209,7 +270,11 @@ export function createGovernanceModule({
       if (!lint.findings.length) {
         listEl.innerHTML = `
           <div class="px-5 py-6 text-center text-xs text-success">
-            全部离线体检通过（MCP 健康、Skill 质量、隐私防泄露与配置解析均无异常）。
+            ${esc(
+              en
+                ? 'All offline checks passed (MCP health, Skill quality, secrets & config).'
+                : '全部离线体检通过（MCP 健康、Skill 质量、隐私防泄露与配置解析均无异常）。'
+            )}
           </div>`;
       } else {
         listEl.innerHTML = lint.findings
@@ -221,55 +286,62 @@ export function createGovernanceModule({
             if (strategy === 'secret_manual') {
               if (f.absFile) {
                 btns.push(
-                  `<button type="button" class="agy-btn agy-btn-secondary text-xs" data-gov-preview-file="${esc(f.absFile)}" data-gov-preview-title="${esc(f.target || '脱敏预览')}">脱敏预览</button>`
+                  `<button type="button" class="agy-btn agy-btn-secondary text-xs" data-gov-preview-file="${esc(f.absFile)}" data-gov-preview-title="${esc(f.target || (en ? 'Preview' : '脱敏预览'))}">${en ? 'Preview' : '脱敏预览'}</button>`
                 );
               }
               if (rem.prompt) {
                 btns.push(
-                  `<button type="button" class="agy-btn agy-btn-secondary text-xs" data-gov-fix-idx="${idx}">安全改造提示词</button>`
+                  `<button type="button" class="agy-btn agy-btn-secondary text-xs" data-gov-fix-idx="${idx}">${en ? 'Safe Fix Prompt' : '安全改造提示词'}</button>`
                 );
               }
             } else if (strategy === 'local_toggle') {
               if (rem.actionTargetTab) {
                 btns.push(
-                  `<button type="button" class="agy-btn agy-btn-primary text-xs" data-gov-jump-tab="${esc(rem.actionTargetTab)}" data-gov-jump-search="${esc(rem.searchHint || '')}">前往处理</button>`
+                  `<button type="button" class="agy-btn agy-btn-primary text-xs" data-gov-jump-tab="${esc(rem.actionTargetTab)}" data-gov-jump-search="${esc(rem.searchHint || '')}">${en ? 'Manage' : '前往处理'}</button>`
                 );
               }
               if (rem.prompt) {
                 btns.push(
-                  `<button type="button" class="agy-btn agy-btn-secondary text-xs" data-gov-fix-idx="${idx}">${hasDirectSend ? '交给 Agent' : '修复提示词'}</button>`
+                  `<button type="button" class="agy-btn agy-btn-secondary text-xs" data-gov-fix-idx="${idx}">${hasDirectSend ? (en ? 'Fix w/ Agent' : '交给 Agent') : en ? 'Fix Prompt' : '修复提示词'}</button>`
                 );
               }
             } else {
               if (rem.prompt) {
                 btns.push(
-                  `<button type="button" class="agy-btn agy-btn-primary text-xs" data-gov-fix-idx="${idx}">${hasDirectSend ? '交给 Agent' : '修复提示词'}</button>`
+                  `<button type="button" class="agy-btn agy-btn-primary text-xs" data-gov-fix-idx="${idx}">${hasDirectSend ? (en ? 'Fix w/ Agent' : '交给 Agent') : en ? 'Fix Prompt' : '修复提示词'}</button>`
                 );
               }
               if (rem.actionTargetTab) {
                 btns.push(
-                  `<button type="button" class="agy-btn agy-btn-secondary text-xs" data-gov-jump-tab="${esc(rem.actionTargetTab)}" data-gov-jump-search="${esc(rem.searchHint || '')}">前往停用</button>`
+                  `<button type="button" class="agy-btn agy-btn-secondary text-xs" data-gov-jump-tab="${esc(rem.actionTargetTab)}" data-gov-jump-search="${esc(rem.searchHint || '')}">${en ? 'Disable' : '前往停用'}</button>`
                 );
               }
             }
 
             if (f.id) {
               btns.push(
-                `<button type="button" class="agy-btn agy-btn-secondary text-xs" data-gov-ignore-id="${esc(f.id)}">忽略</button>`
+                `<button type="button" class="agy-btn agy-btn-secondary text-xs" data-gov-ignore-id="${esc(f.id)}">${en ? 'Ignore' : '忽略'}</button>`
               );
             }
+
+            const impactVal = Number(f.impactPts);
+            const impactBadge =
+              Number.isFinite(impactVal) && impactVal > 0
+                ? `<span class="gov-impact-badge mono-num" title="${esc(en ? 'Estimated score gain if resolved' : '修复此项预计提分')}">+${impactVal.toFixed(1)}</span>`
+                : '';
 
             return `
             <div class="px-5 py-3.5 flex flex-wrap items-start justify-between gap-3">
               <div class="min-w-0 flex-1 space-y-1" style="min-width: min(240px, 100%);">
                 <div class="flex flex-wrap items-center gap-1.5">
-                  <span class="gov-sev-badge" data-sev="${esc(f.severity)}">${esc(SEVERITY_LABEL[f.severity] || f.severity)}</span>
-                  <span class="agy-pill text-xs">${esc(CATEGORY_LABEL[f.category] || f.category)}</span>
-                  ${f.isPluginManaged ? `<span class="agy-pill text-xs text-muted">已安装插件</span>` : ''}
+                  <span class="gov-sev-badge" data-sev="${esc(f.severity)}">${esc(en ? f.severity.toUpperCase() : SEVERITY_LABEL[f.severity] || f.severity)}</span>
+                  <span class="agy-pill text-xs">${esc(en ? f.category : CATEGORY_LABEL[f.category] || f.category)}</span>
+                  ${impactBadge}
+                  ${f.isPluginManaged ? `<span class="agy-pill text-xs text-muted">${en ? 'Plugin' : '已安装插件'}</span>` : ''}
                   <span class="text-xs font-medium text-fg truncate">${esc(f.target || '')}</span>
                 </div>
                 <div class="text-xs text-fg leading-relaxed break-words">${esc(f.message)}</div>
-                ${rem.summary ? `<div class="text-xs text-muted leading-relaxed break-words">建议：${esc(rem.summary)}</div>` : ''}
+                ${rem.summary ? `<div class="text-xs text-muted leading-relaxed break-words">${en ? 'Tip: ' : '建议：'}${esc(rem.summary)}</div>` : ''}
                 ${f.file ? `<div class="text-xs text-muted mono-num truncate">${esc(f.file)}</div>` : ''}
               </div>
               <div class="shrink-0 flex flex-wrap items-center gap-1.5 pt-0.5">
@@ -1002,9 +1074,9 @@ export function createGovernanceModule({
         noticeEl.textContent = notice;
         noticeEl.classList.remove('hidden');
         noticeEl.style.borderColor =
-          noticeTone === 'danger' ? 'var(--danger)' : noticeTone === 'warning' ? 'var(--warning)' : 'var(--border)';
+          noticeTone === 'danger' ? 'var(--error)' : noticeTone === 'warning' ? 'var(--warning)' : 'var(--border)';
         noticeEl.style.color =
-          noticeTone === 'danger' ? 'var(--danger)' : noticeTone === 'warning' ? 'var(--warning)' : 'var(--muted)';
+          noticeTone === 'danger' ? 'var(--error)' : noticeTone === 'warning' ? 'var(--warning)' : 'var(--muted-foreground)';
       } else {
         noticeEl.classList.add('hidden');
       }
@@ -1293,6 +1365,7 @@ export function createGovernanceModule({
     init,
     activate,
     loadOverview,
+    renderAll,
     setSubTab,
     positionSubNav,
   };

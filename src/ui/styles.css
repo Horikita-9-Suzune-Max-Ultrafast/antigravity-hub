@@ -890,13 +890,16 @@ body[data-win-mode="orb"] #orbView {
 }
 
 /* ==================== Brand Prism Health State Tinting (Full-Model) ==================== */
+.hub-brand-svg { color: var(--blue-9); transition: color var(--t-base); }
 .hub-brand-svg :is(.brand-bg, .brand-wing, .brand-mid, .brand-accent, .brand-ring, .brand-dot) {
   transition: fill var(--t-base), stroke var(--t-base);
 }
 .hub-brand-svg .brand-bg { fill: var(--blue-9); }
 .hub-brand-svg :is(.brand-wing, .brand-mid) { stroke: var(--blue-4); }
+.hub-brand-svg:not([data-static="true"]):is([data-health="warn"], [data-kv-state="warn"]) { color: var(--amber-9); }
 .hub-brand-svg:not([data-static="true"]):is([data-health="warn"], [data-kv-state="warn"]) .brand-bg { fill: var(--amber-9); }
 .hub-brand-svg:not([data-static="true"]):is([data-health="warn"], [data-kv-state="warn"]) :is(.brand-wing, .brand-mid, .brand-accent, .brand-ring) { stroke: var(--amber-3); }
+.hub-brand-svg:not([data-static="true"]):is([data-health="danger"], [data-kv-state="danger"]) { color: var(--red-9); }
 .hub-brand-svg:not([data-static="true"]):is([data-health="danger"], [data-kv-state="danger"]) .brand-bg { fill: var(--red-9); }
 .hub-brand-svg:not([data-static="true"]):is([data-health="danger"], [data-kv-state="danger"]) :is(.brand-wing, .brand-mid, .brand-accent, .brand-ring) { stroke: var(--red-3); }
 

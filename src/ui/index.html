@@ -4,12 +4,25 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Antigravity Hub</title>
-  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 128 128'%3E%3Crect x='14' y='14' width='100' height='100' rx='24' fill='%231D4ED8'/%3E%3Cpath d='M64 34L94 49L64 64L34 49L64 34Z' fill='%23fff'/%3E%3Cpath d='M34 65L64 80L94 65' stroke='%2393C5FD' stroke-width='7' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cpath d='M34 81L64 96L94 81' stroke='%2334D399' stroke-width='7' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3Ccircle cx='91' cy='37' r='7' fill='%2334D399' stroke='%231D4ED8' stroke-width='3'/%3E%3C/svg%3E" />
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 128 128'%3E%3Crect x='10' y='10' width='108' height='108' rx='28' fill='%230090FF'/%3E%3Cpath d='M64 26L92 50L64 74L36 50L64 26Z' fill='%23FFFFFF'/%3E%3Cpath d='M32 78L64 98L96 78' stroke='%23D5EFFF' stroke-width='10' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E" />
   <style>
 /* INLINE_STYLES */
   </style>
 </head>
 <body>
+  <!-- Unified SVG Icon Sprite is injected synchronously by ensureIconSprite() on boot -->
+
+  <!-- 48x48px Circular Status Floating Orb View (win-mode="orb") -->
+  <div id="orbView" class="orb-view" data-health="safe" data-active-turn="false" role="button" tabindex="0" aria-label="Antigravity Hub">
+    <svg class="orb-ring-svg" viewBox="0 0 44 44" aria-hidden="true">
+      <circle class="orb-ring-track" cx="22" cy="22" r="19"/>
+      <circle class="orb-ring-progress" cx="22" cy="22" r="19" stroke-dasharray="119.38" stroke-dashoffset="113.41"/>
+    </svg>
+    <span class="orb-center-mark" aria-hidden="true">
+      <svg width="20" height="20" class="hub-brand-svg" data-health="safe" data-kv-state="safe"><use href="#hub-logo-sm"/></svg>
+    </span>
+  </div>
+
   <!-- 原生无框悬浮窗 8 方向自由缩放热区（仅 native=1 模式显示） -->
   <div id="nativeResizeHandles" class="hidden" aria-hidden="true">
     <div class="win-resize win-resize-n" data-ht="12"></div>
@@ -22,17 +35,10 @@
     <div class="win-resize win-resize-se" data-ht="17"></div>
   </div>
 
-  <!-- 统一 Antigravity 2.0 设计语言的无框自定义顶栏（替代原生 Edge/Windows 标题栏） -->
+  <!-- 统一 Antigravity 2.0 设计语言的无框自定义顶栏 -->
   <div id="nativeTitleBar" class="native-titlebar hidden">
     <div id="titleBarDragZone" class="native-titlebar-drag" title="拖动窗口，双击放大或还原" data-i18n-title="titlebar.dragTitle">
-      <svg id="titleBarBrandIcon" width="18" height="18" viewBox="0 0 128 128" fill="none" class="shrink-0 hub-brand-svg" data-kv-state="safe">
-        <rect class="brand-bg" x="10" y="10" width="108" height="108" rx="26" fill="#1D4ED8"/>
-        <rect class="brand-ring" x="12" y="12" width="104" height="104" rx="24" stroke="#93C5FD" stroke-opacity="0.35" stroke-width="3"/>
-        <path d="M64 32L95 48L64 64L33 48L64 32Z" fill="#FFFFFF" fill-opacity="0.96"/>
-        <path class="brand-mid" d="M33 65L64 81L95 65" stroke="#93C5FD" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
-        <path class="brand-accent" d="M33 82L64 98L95 82" stroke="#34D399" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
-        <circle class="brand-dot" cx="93" cy="35" r="8" fill="#34D399" stroke="#1D4ED8" stroke-width="3"/>
-      </svg>
+      <svg id="titleBarBrandIcon" width="18" height="18" class="shrink-0 hub-brand-svg" data-health="safe" data-kv-state="safe" aria-hidden="true"><use href="#hub-logo-sm"/></svg>
       <span class="native-titlebar-name truncate">Antigravity Hub</span>
       <div id="titleBarMiniModules" class="native-titlebar-modules hidden" aria-label="迷你状态模块"></div>
       <span id="titleBarMiniSummary" class="native-titlebar-mini hidden mono-num">0.0%</span>
@@ -42,33 +48,25 @@
 
     <div class="native-titlebar-actions">
       <button id="winPinBtn" type="button" data-pinned="true" class="win-pin-btn" title="已置顶，点击取消" data-i18n-title="titlebar.pinnedTitle">
-        <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M9.8 2.2l4 4-1.4 1.4-1.2-.5-2.7 2.7.5 1.8-1.1 1.1-2.8-2.8-2.9 2.9-.7-.7 2.9-2.9L1.6 6.4l1.1-1.1 1.8.5 2.7-2.7-.5-1.2 1.4-1.4z"/>
-        </svg>
+        <svg width="12" height="12" class="agy-ico" aria-hidden="true"><use href="#ico-pin"/></svg>
         <span id="winPinLabel" data-i18n="titlebar.pinned">已固定</span>
       </button>
 
       <span class="native-titlebar-sep" aria-hidden="true"></span>
 
       <button id="winMinBtn" type="button" class="win-ctrl-btn" title="收缩或展开迷你条" data-i18n-title="titlebar.collapseTitle">
-        <svg id="winMinSvg" width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M4.2 9.8L8 6l3.8 3.8"/>
+        <svg id="winMinSvg" width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M4 10l4-4 4 4"/>
         </svg>
       </button>
-      <button id="winMinimizeBtn" type="button" class="win-ctrl-btn" title="最小化" data-i18n-title="titlebar.minimizeTitle">
-        <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M3.5 8.5h9"/>
-        </svg>
+      <button id="winMinimizeBtn" type="button" class="win-ctrl-btn" title="收起为悬浮球" data-i18n-title="titlebar.minimizeTitle">
+        <svg width="12" height="12" class="agy-ico" aria-hidden="true"><use href="#ico-minimize"/></svg>
       </button>
       <button id="winMaxBtn" type="button" class="win-ctrl-btn" title="放大或还原" data-i18n-title="titlebar.maximizeTitle">
-        <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round">
-          <rect x="3" y="3" width="10" height="10" rx="2"/>
-        </svg>
+        <svg width="11" height="11" class="agy-ico" aria-hidden="true"><use href="#ico-maximize"/></svg>
       </button>
       <button id="winCloseBtn" type="button" class="win-ctrl-btn win-ctrl-close" title="关闭悬浮窗" data-i18n-title="titlebar.closeTitle">
-        <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round">
-          <path d="M4 4l8 8M12 4l-8 8"/>
-        </svg>
+        <svg width="12" height="12" class="agy-ico" aria-hidden="true"><use href="#ico-close"/></svg>
       </button>
     </div>
   </div>
@@ -109,49 +107,33 @@
     <aside id="consoleRail" class="console-rail" aria-label="Antigravity Hub 模块导航" data-i18n-aria="nav.ariaModules">
       <div class="console-rail-top">
         <div class="console-rail-brand" title="Antigravity Hub">
-          <svg id="railBrandIcon" width="22" height="22" viewBox="0 0 128 128" fill="none" class="hub-brand-svg" data-kv-state="safe">
-            <rect class="brand-bg" x="10" y="10" width="108" height="108" rx="26" fill="#1D4ED8"/>
-            <path d="M64 32L95 48L64 64L33 48L64 32Z" fill="#FFFFFF" fill-opacity="0.96"/>
-            <path class="brand-mid" d="M33 65L64 81L95 65" stroke="#93C5FD" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
-            <path class="brand-accent" d="M33 82L64 98L95 82" stroke="#34D399" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
-            <circle class="brand-dot" cx="93" cy="35" r="8" fill="#34D399" stroke="#1D4ED8" stroke-width="3"/>
-          </svg>
+          <svg id="railBrandIcon" width="22" height="22" class="hub-brand-svg" data-health="safe" data-kv-state="safe" aria-hidden="true"><use href="#hub-logo-mark"/></svg>
         </div>
 
         <button type="button" class="console-rail-btn" data-module="monitor" data-active="true" title="上下文监控" data-i18n-title="nav.monitorTitle">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M3 12h4l3-7 4 14 3-7h4"/>
-          </svg>
+          <svg width="18" height="18" class="agy-ico" aria-hidden="true"><use href="#ico-monitor"/></svg>
           <span class="console-rail-lbl" data-i18n="nav.monitor">监控</span>
         </button>
 
+        <button type="button" class="console-rail-btn" data-module="review" data-active="false" title="本地代码审查" data-i18n-title="nav.reviewTitle">
+          <svg width="18" height="18" class="agy-ico" aria-hidden="true"><use href="#ico-review"/></svg>
+          <span class="console-rail-lbl" data-i18n="nav.review">审查</span>
+          <span id="railReviewAlertDot" class="console-rail-dot hidden" data-tone="error" title="检测到高危代码审查问题" data-i18n-title="nav.reviewAlertTitle"></span>
+        </button>
+
         <button type="button" class="console-rail-btn" data-module="governance" data-active="false" title="生态治理" data-i18n-title="nav.governanceTitle">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M12 3l8 4v5c0 5-3.5 8.5-8 9-4.5-.5-8-4-8-9V7l8-4z"/>
-            <path d="M9 12l2 2 4-4"/>
-          </svg>
+          <svg width="18" height="18" class="agy-ico" aria-hidden="true"><use href="#ico-governance"/></svg>
           <span class="console-rail-lbl" data-i18n="nav.governance">治理</span>
           <span id="railGovAlertDot" class="console-rail-dot hidden" title="检测到待处理告警" data-i18n-title="nav.governanceAlertTitle"></span>
         </button>
 
         <button type="button" class="console-rail-btn" data-module="appearance" data-active="false" title="外观壁纸" data-i18n-title="nav.appearanceTitle">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round">
-            <rect x="3" y="4" width="18" height="16" rx="3"/>
-            <circle cx="9" cy="10" r="1.5"/>
-            <path d="M21 15l-4.5-4.5L9 18"/>
-          </svg>
+          <svg width="18" height="18" class="agy-ico" aria-hidden="true"><use href="#ico-appearance"/></svg>
           <span class="console-rail-lbl" data-i18n="nav.appearance">壁纸</span>
         </button>
 
         <button type="button" class="console-rail-btn" data-module="i18n" data-active="false" title="界面汉化" data-i18n-title="nav.i18nTitle">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M5 8l6 6"/>
-            <path d="M4 14l6-6 2-3"/>
-            <path d="M2 5h12"/>
-            <path d="M7 2h1"/>
-            <path d="M22 22l-5-10-5 10"/>
-            <path d="M14 18h6"/>
-          </svg>
+          <svg width="18" height="18" class="agy-ico" aria-hidden="true"><use href="#ico-i18n"/></svg>
           <span class="console-rail-lbl" data-i18n="nav.i18n">汉化</span>
           <span id="railI18nAlertDot" class="console-rail-dot hidden" title="客户端已更新，汉化待重打" data-i18n-title="nav.i18nAlertTitle"></span>
         </button>
@@ -159,10 +141,7 @@
 
       <div class="console-rail-bottom">
         <button id="railSettingsBtn" type="button" class="console-rail-btn" data-active="false" title="插件设置" data-i18n-title="nav.settingsTitle">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round" class="gear-svg">
-            <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/>
-            <circle cx="12" cy="12" r="3"/>
-          </svg>
+          <svg width="18" height="18" class="agy-ico gear-svg" aria-hidden="true"><use href="#ico-settings"/></svg>
           <span class="console-rail-lbl" data-i18n="nav.settings">设置</span>
         </button>
       </div>
@@ -170,47 +149,42 @@
 
     <!-- 主工作区容器（Container Query 基准） -->
     <div id="consoleWorkspace" class="console-workspace scroll-thin">
-      <!-- 窄屏顶部紧凑模块切换条（<= 680px 显示） -->
+      <!-- 窄屏顶部紧凑 5 模块切换条（<= 680px 显示） -->
       <nav id="consoleTopBar" class="console-top-bar" aria-label="模块切换" data-i18n-aria="nav.ariaSwitch">
         <div class="console-top-switcher">
           <button type="button" class="console-top-btn" data-module="monitor" data-active="true">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="shrink-0">
-              <path d="M3 12h4l3-7 4 14 3-7h4"/>
-            </svg>
+            <svg width="13" height="13" class="agy-ico shrink-0" aria-hidden="true"><use href="#ico-monitor"/></svg>
             <span class="truncate" data-i18n="nav.monitor">监控</span>
           </button>
+          <button type="button" class="console-top-btn" data-module="review" data-active="false">
+            <svg width="13" height="13" class="agy-ico shrink-0" aria-hidden="true"><use href="#ico-review"/></svg>
+            <span class="truncate" data-i18n="nav.review">审查</span>
+            <span id="topBarReviewDot" class="dot-sm hidden" style="width:6px;height:6px;background:var(--error);"></span>
+          </button>
           <button type="button" class="console-top-btn" data-module="governance" data-active="false">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="shrink-0">
-              <path d="M12 3l8 4v5c0 5-3.5 8.5-8 9-4.5-.5-8-4-8-9V7l8-4z"/>
-              <path d="M9 12l2 2 4-4"/>
-            </svg>
+            <svg width="13" height="13" class="agy-ico shrink-0" aria-hidden="true"><use href="#ico-governance"/></svg>
             <span class="truncate" data-i18n="nav.governance">治理</span>
-            <span id="topBarGovDot" class="dot-sm hidden" style="width:6px;height:6px;background:var(--danger);"></span>
+            <span id="topBarGovDot" class="dot-sm hidden" style="width:6px;height:6px;background:var(--error);"></span>
           </button>
           <button type="button" class="console-top-btn" data-module="appearance" data-active="false">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="shrink-0">
-              <rect x="3" y="4" width="18" height="16" rx="3"/>
-              <circle cx="9" cy="10" r="1.5"/>
-              <path d="M21 15l-4.5-4.5L9 18"/>
-            </svg>
+            <svg width="13" height="13" class="agy-ico shrink-0" aria-hidden="true"><use href="#ico-appearance"/></svg>
             <span class="truncate" data-i18n="nav.appearance">壁纸</span>
           </button>
           <button type="button" class="console-top-btn" data-module="i18n" data-active="false">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="shrink-0">
-              <path d="M5 8l6 6M4 14l6-6 2-3M2 5h12M7 2h1M22 22l-5-10-5 10M14 18h6"/>
-            </svg>
+            <svg width="13" height="13" class="agy-ico shrink-0" aria-hidden="true"><use href="#ico-i18n"/></svg>
             <span class="truncate" data-i18n="nav.i18n">汉化</span>
             <span id="topBarI18nDot" class="dot-sm hidden" style="width:6px;height:6px;background:var(--warning);"></span>
           </button>
         </div>
-        <button id="topBarPopoutBtn" type="button" class="agy-btn agy-btn-secondary agy-btn-sm topbar-popout-btn shrink-0" title="打开或唤醒独立悬浮窗" data-i18n-title="nav.popoutTitle">
-          <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M9.5 2.5h4v4"/>
-            <path d="M13.5 2.5L7.5 8.5"/>
-            <path d="M12 9v3a1.5 1.5 0 0 1-1.5 1.5H4A1.5 1.5 0 0 1 2.5 12V5.5A1.5 1.5 0 0 1 4 4h3"/>
-          </svg>
-          <span data-i18n="nav.popout">悬浮窗</span>
-        </button>
+        <div class="console-top-actions">
+          <button id="topBarPopoutBtn" type="button" class="agy-btn agy-btn-secondary agy-btn-sm topbar-popout-btn shrink-0" title="打开或唤醒独立悬浮窗" data-i18n-title="nav.popoutTitle">
+            <svg width="12" height="12" class="agy-ico" aria-hidden="true"><use href="#ico-popout"/></svg>
+            <span data-i18n="nav.popout">悬浮窗</span>
+          </button>
+          <button id="topBarSettingsBtn" type="button" class="agy-btn agy-btn-secondary topbar-settings-btn shrink-0" title="插件设置" data-i18n-title="nav.settingsTitle" data-active="false">
+            <svg width="14" height="14" class="agy-ico gear-svg" aria-hidden="true"><use href="#ico-settings"/></svg>
+          </button>
+        </div>
       </nav>
 
       <!-- 全局更新覆盖提醒横幅 -->
@@ -252,25 +226,11 @@
           </button>
 
           <button id="refreshBtn" type="button" title="立即刷新" data-i18n-title="monitor.header.refreshTitle" class="agy-btn agy-btn-secondary agy-icon-btn shrink-0">
-            <svg id="refreshSvg" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6">
-              <path d="M13.5 8a5.5 5.5 0 1 1-1.35-3.6" stroke-linecap="round"/>
-              <path d="M13.5 2.4v2.9h-2.9" stroke-linecap="round" stroke-linejoin="round"/>
-            </svg>
+            <svg id="refreshSvg" width="14" height="14" class="agy-ico" aria-hidden="true"><use href="#ico-refresh"/></svg>
           </button>
 
           <button id="restartIdeBtn" type="button" title="重启 Antigravity 客户端" data-i18n-title="monitor.header.restartTitle" data-i18n-aria="monitor.header.restartTitle" class="agy-btn agy-btn-secondary agy-icon-btn restart-ide-btn shrink-0">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M18.36 6.64a9 9 0 1 1-12.73 0"/>
-              <line x1="12" y1="2" x2="12" y2="12"/>
-            </svg>
-          </button>
-
-          <!-- 标准闭合六齿齿轮进入专属插件设置页 -->
-          <button id="settingsBtn" type="button" title="插件设置" data-i18n-title="monitor.header.settingsTitle" class="agy-btn agy-btn-secondary agy-icon-btn shrink-0">
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" class="gear-svg">
-              <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/>
-              <circle cx="12" cy="12" r="3"/>
-            </svg>
+            <svg width="14" height="14" class="agy-ico" aria-hidden="true"><use href="#ico-restart"/></svg>
           </button>
         </div>
       </div>
@@ -291,7 +251,7 @@
               <span class="kv-state-dot" aria-hidden="true"></span>
               <span id="kvCountdownText">--:--</span>
             </span>
-            <button id="kvHelpBtn" type="button" class="kv-help-btn" aria-label="关于 Gemini KV Cache 倒计时" data-i18n-title="monitor.kv.helpTitle">?</button>
+            <button id="kvHelpBtn" type="button" class="kv-help-btn" aria-label="关于 Gemini KV Cache 倒计时" data-i18n-title="monitor.kv.helpTitle"><svg width="12" height="12" class="agy-ico" aria-hidden="true"><use href="#ico-help"/></svg></button>
             <div id="kvHelpPopover" class="kv-help-popover hidden" role="tooltip">
               <div class="text-xs font-semibold text-fg mb-1" data-i18n="monitor.kv.helpTitle">关于 Gemini KV Cache 倒计时</div>
               <p class="text-xs text-muted m-0 leading-relaxed" data-i18n="monitor.kv.helpBody1"></p>
@@ -350,7 +310,7 @@
                 <span data-i18n="monitor.ctx.generateCapsule">生成交接胶囊</span>
               </button>
               <span class="help-tip-wrap">
-                <button type="button" class="help-tip-btn" aria-label="什么是交接胶囊？" data-i18n-aria="monitor.ctx.capsuleHelpAria">?</button>
+                <button type="button" class="help-tip-btn" aria-label="什么是交接胶囊？" data-i18n-aria="monitor.ctx.capsuleHelpAria"><svg width="12" height="12" class="agy-ico" aria-hidden="true"><use href="#ico-help"/></svg></button>
                 <span class="help-tip-pop" role="tooltip">
                   <strong data-i18n="monitor.ctx.capsuleHelpTitle">交接胶囊</strong><br/>
                   <span data-i18n="monitor.ctx.capsuleHelpBody">将当前分支核心决策与状态压缩为紧凑交接包，新开对话可一键注入上下文。</span>
@@ -388,12 +348,7 @@
           <div id="ctxModelSimBar" class="ctx-sim-bar pt-2.5 border-t flex flex-wrap items-center justify-between gap-2 text-xs">
             <div class="flex items-center gap-2 min-w-0">
               <span class="text-muted shrink-0" data-i18n="monitor.ctx.modelSimLabel">切模型模拟</span>
-              <select id="ctxModelSimSelect" class="agy-native-select mono-num" aria-label="模拟目标模型窗口" data-i18n-aria="monitor.ctx.modelSimAria">
-                <option value="" data-i18n="monitor.ctx.modelSimNone">当前模型</option>
-                <option value="200000" data-i18n="monitor.ctx.modelSim200k">200K（Claude 4.5/4.6）</option>
-                <option value="256000" data-i18n="monitor.ctx.modelSim256k">256K（GPT-5.x）</option>
-                <option value="1000000" data-i18n="monitor.ctx.modelSim1m">1.00M（Gemini 3/4）</option>
-              </select>
+              <div class="agy-select-wrap" id="ctxModelSimSelectHost"></div>
             </div>
             <span id="ctxModelSimResult" class="mono-num text-muted" data-i18n="monitor.ctx.modelSimHint">选择目标窗口预览占比</span>
           </div>
@@ -490,7 +445,7 @@
                   <th data-i18n="monitor.calls.colStep">步序</th>
                   <th data-i18n="monitor.calls.colModel">模型</th>
                   <th class="text-right"><span class="col-full-lbl" data-i18n="monitor.calls.colTpsFull">有效</span><span data-i18n="monitor.calls.colTps">速度</span></th>
-                  <th class="text-right" title="单步模型耗时（支持 TTFT 时自动切换）" data-i18n-title="monitor.calls.colDurTitle"><span class="col-full-lbl" data-i18n="monitor.calls.colDurFull">模型</span><span data-i18n="monitor.calls.colDur">耗时 ⓘ</span></th>
+                  <th class="text-right" title="单步模型耗时（支持 TTFT 时自动切换）" data-i18n-title="monitor.calls.colDurTitle"><span class="col-full-lbl" data-i18n="monitor.calls.colDurFull">模型</span><span data-i18n="monitor.calls.colDur">耗时</span> <svg width="12" height="12" class="agy-ico inline-block align-middle opacity-70" aria-hidden="true"><use href="#ico-info"/></svg></th>
                   <th class="text-right" data-i18n="monitor.calls.colTokens">上下文 / 思考 / 正文</th>
                   <th class="text-right"><span class="col-full-lbl" data-i18n="monitor.calls.colCacheFull">缓存</span><span data-i18n="monitor.calls.colCache">命中</span></th>
                   <th class="text-right"><span class="col-full-lbl" data-i18n="monitor.calls.colCostFull">估算</span><span data-i18n="monitor.calls.colCost">费用</span></th>
@@ -555,7 +510,7 @@
                 <div class="flex items-center gap-1">
                   <button id="openCapsuleFromVaultBtn" type="button" class="agy-btn agy-btn-secondary" data-i18n="monitor.vault.capsuleBtn">交接胶囊</button>
                   <span class="help-tip-wrap">
-                    <button type="button" class="help-tip-btn" aria-label="什么是交接胶囊？" data-i18n-aria="monitor.ctx.capsuleHelpAria">?</button>
+                    <button type="button" class="help-tip-btn" aria-label="什么是交接胶囊？" data-i18n-aria="monitor.ctx.capsuleHelpAria"><svg width="12" height="12" class="agy-ico" aria-hidden="true"><use href="#ico-help"/></svg></button>
                     <span class="help-tip-pop" role="tooltip">
                       <strong data-i18n="monitor.ctx.capsuleHelpTitle">交接胶囊</strong><br/>
                       <span data-i18n="monitor.ctx.capsuleHelpBody">将当前分支核心决策与状态压缩为紧凑交接包，新开对话可一键注入上下文。</span>
@@ -578,7 +533,107 @@
     </main>
       </div>
 
-      <!-- ==================== 模块 2：生态治理与 Harness 体检 ==================== -->
+      <!-- ==================== 模块 2：本地代码审查 ==================== -->
+      <div id="module-review" class="console-module hidden">
+        <header class="agy-header space-y-2.5">
+          <div class="header-top">
+            <div class="flex items-center gap-2 min-w-0">
+              <span class="text-sm font-semibold text-fg truncate" data-i18n="review.title">本地代码审查</span>
+              <span id="reviewHeaderPill" class="agy-pill i18n-status-pill mono-num shrink-0" data-tone="neutral" data-i18n="review.header.idle">待预检</span>
+            </div>
+            <div class="flex items-center gap-2 shrink-0">
+              <div class="agy-select-wrap" id="reviewHistorySelectHost"></div>
+              <button id="reviewImportBtn" type="button" class="agy-btn agy-btn-secondary agy-btn-sm text-xs shrink-0" data-i18n="review.action.import">导入报告</button>
+              <button id="reviewRefreshBtn" type="button" title="刷新 Diff 静态预检" data-i18n-title="review.refreshTitle" class="agy-btn agy-btn-secondary agy-icon-btn shrink-0">
+                <svg id="reviewRefreshSvg" width="14" height="14" class="agy-ico" aria-hidden="true"><use href="#ico-refresh"/></svg>
+              </button>
+            </div>
+          </div>
+          <div class="flex flex-wrap items-center justify-between gap-2 text-xs">
+            <span id="reviewGitMeta" class="text-muted mono-num truncate">—</span>
+          </div>
+        </header>
+
+        <main class="agy-main space-y-5">
+          <!-- 段 1：审查范围选择 + 预检与隔离 AI 审查 -->
+          <section class="agy-group p-5 space-y-3.5 panel-enter">
+            <div class="review-toolbar">
+              <div id="reviewScopeSeg" class="review-scope-seg" role="radiogroup">
+                <button type="button" class="review-scope-btn" data-review-scope="uncommitted" data-active="true" data-i18n="review.scope.uncommitted">未提交</button>
+                <button type="button" class="review-scope-btn" data-review-scope="staged" data-active="false" data-i18n="review.scope.staged">已暂存</button>
+                <button type="button" class="review-scope-btn" data-review-scope="last_commit" data-active="false" data-i18n="review.scope.last_commit">最近提交</button>
+                <button type="button" class="review-scope-btn" data-review-scope="branch" data-active="false" data-i18n="review.scope.branch">分支对比</button>
+              </div>
+              <div class="flex flex-wrap items-center gap-2">
+                <button id="reviewScanBtn" type="button" class="agy-btn agy-btn-secondary agy-btn-sm text-xs" data-i18n="review.action.scan">刷新预检</button>
+                <button id="reviewAiFastBtn" type="button" class="agy-btn agy-btn-primary agy-btn-sm text-xs" data-i18n="review.action.aiFast">AI 快速审查</button>
+                <button id="reviewAiDeepBtn" type="button" class="agy-btn agy-btn-secondary agy-btn-sm text-xs" data-i18n="review.action.aiDeep">AI 深度审查</button>
+              </div>
+            </div>
+            <div id="reviewBaseRefWrap" class="hidden">
+              <input id="reviewBaseRefInput" type="text" class="agy-input w-full mono-num text-xs" placeholder="基准分支（默认自动探测 main/master）" data-i18n-placeholder="review.baseRefPlaceholder" />
+            </div>
+          </section>
+
+          <!-- 段 2：统计概览与原生门禁手动触发条 -->
+          <section class="agy-group p-5 space-y-3.5 panel-enter">
+            <div class="review-stats-grid">
+              <div class="review-stat-card">
+                <span class="text-xs text-muted" data-i18n="review.stat.critical">严重</span>
+                <span id="reviewStatCritical" class="text-base font-semibold mono-num">0</span>
+              </div>
+              <div class="review-stat-card">
+                <span class="text-xs text-muted" data-i18n="review.stat.high">高危</span>
+                <span id="reviewStatHigh" class="text-base font-semibold mono-num">0</span>
+              </div>
+              <div class="review-stat-card">
+                <span class="text-xs text-muted" data-i18n="review.stat.medium">中危</span>
+                <span id="reviewStatMedium" class="text-base font-semibold mono-num">0</span>
+              </div>
+              <div class="review-stat-card">
+                <span class="text-xs text-muted" data-i18n="review.stat.low">提示</span>
+                <span id="reviewStatLow" class="text-base font-semibold mono-num text-muted">0</span>
+              </div>
+            </div>
+            <div id="reviewOverviewBanner" class="agy-subtle px-3.5 py-2.5 text-xs text-fg leading-relaxed hidden"></div>
+            <div class="pt-2 border-t space-y-2">
+              <div class="text-xs font-medium text-muted" data-i18n="review.gates.title">原生项目门禁（手动触发）</div>
+              <div id="reviewGatesBar" class="review-gates-bar"></div>
+            </div>
+          </section>
+
+          <!-- 段 3：Findings 严重度筛选、勾选批量修复与忽略 -->
+          <section class="agy-group p-5 space-y-3.5 panel-enter">
+            <div class="review-filter-row">
+              <div id="reviewSevFilters" class="flex flex-wrap items-center gap-1.5">
+                <button type="button" class="agy-btn agy-btn-secondary agy-btn-sm text-xs" data-review-sev="all" data-active="true" data-i18n="review.filter.all">全部</button>
+                <button type="button" class="agy-btn agy-btn-secondary agy-btn-sm text-xs" data-review-sev="critical" data-active="false" data-i18n="review.sev.critical">严重</button>
+                <button type="button" class="agy-btn agy-btn-secondary agy-btn-sm text-xs" data-review-sev="high" data-active="false" data-i18n="review.sev.high">高危</button>
+                <button type="button" class="agy-btn agy-btn-secondary agy-btn-sm text-xs" data-review-sev="medium" data-active="false" data-i18n="review.sev.medium">中危</button>
+                <button type="button" class="agy-btn agy-btn-secondary agy-btn-sm text-xs" data-review-sev="low" data-active="false" data-i18n="review.sev.low">提示</button>
+              </div>
+              <div class="flex items-center gap-1.5">
+                <button id="reviewShowIgnoredBtn" type="button" class="agy-btn agy-btn-secondary agy-btn-sm text-xs hidden" data-active="false">已忽略 (0)</button>
+                <button id="reviewSelectAllBtn" type="button" class="agy-btn agy-btn-secondary agy-btn-sm text-xs" data-i18n="review.action.selectAll">全选</button>
+              </div>
+            </div>
+
+            <div id="reviewFixBar" class="review-fix-bar hidden">
+              <span id="reviewFixCountLabel" class="text-xs font-medium text-primary mono-num">已勾选 0 项问题</span>
+              <div class="flex items-center gap-2">
+                <button id="reviewClearSelectBtn" type="button" class="agy-btn agy-btn-secondary agy-btn-sm text-xs" data-i18n="review.fixBar.clear">取消选择</button>
+                <button id="reviewFixSelectedBtn" type="button" class="agy-btn agy-btn-primary agy-btn-sm text-xs" data-i18n="review.fixBar.sendBtn">一键交给 Agent 修复</button>
+              </div>
+            </div>
+
+            <div id="reviewFindingsList" class="review-finding-list">
+              <div class="review-empty" data-i18n="review.empty.noScan">点击「刷新预检」扫描本地 Git 变更（0 Token，零写入目标仓库）。</div>
+            </div>
+          </section>
+        </main>
+      </div>
+
+      <!-- ==================== 模块 3：生态治理与 Harness 体检 ==================== -->
       <div id="module-governance" class="console-module hidden">
         <header class="agy-header space-y-2.5">
           <div class="header-top">
@@ -588,16 +643,7 @@
             </div>
             <div class="flex items-center gap-2 shrink-0">
               <button id="govRefreshBtn" type="button" title="重新扫描生态与离线体检" data-i18n-title="gov.refreshTitle" class="agy-btn agy-btn-secondary agy-icon-btn shrink-0">
-                <svg id="govRefreshSvg" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6">
-                  <path d="M13.5 8a5.5 5.5 0 1 1-1.35-3.6" stroke-linecap="round"/>
-                  <path d="M13.5 2.4v2.9h-2.9" stroke-linecap="round" stroke-linejoin="round"/>
-                </svg>
-              </button>
-              <button id="govSettingsBtn" type="button" title="插件设置" data-i18n-title="nav.settingsTitle" class="agy-btn agy-btn-secondary agy-icon-btn shrink-0">
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" class="gear-svg">
-                  <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/>
-                  <circle cx="12" cy="12" r="3"/>
-                </svg>
+                <svg id="govRefreshSvg" width="14" height="14" class="agy-ico" aria-hidden="true"><use href="#ico-refresh"/></svg>
               </button>
             </div>
           </div>
@@ -614,15 +660,18 @@
         </header>
 
         <main class="agy-main space-y-5">
-          <!-- 子页 1：总览与三合一离线体检 -->
+          <!-- 子页 1：总览与四支柱连续评分 -->
           <section id="gov-panel-overview" class="space-y-5 panel-enter">
             <div class="agy-group p-5 space-y-4">
               <div class="flex flex-wrap items-start justify-between gap-3">
                 <div>
                   <div class="text-xs font-medium text-muted" data-i18n="gov.overview.scoreLabel">生态健康评分（纯离线，0 Token）</div>
-                  <div class="flex items-baseline gap-2.5 mt-1">
-                    <span id="govHealthScoreBig" class="text-3xl font-semibold mono-num tracking-tight">100</span>
-                    <span class="text-xs text-muted">/ 100</span>
+                  <div class="gov-score-hero mt-1">
+                    <div class="flex items-baseline gap-2">
+                      <span id="govHealthScoreBig" class="text-3xl font-semibold mono-num tracking-tight">100</span>
+                      <span class="text-xs text-muted">/ 100</span>
+                    </div>
+                    <span id="govGradeBadge" class="gov-grade-badge mono-num hidden" data-grade="A">A</span>
                   </div>
                   <div id="govHealthSummaryText" class="text-xs text-muted mt-1" data-i18n="gov.overview.scanning">正在扫描插件、MCP、Skills、Rules 与隐私安全...</div>
                 </div>
@@ -631,6 +680,7 @@
                   <div id="govBaselineTokens" class="text-base font-semibold mono-num mt-0.5">~0</div>
                 </div>
               </div>
+              <div id="govPillarsGrid" class="gov-pillars-grid"></div>
               <div id="govAssetKpis" class="kpi-grid pt-3 border-t"></div>
             </div>
 
@@ -749,16 +799,7 @@
                 <span class="agy-switch-thumb"></span>
               </button>
               <button id="appRefreshBtn" type="button" title="刷新壁纸状态" data-i18n-title="app.refreshTitle" class="agy-btn agy-btn-secondary agy-icon-btn shrink-0">
-                <svg id="appRefreshSvg" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6">
-                  <path d="M13.5 8a5.5 5.5 0 1 1-1.35-3.6" stroke-linecap="round"/>
-                  <path d="M13.5 2.4v2.9h-2.9" stroke-linecap="round" stroke-linejoin="round"/>
-                </svg>
-              </button>
-              <button id="appSettingsBtn" type="button" title="插件设置" data-i18n-title="nav.settingsTitle" class="agy-btn agy-btn-secondary agy-icon-btn shrink-0">
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" class="gear-svg">
-                  <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/>
-                  <circle cx="12" cy="12" r="3"/>
-                </svg>
+                <svg id="appRefreshSvg" width="14" height="14" class="agy-ico" aria-hidden="true"><use href="#ico-refresh"/></svg>
               </button>
             </div>
           </div>
@@ -918,16 +959,7 @@
             </div>
             <div class="flex items-center gap-2 shrink-0">
               <button id="i18nRefreshBtn" type="button" title="刷新汉化状态" data-i18n-title="i18n.refreshTitle" class="agy-btn agy-btn-secondary agy-icon-btn shrink-0">
-                <svg id="i18nRefreshSvg" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6">
-                  <path d="M13.5 8a5.5 5.5 0 1 1-1.35-3.6" stroke-linecap="round"/>
-                  <path d="M13.5 2.4v2.9h-2.9" stroke-linecap="round" stroke-linejoin="round"/>
-                </svg>
-              </button>
-              <button id="i18nSettingsBtn" type="button" title="插件设置" data-i18n-title="nav.settingsTitle" class="agy-btn agy-btn-secondary agy-icon-btn shrink-0">
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" class="gear-svg">
-                  <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/>
-                  <circle cx="12" cy="12" r="3"/>
-                </svg>
+                <svg id="i18nRefreshSvg" width="14" height="14" class="agy-ico" aria-hidden="true"><use href="#ico-refresh"/></svg>
               </button>
             </div>
           </div>
@@ -1073,7 +1105,7 @@
           <!-- 子页 3：防误翻与个性化 -->
           <section id="i18n-panel-rules" class="hidden space-y-5 panel-enter">
             <div class="space-y-2">
-              <div class="text-sm font-semibold px-1" data-i18n="i18n.rules.immunityTitle">物理防误翻免疫区</div>
+              <div class="text-sm font-semibold px-1" data-i18n="i18n.rules.immunityTitle">不翻译区域</div>
               <div class="agy-group divide-y overflow-hidden">
                 <div class="px-5 py-3.5 flex items-center justify-between gap-4">
                   <div class="min-w-0">
@@ -1183,7 +1215,7 @@
             <button id="exitSettingsBtn" type="button" class="agy-btn agy-btn-secondary" style="height: 30px; padding: 0 10px;" data-i18n="settings.back">← 返回</button>
             <span class="text-base font-semibold" data-i18n="settings.title">插件设置</span>
           </div>
-          <span id="settingsVersionLabel" class="agy-pill mono-num text-xs">Antigravity Hub v1.5.4</span>
+          <span id="settingsVersionLabel" class="agy-pill mono-num text-xs">Antigravity Hub v1.6.0</span>
         </div>
 
         <!-- 1. 通用与语言 -->
@@ -1246,7 +1278,7 @@
                   <div class="text-sm font-medium flex items-center gap-1.5">
                     <span data-i18n="settings.kvCache.title">Gemini KV 缓存保鲜倒计时</span>
                     <span class="kv-help-inline-wrap">
-                      <button id="settingsKvHelpBtn" type="button" class="kv-help-btn" aria-label="关于 Gemini KV Cache 倒计时" data-i18n-title="monitor.kv.helpTitle">?</button>
+                      <button id="settingsKvHelpBtn" type="button" class="kv-help-btn" aria-label="关于 Gemini KV Cache 倒计时" data-i18n-title="monitor.kv.helpTitle"><svg width="12" height="12" class="agy-ico" aria-hidden="true"><use href="#ico-help"/></svg></button>
                       <div id="settingsKvHelpPopover" class="kv-help-popover kv-help-popover-left hidden" role="tooltip">
                         <div class="text-xs font-semibold text-fg mb-1" data-i18n="monitor.kv.helpTitle">关于 Gemini KV Cache 倒计时</div>
                         <p class="text-xs text-muted m-0 leading-relaxed" data-i18n="monitor.kv.helpBody1"></p>
@@ -1319,31 +1351,24 @@
               <div class="flex items-start justify-between gap-3">
                 <div class="min-w-0">
                   <div class="text-sm font-medium flex items-center gap-2 flex-wrap">
-                    <span data-i18n="settings.miniBar.title">迷你悬浮条长度与模块排序</span>
+                    <span data-i18n="settings.miniBar.title">共享宽度与迷你条模块排序</span>
                     <span id="miniBarCustomBadge" class="agy-pill mono-num hidden"></span>
                   </div>
-                  <div class="text-xs text-muted mt-0.5" data-i18n="settings.miniBar.desc">选择快捷长度档位，拖拽或点击模块调整展示顺序（仍支持手动拖宽）</div>
+                  <div class="text-xs text-muted mt-0.5" data-i18n="settings.miniBar.desc">迷你条与完整窗共享同一宽度，拖动或点击模块调整显示优先级</div>
                 </div>
                 <button id="miniBarResetOrderBtn" type="button" class="agy-btn agy-btn-secondary agy-btn-sm text-xs shrink-0" data-i18n="settings.miniBar.resetOrder">恢复默认顺序</button>
               </div>
 
-              <div class="minibar-preset-row" id="miniBarPresetRow" role="radiogroup" aria-label="迷你悬浮条长度档位">
-                <button type="button" class="minibar-preset-btn" data-preset="minimal" data-count="1" data-i18n="settings.miniBar.presetMinimal">极简 1</button>
-                <button type="button" class="minibar-preset-btn" data-preset="compact" data-count="2" data-i18n="settings.miniBar.presetCompact">紧凑 2</button>
-                <button type="button" class="minibar-preset-btn" data-preset="standard" data-count="3" data-active="true" data-i18n="settings.miniBar.presetStandard">标准 3</button>
-                <button type="button" class="minibar-preset-btn" data-preset="wide" data-count="4" data-i18n="settings.miniBar.presetWide">加宽 4</button>
-                <button type="button" class="minibar-preset-btn" data-preset="full" data-count="5" data-i18n="settings.miniBar.presetFull">完整 5</button>
+              <div class="width-preset-row" id="sharedWidthPresetRow" role="radiogroup" aria-label="快捷共享宽度">
+                <button type="button" class="width-preset-btn mono-num" data-shared-width="380" data-active="false" data-i18n="settings.miniBar.widthCompact">紧凑 380px</button>
+                <button type="button" class="width-preset-btn mono-num" data-shared-width="460" data-active="true" data-i18n="settings.miniBar.widthStandard">标准 460px</button>
+                <button type="button" class="width-preset-btn mono-num" data-shared-width="640" data-active="false" data-i18n="settings.miniBar.widthWide">宽屏 640px</button>
               </div>
 
               <div class="minibar-studio" id="miniBarStudio">
-                <div class="minibar-preview-shell" id="miniBarPreviewShell" data-preset="standard">
+                <div class="minibar-preview-shell" id="miniBarPreviewShell">
                   <div class="minibar-preview-brand" aria-hidden="true">
-                    <svg width="16" height="16" viewBox="0 0 128 128" fill="none" class="hub-brand-svg" data-kv-state="safe">
-                      <rect class="brand-bg" x="10" y="10" width="108" height="108" rx="26" fill="#1D4ED8"/>
-                      <path d="M64 32L95 48L64 64L33 48L64 32Z" fill="#FFFFFF" fill-opacity="0.96"/>
-                      <path class="brand-mid" d="M33 65L64 81L95 65" stroke="#93C5FD" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
-                      <path class="brand-accent" d="M33 82L64 98L95 82" stroke="#34D399" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
-                    </svg>
+                    <svg width="16" height="16" class="hub-brand-svg" data-static="true" data-health="safe"><use href="#hub-logo-sm"/></svg>
                   </div>
                   <div class="minibar-preview-track" id="miniBarPreviewTrack"></div>
                   <div class="minibar-preview-chrome" aria-hidden="true">
@@ -1352,7 +1377,7 @@
                     <span class="minibar-chrome-dot"></span>
                   </div>
                 </div>
-                <div class="text-xs text-muted mt-2" data-i18n="settings.miniBar.hint">拖动模块卡片或点击选中后点目标位置互换顺序；高亮区为当前档位显示项</div>
+                <div class="text-xs text-muted mt-2" data-i18n="settings.miniBar.hint">拖动或点击选中后互换顺序；空间不足时从右侧依次折叠低优先级模块</div>
               </div>
             </div>
 
@@ -1412,7 +1437,7 @@
             </div>
             <div class="px-5 py-3 flex items-center justify-between gap-2">
               <span class="text-muted" data-i18n="settings.doctor.deploy">部署运行包</span>
-              <span id="docDeployVal" class="mono-num">v1.5.4 / 0 node_modules</span>
+              <span id="docDeployVal" class="mono-num">v1.6.0 / 0 node_modules</span>
             </div>
             <div class="px-5 py-3 flex items-center justify-between gap-2">
               <span class="text-muted" data-i18n="settings.update.label">插件版本更新</span>
@@ -1450,7 +1475,7 @@
     <div class="modal-card wide p-5 space-y-4">
       <div class="flex items-center justify-between gap-2">
         <span class="text-base font-semibold" data-i18n="monitor.capsule.title">交接胶囊</span>
-        <button type="button" data-close-modal="capsuleModal" class="agy-btn agy-btn-secondary agy-icon-btn">✕</button>
+        <button type="button" data-close-modal="capsuleModal" class="agy-btn agy-btn-secondary agy-icon-btn"><svg width="14" height="14" class="agy-ico" aria-hidden="true"><use href="#ico-close"/></svg></button>
       </div>
 
       <div class="flex flex-wrap items-center justify-between gap-2">
@@ -1532,7 +1557,7 @@
     <form id="quotaCalForm" class="modal-card p-5 space-y-4">
       <div class="flex items-center justify-between">
         <span class="text-base font-semibold">校准额度基线</span>
-        <button type="button" data-close-modal="quotaModal" class="agy-btn agy-btn-secondary agy-icon-btn">✕</button>
+        <button type="button" data-close-modal="quotaModal" class="agy-btn agy-btn-secondary agy-icon-btn"><svg width="14" height="14" class="agy-ico" aria-hidden="true"><use href="#ico-close"/></svg></button>
       </div>
       <p class="text-xs text-muted m-0 leading-relaxed">
         对照 Antigravity 设置页填入当前剩余百分比与重置时间；之后插件将结合本地真实调用自动推演扣减并倒计时。
@@ -1575,7 +1600,7 @@
     <form id="addMemForm" class="modal-card p-5 space-y-4">
       <div class="flex items-center justify-between">
         <span class="text-base font-semibold" data-i18n="monitor.addMem.title">新增跨会话记忆</span>
-        <button type="button" data-close-modal="addMemModal" class="agy-btn agy-btn-secondary agy-icon-btn">✕</button>
+        <button type="button" data-close-modal="addMemModal" class="agy-btn agy-btn-secondary agy-icon-btn"><svg width="14" height="14" class="agy-ico" aria-hidden="true"><use href="#ico-close"/></svg></button>
       </div>
       <div class="space-y-3 text-xs">
         <div class="space-y-1.5">
@@ -1593,7 +1618,7 @@
       </div>
       <div class="flex justify-end gap-2 pt-1">
         <button type="button" data-close-modal="addMemModal" class="agy-btn agy-btn-secondary" data-i18n="common.cancel">取消</button>
-        <button type="submit" class="agy-btn agy-btn-primary" data-i18n="monitor.addMem.submit">写入真相源</button>
+        <button type="submit" class="agy-btn agy-btn-primary" data-i18n="monitor.addMem.submit">保存至本地记忆库</button>
       </div>
     </form>
   </div>
@@ -1603,7 +1628,7 @@
     <div class="modal-card p-5 space-y-4">
       <div class="flex items-center justify-between gap-2">
         <span id="i18nPatchConfirmTitle" class="text-base font-semibold">确认应用界面汉化</span>
-        <button type="button" data-close-modal="i18nPatchConfirmModal" class="agy-btn agy-btn-secondary agy-icon-btn">✕</button>
+        <button type="button" data-close-modal="i18nPatchConfirmModal" class="agy-btn agy-btn-secondary agy-icon-btn"><svg width="14" height="14" class="agy-ico" aria-hidden="true"><use href="#ico-close"/></svg></button>
       </div>
       <div id="i18nPatchConfirmBody" class="space-y-2.5 text-xs text-muted leading-relaxed">
         <p class="m-0">为释放 <span class="mono-num text-fg">app.asar</span> 文件锁，后台独立进程将短暂关闭并自动重启 Antigravity（约 3~5 秒）。</p>
@@ -1621,7 +1646,7 @@
     <form id="i18nEntryForm" class="modal-card p-5 space-y-4">
       <div class="flex items-center justify-between gap-2">
         <span id="i18nEntryModalTitle" class="text-base font-semibold">新增 / 覆盖词条</span>
-        <button type="button" data-close-modal="i18nEntryModal" class="agy-btn agy-btn-secondary agy-icon-btn">✕</button>
+        <button type="button" data-close-modal="i18nEntryModal" class="agy-btn agy-btn-secondary agy-icon-btn"><svg width="14" height="14" class="agy-ico" aria-hidden="true"><use href="#ico-close"/></svg></button>
       </div>
       <div class="space-y-3 text-xs">
         <div class="space-y-1.5">
@@ -1653,7 +1678,7 @@
     <form id="i18nImportForm" class="modal-card wide p-5 space-y-4">
       <div class="flex items-center justify-between gap-2">
         <span class="text-base font-semibold">导入词典 JSON</span>
-        <button type="button" data-close-modal="i18nImportModal" class="agy-btn agy-btn-secondary agy-icon-btn">✕</button>
+        <button type="button" data-close-modal="i18nImportModal" class="agy-btn agy-btn-secondary agy-icon-btn"><svg width="14" height="14" class="agy-ico" aria-hidden="true"><use href="#ico-close"/></svg></button>
       </div>
       <p class="text-xs text-muted m-0 leading-relaxed">
         自动兼容扁平映射 <span class="mono-num">{ "English": "中文" }</span>、分组格式 <span class="mono-num">{ ui, menu, patterns }</span> 及社区嵌套词典格式。
@@ -1690,7 +1715,7 @@
     <div class="modal-card wide p-5 space-y-4">
       <div class="flex items-center justify-between gap-2">
         <span id="govConfirmTitle" class="text-base font-semibold">确认变更</span>
-        <button id="govConfirmCloseBtn" type="button" class="agy-btn agy-btn-secondary agy-icon-btn">✕</button>
+        <button id="govConfirmCloseBtn" type="button" class="agy-btn agy-btn-secondary agy-icon-btn"><svg width="14" height="14" class="agy-ico" aria-hidden="true"><use href="#ico-close"/></svg></button>
       </div>
       <div id="govConfirmBody" class="space-y-2"></div>
       <div class="flex justify-end gap-2 pt-1">
@@ -1705,7 +1730,7 @@
     <div class="modal-card wide p-5 space-y-3">
       <div class="flex items-center justify-between gap-2">
         <span id="govPreviewTitle" class="text-base font-semibold truncate">只读脱敏预览</span>
-        <button id="govPreviewCloseBtn" type="button" class="agy-btn agy-btn-secondary agy-icon-btn">✕</button>
+        <button id="govPreviewCloseBtn" type="button" class="agy-btn agy-btn-secondary agy-icon-btn"><svg width="14" height="14" class="agy-ico" aria-hidden="true"><use href="#ico-close"/></svg></button>
       </div>
       <div id="govPreviewPath" class="text-xs text-muted mono-num truncate"></div>
       <pre id="govPreviewContent" class="gov-preview-pre scroll-thin"></pre>
@@ -1717,7 +1742,7 @@
     <div class="modal-card wide p-5 space-y-3.5">
       <div class="flex items-center justify-between gap-2">
         <span id="govLintFixTitle" class="text-base font-semibold truncate">修复提示词预览</span>
-        <button id="govLintFixCloseBtn" type="button" class="agy-btn agy-btn-secondary agy-icon-btn">✕</button>
+        <button id="govLintFixCloseBtn" type="button" class="agy-btn agy-btn-secondary agy-icon-btn"><svg width="14" height="14" class="agy-ico" aria-hidden="true"><use href="#ico-close"/></svg></button>
       </div>
       <div id="govLintFixNotice" class="text-xs px-3 py-2 rounded border hidden"></div>
       <textarea id="govLintFixPromptInput" rows="10" class="agy-input w-full text-xs mono-num leading-relaxed scroll-thin" style="resize: vertical; min-height: 160px;"></textarea>
@@ -1735,7 +1760,7 @@
     <div class="modal-card wide p-5 space-y-4">
       <div class="flex items-center justify-between gap-2">
         <span class="text-base font-semibold">管理轮播池</span>
-        <button type="button" data-close-modal="appRotationPoolModal" class="agy-btn agy-btn-secondary agy-icon-btn">✕</button>
+        <button type="button" data-close-modal="appRotationPoolModal" class="agy-btn agy-btn-secondary agy-icon-btn"><svg width="14" height="14" class="agy-ico" aria-hidden="true"><use href="#ico-close"/></svg></button>
       </div>
 
       <div class="space-y-4 text-xs">
@@ -1788,7 +1813,7 @@
     <div class="modal-card p-5 space-y-4">
       <div class="flex items-center justify-between gap-2">
         <span class="text-base font-semibold" data-i18n="monitor.restart.title">重启 Antigravity 客户端</span>
-        <button type="button" data-close-modal="restartIdeModal" class="agy-btn agy-btn-secondary agy-icon-btn">✕</button>
+        <button type="button" data-close-modal="restartIdeModal" class="agy-btn agy-btn-secondary agy-icon-btn"><svg width="14" height="14" class="agy-ico" aria-hidden="true"><use href="#ico-close"/></svg></button>
       </div>
       <div class="space-y-2.5 text-xs text-muted leading-relaxed">
         <p class="m-0 text-fg" data-i18n="monitor.restart.desc">将安全关闭并重新启动 Antigravity 进程（约 3-5 秒），不会修改 app.asar 或影响已保存数据。</p>
@@ -1813,7 +1838,7 @@
           </div>
           <div id="assetInspectorSubMeta" class="text-xs text-muted mono-num truncate"></div>
         </div>
-        <button type="button" data-close-modal="assetInspectorModal" class="agy-btn agy-btn-secondary agy-icon-btn shrink-0">✕</button>
+        <button type="button" data-close-modal="assetInspectorModal" class="agy-btn agy-btn-secondary agy-icon-btn shrink-0"><svg width="14" height="14" class="agy-ico" aria-hidden="true"><use href="#ico-close"/></svg></button>
       </div>
 
       <!-- 规则 / 技能 / 子代理 只读脱敏原文视图 -->
@@ -1843,6 +1868,24 @@
         </div>
       </div>
     </div>
+  </div>
+
+  <!-- 模态框 12：粘贴导入 AI 审查报告 -->
+  <div id="reviewImportModal" class="modal-backdrop" data-open="false">
+    <form id="reviewImportForm" class="modal-card wide p-5 space-y-4">
+      <div class="flex items-center justify-between gap-2">
+        <span class="text-base font-semibold" data-i18n="review.importModal.title">粘贴导入 AI 审查报告</span>
+        <button type="button" data-close-modal="reviewImportModal" class="agy-btn agy-btn-secondary agy-icon-btn" aria-label="Close"><svg width="14" height="14" class="agy-ico"><use href="#ico-close"/></svg></button>
+      </div>
+      <p class="text-xs text-muted m-0 leading-relaxed" data-i18n="review.importModal.desc">
+        支持直接粘贴 Subagent 输出的 JSON 或 Markdown 代码块，自动清洗脱敏并入当前报告。
+      </p>
+      <textarea id="reviewImportTextarea" required rows="8" placeholder="粘贴 JSON 报告或 ```json ... ``` 代码块..." data-i18n-placeholder="review.importModal.placeholder" class="agy-textarea w-full mono-num scroll-thin"></textarea>
+      <div class="flex justify-end gap-2 pt-1">
+        <button type="button" data-close-modal="reviewImportModal" class="agy-btn agy-btn-secondary" data-i18n="common.cancel">取消</button>
+        <button type="submit" class="agy-btn agy-btn-primary" data-i18n="review.importModal.submit">解析并导入</button>
+      </div>
+    </form>
   </div>
 
   <div id="toast" class="agy-toast" data-show="false"></div>

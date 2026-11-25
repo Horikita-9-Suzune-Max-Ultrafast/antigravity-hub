@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import fs from 'node:fs';
 import { buildCompactBrief, saveMemory, searchMemories } from '../src/core/vault.mjs';
 import { getTelemetryReport } from '../src/core/telemetry.mjs';
 import { getQuotaSnapshot } from '../src/core/quota.mjs';
@@ -21,6 +22,23 @@ import {
   emergencyDisableWallpaper,
   pickNextWallpaper,
 } from '../src/core/appearance/index.mjs';
+import { handleReviewAction } from '../src/core/review/index.mjs';
+
+const MAX_REVIEW_STDIN_BYTES = 2 * 1024 * 1024; // 2 MiB
+
+async function readStdinUtf8(maxBytes = MAX_REVIEW_STDIN_BYTES) {
+  const chunks = [];
+  let total = 0;
+  for await (const chunk of process.stdin) {
+    const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk), 'utf8');
+    total += buf.length;
+    if (total > maxBytes) {
+      throw new Error(`stdin input exceeds maximum allowed size (${maxBytes} bytes)`);
+    }
+    chunks.push(buf);
+  }
+  return Buffer.concat(chunks).toString('utf8');
+}
 
 function parseArgs(argv) {
   const pos = [];
@@ -243,17 +261,137 @@ async function main() {
       console.error('Usage: ctx wallpaper <status|off|next> [--json]');
       process.exit(1);
     }
+    case 'review': {
+      const sub = rest[0] || 'list';
+      if (sub === 'scan') {
+        const res = await handleReviewAction(
+          {
+            action: 'scan',
+            projectDir: opts.projectDir,
+            scope: flags.scope || 'uncommitted',
+            baseRef: flags.base || undefined,
+          },
+          opts
+        );
+        const r = res.report;
+        const s = r.summary || {};
+        const lines = [
+          `Review Scan [${r.scope}] ${r.git?.branch || 'nogit'}@${r.git?.head || 'none'} | Files: ${res.diffStats?.files ?? 0} (+${res.diffStats?.additions ?? 0}/-${res.diffStats?.deletions ?? 0})`,
+          `Findings: total=${s.total ?? 0} (critical=${s.critical ?? 0}, high=${s.high ?? 0}, medium=${s.medium ?? 0}, low=${s.low ?? 0}) | Gates available: ${(res.availableGates || []).map((g) => g.id).join(', ') || 'none'}`,
+          ...(r.findings || [])
+            .filter((f) => !f.ignored)
+            .slice(0, 20)
+            .map((f) => `  [${f.severity.toUpperCase()}] (${f.source}/${f.ruleId}) ${f.file}:${f.line} - ${f.title}`),
+        ];
+        print(res, lines.join('\n'));
+        if ((s.critical ?? 0) > 0) process.exitCode = 1;
+        break;
+      }
+      if (sub === 'gates') {
+        if (flags.run) {
+          const res = await handleReviewAction(
+            {
+              action: 'run_gate',
+              projectDir: opts.projectDir,
+              gateId: String(flags.run),
+            },
+            opts
+          );
+          const g = res.gateResult;
+          const lines = [
+            `Gate [${g.gateId}] ${g.label}: ${g.status.toUpperCase()} (${g.durationMs}ms, findings=${g.findings?.length ?? 0})`,
+            ...(g.findings || []).slice(0, 20).map((f) => `  [${f.severity.toUpperCase()}] ${f.file}:${f.line} - ${f.title}`),
+          ];
+          print(res, lines.join('\n'));
+          if (!g.ok) process.exitCode = 1;
+          break;
+        }
+        const st = await handleReviewAction({ action: 'status', projectDir: opts.projectDir }, opts);
+        const gates = st.availableGates || [];
+        const lines = gates.length
+          ? gates.map((g) => `- ${g.id}: ${g.label} (${g.command} ${(g.args || []).join(' ')})`)
+          : ['No native project gates detected.'];
+        print({ availableGates: gates, git: st.git }, lines.join('\n'));
+        break;
+      }
+      if (sub === 'save') {
+        let rawReport = '';
+        try {
+          if (flags.file && typeof flags.file === 'string') {
+            const stat = fs.statSync(flags.file);
+            if (stat.size > MAX_REVIEW_STDIN_BYTES) {
+              throw new Error(`Input file exceeds maximum allowed size (${MAX_REVIEW_STDIN_BYTES} bytes)`);
+            }
+            rawReport = fs.readFileSync(flags.file, 'utf8');
+          } else if (flags.stdin || !process.stdin.isTTY) {
+            rawReport = await readStdinUtf8(MAX_REVIEW_STDIN_BYTES);
+          } else {
+            throw new Error('Provide --stdin or --file <path> with JSON review output');
+          }
+          const res = await handleReviewAction(
+            {
+              action: 'ingest_report',
+              projectDir: opts.projectDir,
+              scope: typeof flags.scope === 'string' ? flags.scope : undefined,
+              rawReport,
+            },
+            opts
+          );
+          print(res, `Saved review report ${res.report.reportId} (${res.importedCount} findings)`);
+        } catch (err) {
+          console.error(`Failed to save review report: ${err?.message || err}`);
+          process.exit(1);
+        }
+        break;
+      }
+      if (sub === 'list') {
+        if (flags.history) {
+          const hist = await handleReviewAction({ action: 'history', projectDir: opts.projectDir }, opts);
+          const items = hist.items || [];
+          const lines = items.length
+            ? items.map(
+                (it) =>
+                  `- ${it.reportId} | ${it.scope} | ${it.createdAt} | total=${it.summary?.total ?? 0} (C:${it.summary?.critical ?? 0} H:${it.summary?.high ?? 0} M:${it.summary?.medium ?? 0} L:${it.summary?.low ?? 0})`
+              )
+            : ['No review history found.'];
+          print(hist, lines.join('\n'));
+          break;
+        }
+        const st = await handleReviewAction({ action: 'status', projectDir: opts.projectDir }, opts);
+        const r = st.latestReport;
+        if (!r) {
+          print(st, 'No review report saved yet. Run `ctx review scan` to inspect local changes.');
+          break;
+        }
+        const s = r.summary || {};
+        const lines = [
+          `Latest Review: ${r.reportId} [${r.scope}] ${r.git?.branch || 'nogit'}@${r.git?.head || 'none'}`,
+          `Summary: total=${s.total ?? 0} (critical=${s.critical ?? 0}, high=${s.high ?? 0}, medium=${s.medium ?? 0}, low=${s.low ?? 0}) | History: ${st.historyCount}`,
+          ...(r.findings || [])
+            .filter((f) => !f.ignored)
+            .slice(0, 25)
+            .map((f) => `  [${f.severity.toUpperCase()}] (${f.source}/${f.ruleId}) ${f.file}:${f.line} - ${f.title}`),
+        ];
+        print(st, lines.join('\n'));
+        break;
+      }
+      console.error('Usage: ctx review <scan|gates|save|list> [--scope ...] [--run <gateId>] [--stdin|--file <path>] [--history] [--project <dir>] [--json]');
+      process.exit(1);
+    }
     default: {
       console.log(`Antigravity Hub CLI
 Commands:
-  brief   [--project <dir>] [--budget <n>] [--json]
-  save    --title <text> --summary <text> [--kind <kind>] [--tags a,b]
-  search  <query> [--kind <kind>] [--json]
-  calls   [--session <id>] [--agent main|sub] [--drops] [--json]
-  quota   [--json]
-  doctor  [--repair] [--resync-telemetry] [--json]
-  export  [--json]
-  i18n    <status|refresh|apply|restore> [--json]`);
+  brief     [--project <dir>] [--budget <n>] [--json]
+  save      --title <text> --summary <text> [--kind <kind>] [--tags a,b]
+  search    <query> [--kind <kind>] [--json]
+  calls     [--session <id>] [--agent main|sub] [--drops] [--json]
+  quota     [--json]
+  doctor    [--repair] [--resync-telemetry] [--json]
+  export    [--json]
+  review    <scan|gates|save|list> [--scope ...] [--base <ref>] [--run <id>] [--stdin|--file <path>] [--history] [--project <dir>] [--json]
+  gov       <status|lint|snapshots|rollback [snapshotId]> [--project <dir>] [--json]
+  wallpaper <status|off|next> [--json]
+  i18n      <status|refresh|apply|restore> [--json]`);
     }
   }
 }
