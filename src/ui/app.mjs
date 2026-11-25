@@ -1477,10 +1477,14 @@ function fitCallsTableLayout() {
       const stepNumW = measureTextPx(`#${c.stepIndex}`, monoFont);
       stepW = Math.max(stepW, badgeW + stepNumW + edgePad);
 
-      const tpsStr = `${Number(c.effectiveTps || 0).toFixed(1)} tok/s`;
+      const tpsVal = Number(c.effectiveTps) || 0;
+      const tpsStr = tpsVal > 0 ? `${tpsVal.toFixed(1)} tok/s` : '—';
       tpsW = Math.max(tpsW, measureTextPx(tpsStr, monoBold) + cellPad);
 
-      const durStr = c.ttftMs != null ? `${(c.ttftMs / 1000).toFixed(2)}s TTFT` : `${(Number(c.durationMs || 0) / 1000).toFixed(1)}s`;
+      const durStr =
+        c.ttftMs != null
+          ? `${(Number(c.ttftMs) / 1000).toFixed(1)}s / ${(Number(c.durationMs || 0) / 1000).toFixed(1)}s`
+          : `${(Number(c.durationMs || 0) / 1000).toFixed(1)}s`;
       durW = Math.max(durW, measureTextPx(durStr, monoFont) + cellPad);
 
       const tokStr = `${fmtK(c.contextTokens)} / ${fmtK(c.thinkingTokensEst)} / ${fmtK(c.contentTokensEst)}`;
@@ -1585,7 +1589,35 @@ function renderCalls() {
           : c.cacheHitRate >= 85
             ? 'text-success font-medium'
             : 'text-warning font-medium';
-        const durText = c.ttftMs != null ? `${(c.ttftMs / 1000).toFixed(2)}s TTFT` : `${(c.durationMs / 1000).toFixed(1)}s`;
+        const hasTtft = c.ttftMs != null && Number.isFinite(Number(c.ttftMs));
+        const decodeSec = hasTtft ? Math.max(0, (c.durationMs - Number(c.ttftMs)) / 1000) : null;
+        const durText = hasTtft
+          ? `${(Number(c.ttftMs) / 1000).toFixed(1)}s / ${(c.durationMs / 1000).toFixed(1)}s`
+          : `${(c.durationMs / 1000).toFixed(1)}s`;
+        const durTitle = hasTtft
+          ? getUiLang() === 'en'
+            ? `TTFT ${(Number(c.ttftMs) / 1000).toFixed(2)}s / Decode ${decodeSec.toFixed(2)}s / Total ${(c.durationMs / 1000).toFixed(2)}s`
+            : `首字 ${(Number(c.ttftMs) / 1000).toFixed(2)}s / 解码 ${decodeSec.toFixed(2)}s / 模型总耗时 ${(c.durationMs / 1000).toFixed(2)}s`
+          : '';
+        const tpsVal = Number(c.effectiveTps) || 0;
+        const tpsText = tpsVal > 0 ? `${tpsVal.toFixed(1)} tok/s` : '—';
+        const e2eTps = c.durationMs > 0 ? (c.outputTokens || 0) / (c.durationMs / 1000) : 0;
+        const tpsTitle =
+          tpsVal > 0 && hasTtft
+            ? getUiLang() === 'en'
+              ? `Decode ${tpsVal.toFixed(1)} tok/s (excl. TTFT) | End-to-end ${e2eTps.toFixed(1)} tok/s`
+              : `纯解码速度 ${tpsVal.toFixed(1)} tok/s（已扣首字耗时）| 端到端 ${e2eTps.toFixed(1)} tok/s`
+            : tpsVal <= 0 && hasTtft
+              ? getUiLang() === 'en'
+                ? 'Decode window < 1s; speed omitted to avoid noise'
+                : '解码窗口不足 1 秒，为避免噪声未计入速度'
+              : '';
+        const tpsCls =
+          tpsVal <= 0
+            ? 'text-muted'
+            : tpsVal < 15 && c.timingSource !== 'estimated'
+              ? 'text-warning'
+              : '';
         const totalOut = Math.max(1, c.thinkingTokensEst + c.contentTokensEst);
         const thinkRatio = Math.round((c.thinkingTokensEst / totalOut) * 100);
 
@@ -1603,11 +1635,11 @@ function renderCalls() {
             <span class="col-model-full">${esc(c.model)}</span>
             <span class="col-model-short">${esc(shortModel)}</span>
           </td>
-          <td class="cell-tps text-right whitespace-nowrap mono-num font-semibold ${c.effectiveTps < 15 ? 'text-warning' : ''}">
-            <span>${c.effectiveTps.toFixed(1)} tok/s</span>
+          <td class="cell-tps text-right whitespace-nowrap mono-num font-semibold ${tpsCls}" title="${esc(tpsTitle)}">
+            <span>${tpsText}</span>
             <span class="cell-inline-cost">$${c.estimatedCostUsd.toFixed(3)}</span>
           </td>
-          <td class="cell-dur text-right whitespace-nowrap mono-num text-muted">${durText}</td>
+          <td class="cell-dur text-right whitespace-nowrap mono-num text-muted" title="${esc(durTitle)}">${durText}</td>
           <td class="cell-tok text-right whitespace-nowrap mono-num">
             <span class="cell-inline-dur">${durText} /</span>
             <span>${fmtK(c.contextTokens)}</span>
@@ -1632,6 +1664,7 @@ function renderCalls() {
                   <span class="font-semibold text-fg">${esc(tr('monitor.calls.anatomyTitle', { tag: c.agentTag, step: c.stepIndex }))}</span>
                   <span class="text-muted">${esc(tr('monitor.calls.anatomyModel'))}<span class="text-fg font-medium">${esc(c.model)}</span></span>
                   <span class="text-muted">${esc(tr('monitor.calls.anatomyTiming', { source: c.timingSource }))}</span>
+                  ${hasTtft ? `<span class="text-muted">${esc(durTitle)}</span>` : ''}
                 </div>
                 <span class="mono-num text-muted">${esc(tr('monitor.calls.anatomyThinkRatio', { ratio: thinkRatio }))}</span>
               </div>
@@ -1676,13 +1709,17 @@ function renderCalls() {
   }
 
   const totalCost = list.reduce((s, c) => s + c.estimatedCostUsd, 0);
-  const realTimedList = list.filter((c) => c.timingSource !== 'estimated');
-  const tpsPool = realTimedList.length > 0 ? realTimedList : list;
+  const realTimedList = list.filter((c) => c.timingSource !== 'estimated' && (Number(c.effectiveTps) || 0) > 0);
+  const tpsPool = realTimedList.length > 0 ? realTimedList : list.filter((c) => (Number(c.effectiveTps) || 0) > 0);
   const totalOutTokens = tpsPool.reduce((s, c) => s + (c.outputTokens || 0), 0);
-  const totalDurMs = tpsPool.reduce((s, c) => s + (c.durationMs || 0), 0);
+  const totalActiveMs = tpsPool.reduce((s, c) => {
+    const dur = Math.max(0, Number(c.durationMs) || 0);
+    const ttft = c.ttftMs != null && Number.isFinite(Number(c.ttftMs)) ? Number(c.ttftMs) : null;
+    return s + (ttft != null && dur > ttft ? dur - ttft : dur);
+  }, 0);
   const avgTps =
-    totalDurMs > 0 && totalOutTokens > 0
-      ? totalOutTokens / (totalDurMs / 1000)
+    totalActiveMs > 0 && totalOutTokens > 0
+      ? totalOutTokens / (totalActiveMs / 1000)
       : tpsPool.length
         ? tpsPool.reduce((s, c) => s + c.effectiveTps, 0) / tpsPool.length
         : 0;

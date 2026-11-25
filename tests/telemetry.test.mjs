@@ -169,31 +169,31 @@ test('No prev-delta spike, incremental tail recompute on tools & hook_ms, and ca
     assert.equal(afterTool2.durationMs, 20_000);
     assert.equal(afterTool2.effectiveTps, 240);
 
-    // Sync 4: PostInvocation hook_ms arrives (24_000ms) WITHOUT transcript file growth -> recomputes tail & upgrades to hook_ms
+    // Sync 4: PostInvocation hook_ms arrives (21_500ms, within 2s tool-exec margin) WITHOUT transcript file growth -> recomputes tail & upgrades to hook_ms
     recordHookTiming({ conversationId: convId, phase: 'pre', invocationNum: 1, timestampMs: baseMs + 500 }, { dataDir });
-    recordHookTiming({ conversationId: convId, phase: 'post', invocationNum: 1, timestampMs: baseMs + 24_500 }, { dataDir });
+    recordHookTiming({ conversationId: convId, phase: 'post', invocationNum: 1, timestampMs: baseMs + 22_000 }, { dataDir });
 
     const sync4 = syncConversationTelemetry({ conversationId: convId }, { dataDir, appDataDir });
     assert.equal(sync4.syncedNew, 0);
     assert.equal(sync4.syncedUpdated, 1);
     const afterHook = sync4.calls.find((c) => c.stepIndex === 1);
     assert.equal(afterHook.timingSource, 'hook_ms');
-    assert.equal(afterHook.durationMs, 24_000);
-    assert.equal(afterHook.effectiveTps, 200);
+    assert.equal(afterHook.durationMs, 21_500);
+    assert.equal(afterHook.effectiveTps, 223.26);
 
     // Verify calls.jsonl contains the revised records AND rebuildIndex() never resurrects the stale estimated record
     const paths = getDataPaths({ dataDir });
     const rawLines = readJsonlSafe(paths.callsLogFile);
     assert.ok(rawLines.length >= 4, `Expected revised records appended to calls.jsonl, got ${rawLines.length}`);
     assert.equal(rawLines[rawLines.length - 1].timingSource, 'hook_ms');
-    assert.equal(rawLines[rawLines.length - 1].durationMs, 24_000);
+    assert.equal(rawLines[rawLines.length - 1].durationMs, 21_500);
 
     rebuildIndex({ dataDir });
     const rebuilt = queryCalls({ rootConversationId: convId }, { dataDir });
     assert.equal(rebuilt.length, 1);
     assert.equal(rebuilt[0].timingSource, 'hook_ms');
-    assert.equal(rebuilt[0].durationMs, 24_000);
-    assert.equal(rebuilt[0].effectiveTps, 200);
+    assert.equal(rebuilt[0].durationMs, 21_500);
+    assert.equal(rebuilt[0].effectiveTps, 223.26);
   } finally {
     closeIndexDb();
     clearTelemetryCache();
@@ -621,6 +621,180 @@ test('resyncAllHistoricalTelemetry reparses all local transcripts, clears stale 
     const dbOrphanCalls = queryCalls({ rootConversationId: orphanId }, { dataDir });
     assert.equal(dbOrphanCalls.length, 1);
     assert.equal(dbOrphanCalls[0].effectiveTps, 60);
+  } finally {
+    closeIndexDb();
+    clearTelemetryCache();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// Minimal protobuf wire encoder for synthetic Antigravity conversations/<id>.db tests
+function encodeVarint(val) {
+  let n = BigInt(val);
+  const out = [];
+  while (n >= 0x80n) {
+    out.push(Number((n & 0x7fn) | 0x80n));
+    n >>= 7n;
+  }
+  out.push(Number(n));
+  return Buffer.from(out);
+}
+function encodeFieldVarint(fieldNum, val) {
+  return Buffer.concat([encodeVarint((fieldNum << 3) | 0), encodeVarint(val)]);
+}
+function encodeFieldBytes(fieldNum, buf) {
+  return Buffer.concat([encodeVarint((fieldNum << 3) | 2), encodeVarint(buf.length), buf]);
+}
+function encodeProtoTs(sec, nanos = 0) {
+  return Buffer.concat([encodeFieldVarint(1, sec), encodeFieldVarint(2, nanos)]);
+}
+
+test('Plan B native_db extracts exact TTFT, pure model duration, decode TPS, exact thinking/content split, and omits sub-1s decode noise', async () => {
+  const { DatabaseSync } = await import('node:sqlite');
+  const root = makeTmpDir('cc-tps-nativedb-');
+  const dataDir = path.join(root, 'data');
+  const appDataDir = path.join(root, 'app');
+  const convId = 'native-db-conv-1';
+
+  try {
+    clearTelemetryCache();
+    const convDir = path.join(appDataDir, 'conversations');
+    fs.mkdirSync(convDir, { recursive: true });
+    const convDbPath = path.join(convDir, `${convId}.db`);
+    const db = new DatabaseSync(convDbPath);
+    db.exec('CREATE TABLE steps (idx INTEGER PRIMARY KEY, metadata BLOB);');
+
+    // Step 1: TTFT 6.00s, total 16.00s -> decode 10.00s, out=1028 (think=72, content=956) => 102.8 tok/s
+    const s1Usage = Buffer.concat([
+      encodeFieldVarint(2, 2898),
+      encodeFieldVarint(3, 1028),
+      encodeFieldVarint(5, 397971),
+      encodeFieldVarint(9, 72),
+      encodeFieldVarint(10, 956),
+    ]);
+    const s1Meta = Buffer.concat([
+      encodeFieldBytes(1, encodeProtoTs(1795584331, 0)),
+      encodeFieldBytes(6, encodeProtoTs(1795584337, 0)),
+      encodeFieldBytes(7, encodeProtoTs(1795584347, 0)),
+      encodeFieldBytes(9, s1Usage),
+    ]);
+
+    // Step 2: TTFT 6.20s, total 6.70s -> decode 0.50s (<1s) => effectiveTps=0 (omitted from avgTps & alerts)
+    const s2Usage = Buffer.concat([
+      encodeFieldVarint(2, 4860),
+      encodeFieldVarint(3, 205),
+      encodeFieldVarint(5, 387936),
+      encodeFieldVarint(9, 100),
+      encodeFieldVarint(10, 105),
+    ]);
+    const s2Meta = Buffer.concat([
+      encodeFieldBytes(1, encodeProtoTs(1795584350, 0)),
+      encodeFieldBytes(6, encodeProtoTs(1795584356, 200_000_000)),
+      encodeFieldBytes(7, encodeProtoTs(1795584356, 700_000_000)),
+      encodeFieldBytes(9, s2Usage),
+    ]);
+
+    // Step 3: corrupt metadata blob -> must fail open cleanly to hook_ms/hybrid fallback
+    db.prepare('INSERT INTO steps (idx, metadata) VALUES (?, ?)').run(1, s1Meta);
+    db.prepare('INSERT INTO steps (idx, metadata) VALUES (?, ?)').run(2, s2Meta);
+    db.prepare('INSERT INTO steps (idx, metadata) VALUES (?, ?)').run(3, Buffer.from([0xff, 0xff, 0xff]));
+    db.close();
+
+    const tPath = writeTranscript(appDataDir, convId, [
+      {
+        step_index: 1,
+        type: 'PLANNER_RESPONSE',
+        created_at: '2026-11-25T05:25:31Z',
+        model: 'gemini-4-neon-high',
+        input_tokens: 2898,
+        cache_read_tokens: 397971,
+        output_tokens: 1028,
+        content: 'Final response',
+      },
+      {
+        step_index: 2,
+        type: 'PLANNER_RESPONSE',
+        created_at: '2026-11-25T05:25:50Z',
+        model: 'gemini-4-neon-high',
+        input_tokens: 4860,
+        cache_read_tokens: 387936,
+        output_tokens: 205,
+        tool_calls: [{ name: 'read_file', args: {} }],
+      },
+      {
+        step_index: 3,
+        type: 'PLANNER_RESPONSE',
+        created_at: '2026-11-25T05:26:00Z',
+        model: 'gemini-4-neon-high',
+        input_tokens: 1000,
+        cache_read_tokens: 390000,
+        output_tokens: 500,
+        tool_calls: [{ name: 'edit_file', args: {} }],
+      },
+      { step_index: 4, type: 'GENERIC', created_at: '2026-11-25T05:26:05Z', content: 'done' },
+    ]);
+
+    const rep = getTelemetryReport({ conversationId: convId, transcriptPath: tPath, force: true }, { dataDir, appDataDir });
+    const c1 = rep.calls.find((c) => c.stepIndex === 1);
+    const c2 = rep.calls.find((c) => c.stepIndex === 2);
+    const c3 = rep.calls.find((c) => c.stepIndex === 3);
+
+    assert.equal(c1.timingSource, 'native_db');
+    assert.equal(c1.ttftMs, 6000);
+    assert.equal(c1.durationMs, 16000);
+    assert.equal(c1.effectiveTps, 102.8);
+    assert.equal(c1.thinkingTokensEst, 72);
+    assert.equal(c1.contentTokensEst, 956);
+
+    assert.equal(c2.timingSource, 'native_db');
+    assert.equal(c2.ttftMs, 6200);
+    assert.equal(c2.durationMs, 6700);
+    assert.equal(c2.effectiveTps, 0, 'Sub-1s decode window must return 0 (display as —)');
+    assert.equal(c2.thinkingTokensEst, 100);
+    assert.equal(c2.contentTokensEst, 105);
+
+    assert.equal(c3.timingSource, 'hybrid_tool_split', 'Corrupt native blob must fail open to hybrid_tool_split');
+    assert.equal(c3.durationMs, 5000);
+    assert.equal(c3.effectiveTps, 100);
+  } finally {
+    closeIndexDb();
+    clearTelemetryCache();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('Plan A fallback strips local tool execution time when hook_ms exceeds streaming tool group span by >2s', () => {
+  const root = makeTmpDir('cc-tps-plan-a-');
+  const dataDir = path.join(root, 'data');
+  const appDataDir = path.join(root, 'app');
+  const convId = 'plan-a-tool-strip';
+
+  try {
+    clearTelemetryCache();
+    const startMs = Date.parse('2026-11-25T05:25:08Z');
+    // Hook wraps model (11s) + git push (12s) = 23s total
+    recordHookTiming({ conversationId: convId, phase: 'pre', invocationNum: 1, timestampMs: startMs + 200 }, { dataDir });
+    recordHookTiming({ conversationId: convId, phase: 'post', invocationNum: 1, timestampMs: startMs + 23_200 }, { dataDir });
+
+    const tPath = writeTranscript(appDataDir, convId, [
+      {
+        step_index: 1,
+        type: 'PLANNER_RESPONSE',
+        created_at: '2026-11-25T05:25:08Z',
+        model: 'gemini-4-neon-high',
+        input_tokens: 3000,
+        cache_read_tokens: 396000,
+        output_tokens: 1100,
+        tool_calls: [{ name: 'run_command', args: { CommandLine: 'git push' } }],
+      },
+      { step_index: 2, type: 'GENERIC', created_at: '2026-11-25T05:25:19Z', content: 'git push done at 13:25:31' },
+    ]);
+
+    const rep = getTelemetryReport({ conversationId: convId, transcriptPath: tPath, force: true }, { dataDir, appDataDir });
+    const c1 = rep.calls.find((c) => c.stepIndex === 1);
+    assert.equal(c1.timingSource, 'hybrid_tool_split', 'Must strip 12s local tool execution from 23s hook_ms');
+    assert.equal(c1.durationMs, 11_000);
+    assert.equal(c1.effectiveTps, 100);
   } finally {
     closeIndexDb();
     clearTelemetryCache();

@@ -9,6 +9,11 @@ import {
   listConversations,
   parseTranscriptIncremental,
 } from './transcript-parser.mjs';
+import {
+  clearNativeStepMetricsCache,
+  getNativeDbSignature,
+  loadNativeStepMetrics,
+} from './native-step-metrics.mjs';
 
 const TELEMETRY_REPORT_TTL_MS = 1_500;
 const TELEMETRY_REPORT_CACHE_MAX = 24;
@@ -18,12 +23,15 @@ const TIMINGS_COMPACT_SIZE_HINT = 32_768;
 const HOOK_MATCH_WINDOW_MS = 5_000;
 const MAX_TOOL_SPAN_MS = 600_000;
 const MAX_TRANSCRIPT_FALLBACK_MS = 180_000;
+const MIN_DECODE_TPS_WINDOW_MS = 1_000;
+const MIN_DECODE_TPS_TOKENS = 15;
 const USER_BOUNDARY_STEP_TYPES = new Set(['USER_INPUT', 'SYSTEM_MESSAGE']);
 const TIMING_SOURCE_PRIORITY = {
   estimated: 0,
   transcript_fallback: 1,
   hybrid_tool_split: 2,
   hook_ms: 3,
+  native_db: 4,
 };
 
 const telemetryReportCache = new Map();
@@ -32,6 +40,7 @@ const timingsMapCache = new Map();
 export function clearTelemetryCache() {
   telemetryReportCache.clear();
   timingsMapCache.clear();
+  clearNativeStepMetricsCache();
 }
 
 function safeStatSig(filePath) {
@@ -304,52 +313,110 @@ function splitOutputTokens(outputTokens, thinkingText, contentText, toolCalls, m
 
 /**
  * Estimate duration and timingSource using validated multi-source strategy:
- * 1) hook_ms (exact PreInvocation->PostInvocation within <= 5s, validated against streaming tool group span)
- * 2) reportedDurationMs (if transcript adds native duration_ms)
- * 3) hybrid_tool_split (full consecutive tool group span for streaming multi-tool calls)
- * 4) transcript_fallback (next.tsMs - cur.tsMs ONLY when next is NOT USER_INPUT / SYSTEM_MESSAGE)
- * 5) estimated (conservative ~60 tok/s fallback; never uses broken cur.tsMs - prev.tsMs)
+ * 1) native_db (Antigravity local read-only conversation SQLite nanosecond TTFT + pure model duration)
+ * 2) hook_ms (PreInvocation->PostInvocation within <= 5s; strips local tool execution when tool group span proves hook_ms includes tool runtime)
+ * 3) reportedDurationMs (if transcript adds native duration_ms)
+ * 4) hybrid_tool_split (full consecutive tool group span for streaming multi-tool calls — pure model time before tool execution)
+ * 5) transcript_fallback (next.tsMs - cur.tsMs ONLY when next is NOT USER_INPUT / SYSTEM_MESSAGE)
+ * 6) estimated (conservative ~60 tok/s fallback; never uses broken cur.tsMs - prev.tsMs)
  */
-function computeStepDuration(steps, idx, timingsEntry, usedSampleIndices = null) {
+function computeStepDuration(steps, idx, timingsEntry, usedSampleIndices = null, nativeMetric = null) {
   const cur = steps[idx];
   const toolCount = Array.isArray(cur?.toolCalls) ? cur.toolCalls.length : 0;
   const { minTranscriptSpanMs, toolStepsFound } = computeToolGroupSpan(steps, idx);
 
+  // 1) Native nanosecond step metadata (pure model duration + TTFT, zero tool execution contamination)
+  if (nativeMetric && Number.isFinite(nativeMetric.modelDurationMs) && nativeMetric.modelDurationMs >= 50) {
+    return {
+      durationMs: nativeMetric.modelDurationMs,
+      ttftMs: nativeMetric.ttftMs ?? cur.ttftMs ?? null,
+      decodeDurationMs: nativeMetric.decodeDurationMs ?? null,
+      timingSource: 'native_db',
+    };
+  }
+
   const hookMatch = findHookTimingMatch(timingsEntry, cur.tsMs, usedSampleIndices);
   if (hookMatch != null) {
     const hookMs = hookMatch.durationMs;
+    if (
+      toolCount > 0 &&
+      minTranscriptSpanMs != null &&
+      minTranscriptSpanMs >= 1_000 &&
+      minTranscriptSpanMs <= MAX_TOOL_SPAN_MS &&
+      hookMs > minTranscriptSpanMs + 2_000
+    ) {
+      // Plan A: PreInvocation->PostInvocation wraps local tool execution (e.g. npm test / git push / edits).
+      // Consume the matched hook sample to avoid shifting, and use pure model generation span instead.
+      if (usedSampleIndices) usedSampleIndices.add(hookMatch.idx);
+      return {
+        durationMs: minTranscriptSpanMs,
+        ttftMs: cur.ttftMs ?? null,
+        decodeDurationMs: null,
+        timingSource: 'hybrid_tool_split',
+      };
+    }
     if (minTranscriptSpanMs != null && minTranscriptSpanMs >= 3_000 && hookMs < minTranscriptSpanMs - 2_000) {
       // Reject mismatched short hookMs; prefer full streaming tool group span
       if (minTranscriptSpanMs <= MAX_TOOL_SPAN_MS) {
-        return { durationMs: minTranscriptSpanMs, timingSource: 'hybrid_tool_split' };
+        return {
+          durationMs: minTranscriptSpanMs,
+          ttftMs: cur.ttftMs ?? null,
+          decodeDurationMs: null,
+          timingSource: 'hybrid_tool_split',
+        };
       }
     } else {
       if (usedSampleIndices) usedSampleIndices.add(hookMatch.idx);
-      return { durationMs: hookMs, timingSource: 'hook_ms' };
+      return {
+        durationMs: hookMs,
+        ttftMs: cur.ttftMs ?? null,
+        decodeDurationMs: null,
+        timingSource: 'hook_ms',
+      };
     }
   }
 
   if (cur.reportedDurationMs != null && cur.reportedDurationMs >= 100) {
-    return { durationMs: cur.reportedDurationMs, timingSource: 'hook_ms' };
+    return {
+      durationMs: cur.reportedDurationMs,
+      ttftMs: cur.ttftMs ?? null,
+      decodeDurationMs: null,
+      timingSource: 'hook_ms',
+    };
   }
 
   if (toolCount > 0 && toolStepsFound > 0) {
     if (minTranscriptSpanMs != null && minTranscriptSpanMs >= 200 && minTranscriptSpanMs <= MAX_TOOL_SPAN_MS) {
-      return { durationMs: minTranscriptSpanMs, timingSource: 'hybrid_tool_split' };
+      return {
+        durationMs: minTranscriptSpanMs,
+        ttftMs: cur.ttftMs ?? null,
+        decodeDurationMs: null,
+        timingSource: 'hybrid_tool_split',
+      };
     }
   } else {
     const next = steps[idx + 1];
     if (next && !USER_BOUNDARY_STEP_TYPES.has(next.type) && cur.tsMs > 0 && next.tsMs > cur.tsMs) {
       const delta = next.tsMs - cur.tsMs;
       if (delta >= 200 && delta <= MAX_TRANSCRIPT_FALLBACK_MS) {
-        return { durationMs: delta, timingSource: 'transcript_fallback' };
+        return {
+          durationMs: delta,
+          ttftMs: cur.ttftMs ?? null,
+          decodeDurationMs: null,
+          timingSource: 'transcript_fallback',
+        };
       }
     }
   }
 
   // Conservative fallback proportional to output tokens (~60 tok/s baseline); marked 'estimated'
   const fallbackMs = Math.max(800, Math.round(((cur.outputTokens || 60) / 60) * 1000));
-  return { durationMs: fallbackMs, timingSource: 'estimated' };
+  return {
+    durationMs: fallbackMs,
+    ttftMs: cur.ttftMs ?? null,
+    decodeDurationMs: null,
+    timingSource: 'estimated',
+  };
 }
 
 /**
@@ -529,6 +596,7 @@ function buildCallsFromSteps({
   agentTag,
   config,
   timingsMap,
+  nativeMetrics = null,
 }) {
   const timingsEntry = timingsMap[conversationId];
   const usedSampleIndices = new Set();
@@ -542,16 +610,42 @@ function buildCallsFromSteps({
     if (step.inputTokens === 0 && step.cacheReadTokens === 0 && step.outputTokens === 0) continue;
 
     const contextTokens = step.inputTokens + step.cacheReadTokens;
-    const { durationMs, timingSource } = computeStepDuration(steps, i, timingsEntry, usedSampleIndices);
-    const effectiveTps = durationMs > 0 ? Number((step.outputTokens / (durationMs / 1000)).toFixed(2)) : 0;
-    const cacheHitRate = contextTokens > 0 ? Number(((step.cacheReadTokens / contextTokens) * 100).toFixed(2)) : 0;
-    const { thinkingTokensEst, contentTokensEst } = splitOutputTokens(
-      step.outputTokens,
-      step.thinking,
-      step.content,
-      step.toolCalls,
-      step._recomputable ? step : null
+    const nativeMetric = nativeMetrics instanceof Map ? nativeMetrics.get(step.stepIndex) || null : null;
+    const { durationMs, ttftMs, decodeDurationMs, timingSource } = computeStepDuration(
+      steps,
+      i,
+      timingsEntry,
+      usedSampleIndices,
+      nativeMetric
     );
+
+    let effectiveTps = 0;
+    if (timingSource === 'native_db' && ttftMs != null) {
+      const decodeMs = decodeDurationMs != null ? decodeDurationMs : Math.max(0, durationMs - ttftMs);
+      if (decodeMs >= MIN_DECODE_TPS_WINDOW_MS && step.outputTokens >= MIN_DECODE_TPS_TOKENS) {
+        effectiveTps = Number((step.outputTokens / (decodeMs / 1000)).toFixed(2));
+      } else {
+        effectiveTps = 0;
+      }
+    } else if (durationMs > 0) {
+      effectiveTps = Number((step.outputTokens / (durationMs / 1000)).toFixed(2));
+    }
+
+    const cacheHitRate = contextTokens > 0 ? Number(((step.cacheReadTokens / contextTokens) * 100).toFixed(2)) : 0;
+    const hasExactNativeSplit =
+      nativeMetric != null &&
+      Number.isFinite(nativeMetric.thinkingTokens) &&
+      Number.isFinite(nativeMetric.contentTokens) &&
+      nativeMetric.thinkingTokens + nativeMetric.contentTokens === step.outputTokens;
+    const { thinkingTokensEst, contentTokensEst } = hasExactNativeSplit
+      ? { thinkingTokensEst: nativeMetric.thinkingTokens, contentTokensEst: nativeMetric.contentTokens }
+      : splitOutputTokens(
+          step.outputTokens,
+          step.thinking,
+          step.content,
+          step.toolCalls,
+          step._recomputable ? step : null
+        );
     const estimatedCostUsd = estimateCallCostUsd(
       {
         model: step.model,
@@ -576,7 +670,7 @@ function buildCallsFromSteps({
       tsMs: step.tsMs || Date.now(),
       durationMs: Number(durationMs.toFixed(1)),
       timingSource,
-      ttftMs: step.ttftMs,
+      ttftMs: ttftMs == null ? null : Number(Number(ttftMs).toFixed(1)),
       inputTokens: step.inputTokens,
       cacheReadTokens: step.cacheReadTokens,
       outputTokens: step.outputTokens,
@@ -619,6 +713,7 @@ function parseTranscriptForSync({
   timingsChanged = false,
   config,
   timingsMap,
+  nativeMetrics = null,
 }) {
   const stat = fs.statSync(transcriptPath);
   const prevOffset = Number(prevState?.offset) || 0;
@@ -639,6 +734,7 @@ function parseTranscriptForSync({
         agentTag,
         config,
         timingsMap,
+        nativeMetrics,
       });
       return {
         mode: 'recompute_tail',
@@ -684,6 +780,7 @@ function parseTranscriptForSync({
       agentTag,
       config,
       timingsMap,
+      nativeMetrics,
     });
     return {
       mode: 'incremental',
@@ -710,6 +807,7 @@ function parseTranscriptForSync({
     agentTag,
     config,
     timingsMap,
+    nativeMetrics,
   });
   return {
     mode: 'full',
@@ -757,12 +855,14 @@ export function syncConversationTelemetry({ conversationId, transcriptPath, forc
 
   const cursors = readJsonSafe(paths.cursorsFile, {});
   const timingsMap = loadTimingsMap(paths);
-  const timingsSig = `${safeStatSig(getTimingsLogPath(paths))}|${safeStatSig(paths.timingsFile)}`;
+  const baseTimingsSig = `${safeStatSig(getTimingsLogPath(paths))}|${safeStatSig(paths.timingsFile)}`;
+  const mainNativeSig = getNativeDbSignature(resolvedId, options);
+  const timingsSig = `${baseTimingsSig}|${mainNativeSig}`;
 
   const mainStat = fs.statSync(resolvedPath);
   const prevCursor = cursors[resolvedId] || { size: -1, offset: 0, subagents: [] };
   const mainHasPendingTail =
-    Boolean(prevCursor.lastCall && prevCursor.lastCall.timingSource !== 'hook_ms') &&
+    Boolean(prevCursor.lastCall && prevCursor.lastCall.timingSource !== 'native_db') &&
     findRecomputableTailPlannerIdx(prevCursor.tailSteps) >= 0;
   const timingsChangedMain = Boolean(
     mainHasPendingTail && prevCursor.timingsSig && prevCursor.timingsSig !== timingsSig
@@ -777,11 +877,12 @@ export function syncConversationTelemetry({ conversationId, transcriptPath, forc
     for (const sub of prevCursor.subagents) {
       if (sub.path && fs.existsSync(sub.path)) {
         const subSz = fs.statSync(sub.path).size;
+        const subSig = `${baseTimingsSig}|${getNativeDbSignature(sub.conversationId, options)}`;
         const subHasPendingTail =
-          Boolean(sub.lastCall && sub.lastCall.timingSource !== 'hook_ms') &&
+          Boolean(sub.lastCall && sub.lastCall.timingSource !== 'native_db') &&
           findRecomputableTailPlannerIdx(sub.tailSteps) >= 0;
         const subTimingsChanged = Boolean(
-          subHasPendingTail && sub.timingsSig && sub.timingsSig !== timingsSig
+          subHasPendingTail && sub.timingsSig && sub.timingsSig !== subSig
         );
         if (subSz !== sub.size || (Number(sub.offset) || 0) !== subSz || subTimingsChanged) {
           needsSync = true;
@@ -811,6 +912,7 @@ export function syncConversationTelemetry({ conversationId, transcriptPath, forc
     Number(prevCursor.offset) > 0 &&
     Number(prevCursor.offset) <= mainStat.size;
 
+  const mainNativeMetrics = loadNativeStepMetrics(resolvedId, options);
   const mainRes = parseTranscriptForSync({
     transcriptPath: resolvedPath,
     conversationId: resolvedId,
@@ -822,6 +924,7 @@ export function syncConversationTelemetry({ conversationId, transcriptPath, forc
     timingsChanged: timingsChangedMain,
     config,
     timingsMap,
+    nativeMetrics: mainNativeMetrics,
   });
 
   // Merge previously known subagents with any newly discovered subagents
@@ -863,13 +966,15 @@ export function syncConversationTelemetry({ conversationId, transcriptPath, forc
       hasExistingDbRows &&
       Number(prevSub?.offset) > 0 &&
       Number(prevSub?.offset) <= subStat.size;
+    const subSig = `${baseTimingsSig}|${getNativeDbSignature(subId, options)}`;
     const subHasPendingTail =
-      Boolean(prevSub?.lastCall && prevSub.lastCall.timingSource !== 'hook_ms') &&
+      Boolean(prevSub?.lastCall && prevSub.lastCall.timingSource !== 'native_db') &&
       findRecomputableTailPlannerIdx(prevSub?.tailSteps) >= 0;
     const timingsChangedSub = Boolean(
-      subHasPendingTail && prevSub?.timingsSig && prevSub.timingsSig !== timingsSig
+      subHasPendingTail && prevSub?.timingsSig && prevSub.timingsSig !== subSig
     );
 
+    const subNativeMetrics = loadNativeStepMetrics(subId, options);
     const subRes = parseTranscriptForSync({
       transcriptPath: subPath,
       conversationId: subId,
@@ -881,6 +986,7 @@ export function syncConversationTelemetry({ conversationId, transcriptPath, forc
       timingsChanged: timingsChangedSub,
       config,
       timingsMap,
+      nativeMetrics: subNativeMetrics,
     });
     subMeta.push({
       conversationId: subId,
@@ -891,7 +997,7 @@ export function syncConversationTelemetry({ conversationId, transcriptPath, forc
       lastCall: subRes.lastCall,
       prevCallBeforeLast: subRes.prevCallBeforeLast,
       tailSteps: subRes.tailSteps,
-      timingsSig,
+      timingsSig: subSig,
     });
     if (subRes.calls.length > 0) {
       callsToUpsert.push(...subRes.calls);
@@ -1175,19 +1281,24 @@ export function evaluateAlerts(calls, config, contextPct = null) {
 }
 
 /**
- * Compute token-weighted average TPS: sum(outputTokens) / sum(durationSec).
- * Excludes 'estimated' steps when real-timed steps exist in the session,
- * and avoids short low-token tool steps skewing overall throughput downward.
+ * Compute token-weighted average TPS:
+ * - For native_db calls with TTFT, uses pure decode duration (durationMs - ttftMs) to match real decode throughput.
+ * - Excludes 'estimated' steps and sub-second decode steps (effectiveTps === 0) when valid timed calls exist.
  */
 function calcWeightedAvgTps(calls) {
   if (!calls || !calls.length) return 0;
-  const realTimed = calls.filter((c) => c.timingSource !== 'estimated');
-  const pool = realTimed.length > 0 ? realTimed : calls;
+  const realTimed = calls.filter((c) => c.timingSource !== 'estimated' && (Number(c.effectiveTps) || 0) > 0);
+  const pool = realTimed.length > 0 ? realTimed : calls.filter((c) => (Number(c.effectiveTps) || 0) > 0);
+  if (!pool.length) return 0;
   let totalOut = 0;
   let totalMs = 0;
   for (const c of pool) {
-    totalOut += Math.max(0, Number(c.outputTokens) || 0);
-    totalMs += Math.max(0, Number(c.durationMs) || 0);
+    const out = Math.max(0, Number(c.outputTokens) || 0);
+    const dur = Math.max(0, Number(c.durationMs) || 0);
+    const ttft = c.ttftMs != null && Number.isFinite(Number(c.ttftMs)) ? Number(c.ttftMs) : null;
+    const activeMs = ttft != null && dur > ttft ? dur - ttft : dur;
+    totalOut += out;
+    totalMs += activeMs;
   }
   if (totalMs > 0 && totalOut > 0) {
     return Number((totalOut / (totalMs / 1000)).toFixed(1));
@@ -1566,6 +1677,7 @@ export function resyncAllHistoricalTelemetry(options = {}) {
     const agentType = subInfo ? 'sub' : 'main';
     const agentTag = subInfo ? subInfo.agentTag : '主';
 
+    const nativeMetrics = loadNativeStepMetrics(entry.conversationId, options);
     const built = buildCallsFromSteps({
       steps: entry.steps,
       startIdx: 0,
@@ -1576,6 +1688,7 @@ export function resyncAllHistoricalTelemetry(options = {}) {
       agentTag,
       config,
       timingsMap,
+      nativeMetrics,
     });
     for (const c of built.calls) {
       reparsedByUid.set(c.callUid, c);

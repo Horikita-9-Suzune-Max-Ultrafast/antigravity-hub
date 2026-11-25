@@ -290,6 +290,8 @@ export function upsertCallRow(db, c) {
       duration_ms = excluded.duration_ms,
       timing_source = excluded.timing_source,
       ttft_ms = excluded.ttft_ms,
+      thinking_tokens_est = excluded.thinking_tokens_est,
+      content_tokens_est = excluded.content_tokens_est,
       effective_tps = excluded.effective_tps,
       cache_hit_rate = excluded.cache_hit_rate,
       cache_drop = excluded.cache_drop,
