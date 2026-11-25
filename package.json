@@ -1,7 +1,7 @@
 {
   "name": "context-cache",
-  "version": "1.5.5",
-  "description": "Modular Antigravity Hub (MCP App): Context Monitor & 3-source handoff capsule, Ecosystem & Harness Governance, Local Wallpaper Engine, and Zero-Dep Chinese Localization",
+  "version": "1.6.0",
+  "description": "Modular Antigravity Hub (MCP App): Context Monitor & 3-source handoff capsule, Local Code Review & Subagent Gatekeeper, Ecosystem & Harness Governance, Local Wallpaper Engine, and Zero-Dep Chinese Localization",
   "license": "MIT",
   "type": "module",
   "private": true,
