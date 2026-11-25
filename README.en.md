@@ -5,17 +5,19 @@
 **Modular Native Control Center (MCP App) for Google Antigravity: Context Cache & Monitor, Ecosystem & Harness Governance, Local Wallpaper Engine, and Zero-Dep Chinese Localization**
 
 [![Version: v1.5.4](https://img.shields.io/badge/Version-v1.5.4-0ea5e9.svg)](https://github.com/Horikita-9-Suzune-Max-Ultrafast/antigravity-hub/releases/tag/v1.5.4)
+[![Antigravity 2.35.1 Update Verified](https://img.shields.io/badge/Antigravity%202.35.1-Update%20Verified-10b981.svg)](#battle-tested-official-update-survival-proof)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 [![Node.js >= 24](https://img.shields.io/badge/Node.js-%3E%3D24-339933.svg)](https://nodejs.org/)
 [![Zero Runtime Deps](https://img.shields.io/badge/Runtime%20Deps-0-brightgreen.svg)](#architecture--design-principles)
 
-> **Core Commitments**: **0 LLM tokens** consumed by live monitoring & UI ｜ **Zero files written** inside your business repositories ｜ **Zero runtime dependencies** (no `node_modules`) ｜ **100% readable source & one-click lossless rollback**
+> **Core Commitments**: **0 LLM tokens** consumed by live monitoring & UI ｜ **Zero files written** inside your business repositories ｜ **Zero runtime dependencies** (no `node_modules`) ｜ **Battle-tested through live official Antigravity updates with zero data loss & one-click rollback**
 
 ---
 
 ## Quick Navigation
 
 - [Four Core Modules at a Glance](#four-core-modules-at-a-glance)
+- [Battle-Tested: Official Update Survival Proof](#battle-tested-official-update-survival-proof)
 - [What's New in v1.5.4](#whats-new-in-v154)
 - [Quick Start (3-Step Prebuilt Bundle)](#quick-start)
 - [Key Features](#key-features)
@@ -37,6 +39,25 @@
 | **2. Ecosystem & Harness Governance** | Too many plugins/MCPs bloating every session; manual toggling across workflows risks disabling essentials | Effective Harness stack (`P1 Workspace` → `P4 Built-in`), offline 3-in-1 linter (MCP bloat / Skill conflicts & broken links / secret audit) with **tiered remediation**, multi-signal classifier & **interactive scenario profiles**, pinned core plugins, immutable config snapshots & CLI rollback |
 | **3. Local Wallpaper Engine**<br>`Appearance & Wallpaper` | Plain default UI without risking fragile ASAR repacking for visual customization | Zero-new-ASAR hot reload, external local wallpaper library (15 MiB breaker) + **100% read-only local folder scanning**, custom rotation pools with dual-buffer crossfade, **live slider tuning (opacity/blur/saturation/scrim/glass)**, light/dark theme bindings, instant & CLI emergency off |
 | **4. Antigravity Localization** | English-only native menus and UI; fear of third-party patches translating code or breaking updates | Pure Node.js streaming ASAR patcher (maintains 4 MiB SHA-256 integrity), **739+ curated entries** (menus + dynamic UI + regex patterns), 3-layer hot-reloaded external dictionary, **physical immunity zones** (code/terminal/paths), clean original backup guard & one-click restore |
+
+---
+
+## Battle-Tested: Official Update Survival Proof
+
+The biggest fear with any client-enhancing plugin is simple: **"Will the next official Antigravity update lock the installer, break my IDE, wipe my data, or restore a stale backup?"**
+
+We intentionally ran a live, in-place official upgrade to **Antigravity `2.35.1`** while keeping the full "dirty production state" active — **ASAR localization ON + local wallpaper ON + native floating window running**, with **no pre-uninstall and no pre-restore** — and audited all 6 anti-fragility guarantees end to end:
+
+| Anti-Fragility Check | Result | Verified Runtime Behavior |
+| :--- | :---: | :--- |
+| **1. Zero Installer Locks & Zero Orphan Processes** | **PASS** | Official updater cleanly overwrote `app.asar` and cold-started with zero file-lock errors or blank screens; old host processes exited cleanly, leaving exactly one healthy MCP Server + WebView2 floating host tree |
+| **2. 100% External Truth-Source Retention** | **PASS** | Verified item-by-item against the pre-update export snapshot: Vault memories, deduplicated SQLite call index, user config & quota calibrations, 1,972 active dictionary entries, and the local wallpaper library all survived with zero loss |
+| **3. Automatic Clean `.bak` Refresh on Re-Apply** | **PASS** | Clicking **Apply Localization** detected the fresh `2.35.1` binary (`current_clean_asar`), refreshed `app.asar.agy-console.bak` with the clean new `2.35.1` original first (eliminating stale-backup downgrade risk), and cleanly re-injected main + preload runtimes |
+| **4. Automatic Wallpaper Recovery (Zero Re-Setup)** | **PASS** | Because the wallpaper engine adds zero new ASAR injection points, the existing library, rotation schedule, opacity, blur, scrim, and glass parameters came right back automatically |
+| **5. Hooks & New Transcript Schema Compatibility** | **PASS** | `SessionStart` brief injection, `PreInvocation`/`PostInvocation` millisecond timing, and live `transcript_full.jsonl` parsing worked out of the box; `ctx_doctor` reported `HEALTHY`, `0` schema drift, and circuit breaker `CLOSED (0/3)` |
+| **6. Ecosystem Governance Intact** | **PASS** | Post-upgrade `gov status` scored **`100/100`** (0 errors, 0 warnings, 0 secrets), with all plugins, MCP servers, skills, rules, and hooks intact |
+
+> Even if a future Antigravity release changes internal hook schemas, hooks fail open with `{}`, record redacted entries to `schema-drift.jsonl`, and trip the 3-strike circuit breaker so your conversations are never blocked. Running `ctx doctor --repair` rebuilds the SQLite index and resets state losslessly.
 
 ---
 
@@ -252,7 +273,7 @@ Ensure **Node.js >= 24.0.0** is installed (`node -v`). Antigravity Hub relies on
 <summary><strong>3. Will Localization or Wallpaper break Antigravity after an official update?</strong></summary>
 
 - **Wallpaper**: Introduces zero new ASAR injection points and can be disabled instantly in UI or via `ctx wallpaper off`.
-- **Localization**: Preserves a verified clean `app.asar` backup before patching and supports one-click restore. If an official Antigravity update overwrites `app.asar`, the app continues running normally and the Hub displays an update reminder to re-apply in one click.
+- **Localization**: Preserves a verified clean `app.asar` backup before patching and supports one-click restore. Battle-tested through a live in-place upgrade to **Antigravity `2.35.1`** with localization, wallpaper, and the floating window all running: the app starts normally after the update overwrites `app.asar`, the Hub prompts for a one-click re-apply, `.bak` is automatically refreshed with the new clean `2.35.1` original (preventing accidental downgrade), and your wallpaper settings return automatically.
 </details>
 
 <details>
