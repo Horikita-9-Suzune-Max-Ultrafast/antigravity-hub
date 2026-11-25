@@ -2,77 +2,135 @@ import crypto from 'node:crypto';
 import path from 'node:path';
 import fs from 'node:fs';
 import { execFileSync } from 'node:child_process';
+import { createLruCache, safeStatSig } from './fs-utils.mjs';
 
 const GIT_CTX_TTL_MS = 12_000;
-const GIT_CTX_MAX_ENTRIES = 64;
 const COMMITS_AHEAD_TTL_MS = 60_000;
-const COMMITS_AHEAD_MAX_ENTRIES = 256;
 
-const gitContextCache = new Map();
-const commitsAheadCache = new Map();
+const gitContextCache = createLruCache(64);
+const commitsAheadCache = createLruCache(256);
+
+let gitSpawnMetricsCount = 0;
 
 export function clearGitContextCache() {
   gitContextCache.clear();
   commitsAheadCache.clear();
 }
 
-function lruSet(map, key, val, maxEntries) {
-  if (map.has(key)) map.delete(key);
-  map.set(key, val);
-  while (map.size > maxEntries) {
-    const oldest = map.keys().next().value;
-    if (oldest === undefined) break;
-    map.delete(oldest);
-  }
+export function getGitSpawnCount() {
+  return gitSpawnMetricsCount;
 }
 
-function safeStatSig(filePath) {
-  try {
-    const st = fs.statSync(filePath);
-    return `${st.mtimeMs}:${st.size}`;
-  } catch {
-    return 'none';
-  }
+export function resetGitSpawnCount() {
+  gitSpawnMetricsCount = 0;
 }
 
-function resolveGitDir(repoRoot) {
-  const dotGit = path.join(repoRoot, '.git');
-  try {
-    const st = fs.statSync(dotGit);
-    if (st.isDirectory()) return dotGit;
-    if (st.isFile()) {
-      const content = fs.readFileSync(dotGit, 'utf8').trim();
-      const m = /^gitdir:\s*(.+)$/im.exec(content);
-      if (m && m[1]) {
-        return path.resolve(repoRoot, m[1].trim());
+/**
+ * Pure filesystem walk upward to locate `.git` (supports normal repos and Git worktree pointer files).
+ * Zero child processes spawned.
+ */
+function findGitRootAndDir(startDir) {
+  let cur = path.resolve(startDir);
+  const visited = new Set();
+  while (cur && !visited.has(cur)) {
+    visited.add(cur);
+    const dotGit = path.join(cur, '.git');
+    try {
+      const st = fs.statSync(dotGit);
+      if (st.isDirectory()) {
+        return { repoRoot: cur, gitDir: dotGit, commonDir: dotGit };
       }
+      if (st.isFile()) {
+        const content = fs.readFileSync(dotGit, 'utf8').trim();
+        const m = /^gitdir:\s*(.+)$/im.exec(content);
+        if (m && m[1]) {
+          const gitDir = path.resolve(cur, m[1].trim());
+          let commonDir = gitDir;
+          const commonDirFile = path.join(gitDir, 'commondir');
+          try {
+            if (fs.existsSync(commonDirFile)) {
+              const relCommon = fs.readFileSync(commonDirFile, 'utf8').trim();
+              if (relCommon) {
+                commonDir = path.resolve(gitDir, relCommon);
+              }
+            }
+          } catch {
+            // fallback to gitDir
+          }
+          return { repoRoot: cur, gitDir, commonDir };
+        }
+      }
+    } catch {
+      // not a git root at this level
     }
-  } catch {
-    // not a git root directly
+    const parent = path.dirname(cur);
+    if (parent === cur) break;
+    cur = parent;
   }
   return null;
 }
 
+/**
+ * Read `[remote "origin"] url = ...` directly from `.git/config` (or worktree commondir/config).
+ * Zero child processes spawned.
+ */
+function readOriginUrlFromConfig(commonDir, gitDir) {
+  const candidates =
+    commonDir && commonDir !== gitDir
+      ? [path.join(commonDir, 'config'), path.join(gitDir, 'config')]
+      : [path.join(gitDir, 'config')];
+
+  for (const cfgPath of candidates) {
+    try {
+      if (!fs.existsSync(cfgPath)) continue;
+      const raw = fs.readFileSync(cfgPath, 'utf8');
+      const lines = raw.split(/\r?\n/);
+      let inOrigin = false;
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.startsWith('#') || trimmed.startsWith(';')) continue;
+        if (trimmed.startsWith('[')) {
+          inOrigin = /^\[\s*remote\s+"origin"\s*\]/i.test(trimmed);
+          continue;
+        }
+        if (inOrigin) {
+          const m = /^url\s*=\s*(.+)$/i.exec(trimmed);
+          if (m && m[1]) {
+            return m[1].trim();
+          }
+        }
+      }
+    } catch {
+      // ignore unreadable config
+    }
+  }
+  return '';
+}
+
 function computeGitStateFingerprint(repoRoot) {
-  const gitDir = resolveGitDir(repoRoot);
-  if (!gitDir) return null;
+  const located = findGitRootAndDir(repoRoot);
+  if (!located) return null;
+  const { gitDir, commonDir } = located;
   const headPath = path.join(gitDir, 'HEAD');
   const indexPath = path.join(gitDir, 'index');
   const headSig = safeStatSig(headPath);
   const indexSig = safeStatSig(indexPath);
 
-  // Also capture current branch ref target SHA (fast 41-byte read) so commits
-  // advancing refs/heads/<branch> invalidate immediately even if .git/HEAD mtime is unchanged.
   let headRefSig = '';
   try {
     const headRaw = fs.readFileSync(headPath, 'utf8').trim();
     if (headRaw.startsWith('ref:')) {
       const refRel = headRaw.slice(4).trim();
-      const refFile = path.join(gitDir, refRel);
+      const refFile = path.join(commonDir, refRel);
       try {
         headRefSig = fs.readFileSync(refFile, 'utf8').trim();
       } catch {
-        headRefSig = safeStatSig(path.join(gitDir, 'packed-refs'));
+        const localRefFile = path.join(gitDir, refRel);
+        try {
+          headRefSig = fs.readFileSync(localRefFile, 'utf8').trim();
+        } catch {
+          headRefSig = safeStatSig(path.join(commonDir, 'packed-refs'));
+        }
       }
     } else {
       headRefSig = headRaw;
@@ -84,10 +142,11 @@ function computeGitStateFingerprint(repoRoot) {
   return `${gitDir}|H:${headSig}|I:${indexSig}|R:${headRefSig}`;
 }
 
-function runGitReadOnly(args, cwd) {
+function runGitReadOnly(args, cwd, execFn = execFileSync) {
   if (!cwd || !fs.existsSync(cwd)) return null;
   try {
-    const out = execFileSync('git', args, {
+    gitSpawnMetricsCount++;
+    const out = execFn('git', args, {
       cwd,
       encoding: 'utf8',
       timeout: 2500,
@@ -100,40 +159,95 @@ function runGitReadOnly(args, cwd) {
   }
 }
 
+function parsePorcelainV2Branch(rawOutput) {
+  let headFull = '';
+  let head = 'unborn';
+  let branch = 'detached';
+  let dirty = false;
+
+  if (typeof rawOutput !== 'string') {
+    return { parsed: false, headFull, head, branch, dirty };
+  }
+
+  let sawHeader = false;
+  for (const line of rawOutput.split(/\r?\n/)) {
+    if (!line) continue;
+    if (line.startsWith('# ')) {
+      sawHeader = true;
+      if (line.startsWith('# branch.oid ')) {
+        const oid = line.slice('# branch.oid '.length).trim();
+        if (oid && oid !== '(initial)') {
+          headFull = oid;
+          head = oid.slice(0, 7);
+        } else {
+          headFull = '';
+          head = 'unborn';
+        }
+      } else if (line.startsWith('# branch.head ')) {
+        const bName = line.slice('# branch.head '.length).trim();
+        if (bName === '(detached)' || !bName) {
+          branch = 'detached';
+        } else {
+          branch = bName;
+        }
+      }
+    } else {
+      dirty = true;
+    }
+  }
+
+  return { parsed: sawHeader, headFull, head, branch, dirty };
+}
+
 function shortHash(text) {
   return crypto.createHash('sha256').update(String(text)).digest('hex').slice(0, 12);
 }
 
 /**
  * Strictly read-only Git context detection.
- * Never writes or mutates any file in the target workspace/repository.
+ * Converges 5 git spawns down to 1 single `git status --porcelain=v2 --branch`
+ * by resolving `.git` root/worktree and `[remote "origin"]` directly from the filesystem.
  * Cached in-memory for 12s and invalidated immediately if .git/HEAD, .git/index, or active ref changes.
  */
-export function getGitContext(targetDir) {
+export function getGitContext(targetDir, options = {}) {
   const resolved = targetDir ? path.resolve(targetDir) : process.cwd();
   const cacheKey = resolved.toLowerCase();
   const now = Date.now();
+  const execFn = typeof options._execFileSync === 'function' ? options._execFileSync : execFileSync;
 
   const cached = gitContextCache.get(cacheKey);
-  if (cached && now < cached.expiresAt) {
+  if (!options.force && cached && now < cached.expiresAt) {
     if (cached.value.isGitRepo) {
       const curFp = computeGitStateFingerprint(cached.value.repoRoot);
       if (curFp && curFp === cached.fingerprint) {
-        lruSet(gitContextCache, cacheKey, cached, GIT_CTX_MAX_ENTRIES);
         return cached.value;
       }
     } else {
       const curDirSig = `${safeStatSig(resolved)}|git:${safeStatSig(path.join(resolved, '.git'))}`;
       if (curDirSig === cached.fingerprint) {
-        lruSet(gitContextCache, cacheKey, cached, GIT_CTX_MAX_ENTRIES);
         return cached.value;
       }
     }
   }
 
-  const repoRoot = runGitReadOnly(['rev-parse', '--show-toplevel'], resolved);
+  // 1. Fast pure-fs `.git` walk (0 git spawns)
+  let located = fs.existsSync(resolved) ? findGitRootAndDir(resolved) : null;
+  let resolvedRoot = located ? path.resolve(located.repoRoot) : '';
 
-  if (!repoRoot) {
+  // Fallback to rev-parse only when GIT_DIR env override is explicitly present
+  if (!located && process.env.GIT_DIR) {
+    const revRoot = runGitReadOnly(['rev-parse', '--show-toplevel'], resolved, execFn);
+    if (revRoot) {
+      resolvedRoot = path.resolve(revRoot);
+      located = findGitRootAndDir(resolvedRoot) || {
+        repoRoot: resolvedRoot,
+        gitDir: path.resolve(process.env.GIT_DIR),
+        commonDir: path.resolve(process.env.GIT_DIR),
+      };
+    }
+  }
+
+  if (!located || !resolvedRoot) {
     const norm = resolved.replace(/\\/g, '/').toLowerCase();
     const result = {
       isGitRepo: false,
@@ -147,20 +261,28 @@ export function getGitContext(targetDir) {
       remoteOrigin: '',
     };
     const fp = `${safeStatSig(resolved)}|git:${safeStatSig(path.join(resolved, '.git'))}`;
-    lruSet(gitContextCache, cacheKey, { value: result, fingerprint: fp, expiresAt: now + GIT_CTX_TTL_MS }, GIT_CTX_MAX_ENTRIES);
+    gitContextCache.set(cacheKey, { value: result, fingerprint: fp, expiresAt: now + GIT_CTX_TTL_MS });
     return result;
   }
 
-  const resolvedRoot = path.resolve(repoRoot);
-  const remoteOrigin = runGitReadOnly(['config', '--get', 'remote.origin.url'], resolvedRoot) || '';
-  const branch =
-    runGitReadOnly(['symbolic-ref', '--short', 'HEAD'], resolvedRoot) ||
-    runGitReadOnly(['rev-parse', '--abbrev-ref', 'HEAD'], resolvedRoot) ||
-    'detached';
-  const headFull = runGitReadOnly(['rev-parse', 'HEAD'], resolvedRoot) || '';
-  const head = headFull ? headFull.slice(0, 7) : 'unborn';
-  const statusShort = runGitReadOnly(['status', '--porcelain'], resolvedRoot);
-  const dirty = Boolean(statusShort && statusShort.length > 0);
+  // 2. Direct `.git/config` parse for origin URL (0 git spawns)
+  const remoteOrigin = readOriginUrlFromConfig(located.commonDir, located.gitDir);
+
+  // 3. Single git subprocess for branch, HEAD OID, and dirty working tree status
+  const statusOut = runGitReadOnly(['status', '--porcelain=v2', '--branch'], resolvedRoot, execFn);
+  let { parsed, headFull, head, branch, dirty } = parsePorcelainV2Branch(statusOut);
+
+  if (!parsed) {
+    // Rare fallback when porcelain=v2 is unavailable
+    branch =
+      runGitReadOnly(['symbolic-ref', '--short', 'HEAD'], resolvedRoot, execFn) ||
+      runGitReadOnly(['rev-parse', '--abbrev-ref', 'HEAD'], resolvedRoot, execFn) ||
+      'detached';
+    headFull = runGitReadOnly(['rev-parse', 'HEAD'], resolvedRoot, execFn) || '';
+    head = headFull ? headFull.slice(0, 7) : 'unborn';
+    const statusShort = runGitReadOnly(['status', '--porcelain'], resolvedRoot, execFn);
+    dirty = Boolean(statusShort && statusShort.length > 0);
+  }
 
   const normOrigin = remoteOrigin
     .trim()
@@ -183,14 +305,13 @@ export function getGitContext(targetDir) {
   };
 
   const fp = computeGitStateFingerprint(resolvedRoot);
-  lruSet(gitContextCache, cacheKey, { value: result, fingerprint: fp, expiresAt: now + GIT_CTX_TTL_MS }, GIT_CTX_MAX_ENTRIES);
+  gitContextCache.set(cacheKey, { value: result, fingerprint: fp, expiresAt: now + GIT_CTX_TTL_MS });
   return result;
 }
 
 /**
  * Strictly read-only calculation of how many commits current HEAD is ahead of a recorded commit SHA.
  * Returns null if not a git repo, SHAs match, or ancestor relation cannot be established.
- * Deduplicated and cached by (repoRoot, recordedHead, currentHead).
  */
 export function getCommitsAhead(repoRoot, recordedHead, currentHeadHint = '') {
   if (!repoRoot || !recordedHead || recordedHead === 'none' || recordedHead === 'unborn') return null;
@@ -212,7 +333,6 @@ export function getCommitsAhead(repoRoot, recordedHead, currentHeadHint = '') {
   const now = Date.now();
   const cached = commitsAheadCache.get(key);
   if (cached && now < cached.expiresAt) {
-    lruSet(commitsAheadCache, key, cached, COMMITS_AHEAD_MAX_ENTRIES);
     return cached.value;
   }
 
@@ -222,7 +342,7 @@ export function getCommitsAhead(repoRoot, recordedHead, currentHeadHint = '') {
     const n = Number(aheadStr);
     val = Number.isFinite(n) ? n : -1;
   }
-  lruSet(commitsAheadCache, key, { value: val, expiresAt: now + COMMITS_AHEAD_TTL_MS }, COMMITS_AHEAD_MAX_ENTRIES);
+  commitsAheadCache.set(key, { value: val, expiresAt: now + COMMITS_AHEAD_TTL_MS });
   return val;
 }
 
@@ -253,13 +373,15 @@ function unquoteGitPath(rawPath) {
  */
 export function getGitWorkingSummary(targetDir, { commitLimit = 2, fileLimit = 30 } = {}) {
   const resolved = targetDir ? path.resolve(targetDir) : process.cwd();
-  const repoRoot = runGitReadOnly(['rev-parse', '--show-toplevel'], resolved);
+  const located = fs.existsSync(resolved) ? findGitRootAndDir(resolved) : null;
+  const repoRoot = located ? located.repoRoot : runGitReadOnly(['rev-parse', '--show-toplevel'], resolved);
   if (!repoRoot) {
     return { isGitRepo: false, repoRoot: resolved, changedFiles: [], recentCommits: [] };
   }
 
   const changedFiles = [];
   try {
+    gitSpawnMetricsCount++;
     const rawStatus = execFileSync('git', ['status', '--porcelain'], {
       cwd: repoRoot,
       encoding: 'utf8',
@@ -287,7 +409,7 @@ export function getGitWorkingSummary(targetDir, { commitLimit = 2, fileLimit = 3
   const recentCommits = [];
   const limit = Math.max(0, Math.min(10, Number(commitLimit) || 2));
   if (limit > 0) {
-    const rawLog = runGitReadOnly(['log', `-n`, String(limit), '--pretty=format:%h%x09%s'], repoRoot);
+    const rawLog = runGitReadOnly(['log', '-n', String(limit), '--pretty=format:%h%x09%s'], repoRoot);
     if (rawLog) {
       for (const line of rawLog.split(/\r?\n/)) {
         if (!line.trim()) continue;

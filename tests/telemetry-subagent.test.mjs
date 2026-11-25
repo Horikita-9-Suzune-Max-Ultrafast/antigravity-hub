@@ -156,7 +156,7 @@ test('Telemetry merges main + invoke_subagent transcripts, computes dual-source 
 
     // Single-line banner formatting
     const banner = formatUserMarkdownBanner(step1);
-    assert.match(banner, /^⚡ 100\.0 tok\/s · Cache 95\.0%/);
+    assert.match(banner, /^⚡ 100\.0 tok\/s \| Cache 95\.0%/);
     assert.ok(!banner.includes('\n'));
   } finally {
     fs.rmSync(root, { recursive: true, force: true });

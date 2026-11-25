@@ -110,7 +110,7 @@ export function runDoctor(options = {}) {
   return {
     healthy,
     status: healthy ? 'healthy' : 'attention',
-    version: deployManifest?.version || '1.0.0',
+    version: deployManifest?.version || '1.6.0',
     dataDir: formatDisplayPath(paths.dataDir),
     pluginDir: formatDisplayPath(pluginDir),
     drift: {
@@ -169,7 +169,7 @@ export function exportBackup(options = {}) {
 
   const payload = {
     exportedAt: new Date().toISOString(),
-    version: '1.0.0',
+    version: '1.6.0',
     counts: {
       memories: memories.length,
       calls: calls.length,

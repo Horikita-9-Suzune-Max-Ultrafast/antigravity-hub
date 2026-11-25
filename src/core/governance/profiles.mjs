@@ -1,7 +1,7 @@
 import fs from 'node:fs';
-import path from 'node:path';
 import crypto from 'node:crypto';
 import { getDataPaths } from '../paths.mjs';
+import { atomicWriteFileSafe, withFileLockSync } from '../fs-utils.mjs';
 import {
   PROTECTED_PLUGINS,
   appendAuditLog,
@@ -9,13 +9,10 @@ import {
   createHostSnapshot,
   getHostConfigPaths,
   loadDisabledGlobalMcp,
+  saveDisabledGlobalMcp,
   rollbackSnapshot,
 } from './guardrails.mjs';
-import { scanEcosystem } from './scanner.mjs';
-
-function ensureDir(dir) {
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-}
+import { scanEcosystem, clearEcosystemInventoryCache } from './scanner.mjs';
 
 function loadProfilesStore(options = {}) {
   const { governanceProfilesFile } = getDataPaths(options);
@@ -31,11 +28,10 @@ function loadProfilesStore(options = {}) {
 }
 
 function saveProfilesStore(store, options = {}) {
-  const { governanceDir, governanceProfilesFile } = getDataPaths(options);
-  ensureDir(governanceDir);
-  const tmp = `${governanceProfilesFile}.tmp.${process.pid}.${Date.now()}`;
-  fs.writeFileSync(tmp, `${JSON.stringify(store, null, 2)}\n`, 'utf8');
-  fs.renameSync(tmp, governanceProfilesFile);
+  const { governanceProfilesFile } = getDataPaths(options);
+  withFileLockSync(governanceProfilesFile, () => {
+    atomicWriteFileSafe(governanceProfilesFile, `${JSON.stringify(store, null, 2)}\n`, { verify: true });
+  });
 }
 
 const BUILTIN_PROFILE_DEFS = [
@@ -189,6 +185,20 @@ export function listProfiles(options = {}) {
   return loadProfilesStore(options).profiles;
 }
 
+function buildStateMapsFromEco(eco) {
+  const pluginsMap = {};
+  for (const p of eco.plugins || []) {
+    pluginsMap[p.id] = p.systemProtected ? true : Boolean(p.enabled);
+  }
+  const globalMcpMap = {};
+  for (const m of eco.mcpServers || []) {
+    if (m.scope === 'global') {
+      globalMcpMap[m.name] = Boolean(m.enabled);
+    }
+  }
+  return { pluginsMap, globalMcpMap };
+}
+
 /**
  * Save current active plugins & global MCP servers (or explicit state) as a named Profile.
  */
@@ -196,17 +206,9 @@ export function saveProfile(payload = {}, options = {}) {
   const name = String(payload.name || '').trim();
   if (!name) throw new Error('场景预设名称不能为空');
 
-  const eco = scanEcosystem({}, options);
-  const pluginsMap = {};
-  for (const p of eco.plugins) {
-    pluginsMap[p.id] = p.systemProtected ? true : Boolean(p.enabled);
-  }
-  const globalMcpMap = {};
-  for (const m of eco.mcpServers) {
-    if (m.scope === 'global') {
-      globalMcpMap[m.name] = Boolean(m.enabled);
-    }
-  }
+  const needEco = !(payload.plugins && typeof payload.plugins === 'object' && payload.globalMcp && typeof payload.globalMcp === 'object');
+  const eco = needEco ? options._eco || scanEcosystem({}, options) : null;
+  const fallbackMaps = eco ? buildStateMapsFromEco(eco) : { pluginsMap: {}, globalMcpMap: {} };
 
   const store = loadProfilesStore(options);
   const id = payload.id || `prof-${crypto.randomBytes(4).toString('hex')}`;
@@ -217,11 +219,10 @@ export function saveProfile(payload = {}, options = {}) {
     description: String(payload.description || '').trim(),
     updatedAt: now,
     createdAt: now,
-    plugins: payload.plugins && typeof payload.plugins === 'object' ? { ...payload.plugins } : pluginsMap,
-    globalMcp: payload.globalMcp && typeof payload.globalMcp === 'object' ? { ...payload.globalMcp } : globalMcpMap,
+    plugins: payload.plugins && typeof payload.plugins === 'object' ? { ...payload.plugins } : fallbackMaps.pluginsMap,
+    globalMcp: payload.globalMcp && typeof payload.globalMcp === 'object' ? { ...payload.globalMcp } : fallbackMaps.globalMcpMap,
   };
 
-  // Enforce self-protection inside stored profile as well
   for (const prot of PROTECTED_PLUGINS) {
     if (prot in entry.plugins) entry.plugins[prot] = true;
   }
@@ -252,10 +253,10 @@ export function deleteProfile(profileId, options = {}) {
 
 /**
  * Compute an exact Diff preview before applying a Profile (supports both built-in and user-saved profiles).
- * Accepts optional `options.overrides = { plugins?: Record<string, boolean>, globalMcp?: Record<string, boolean> }`.
+ * Accepts optional `options._eco` to reuse an existing scan and eliminate redundant fs scans.
  */
 export function previewProfileDiff(profileId, options = {}) {
-  const eco = scanEcosystem({}, options);
+  const eco = options._eco || scanEcosystem({}, options);
   let profile = null;
   if (String(profileId || '').startsWith('builtin:')) {
     profile = listBuiltinProfiles(eco, options).find((p) => p.id === profileId) || null;
@@ -382,12 +383,22 @@ export function previewProfileDiff(profileId, options = {}) {
 }
 
 /**
- * Apply a Profile atomically with a single pre-write host snapshot.
- * Supports `options.overrides` for interactive checkbox adjustments and optional `options.saveAsName`.
+ * Apply a Profile atomically with a single pre-write host snapshot and single ecosystem scan.
  */
 export function applyProfile(profileId, options = {}) {
-  const diff = previewProfileDiff(profileId, options);
+  const eco = options._eco || scanEcosystem({}, options);
+  const diff = previewProfileDiff(profileId, { ...options, _eco: eco });
   const saveAsName = String(options.saveAsName || '').trim();
+
+  // Compute post-apply state maps directly from the single eco snapshot (eliminates 3x rescan)
+  const { pluginsMap: postPlugins, globalMcpMap: postGlobalMcp } = buildStateMapsFromEco(eco);
+  for (const ch of diff.pluginChanges) {
+    if (PROTECTED_PLUGINS.has(ch.id) && !ch.to) continue;
+    postPlugins[ch.id] = Boolean(ch.to);
+  }
+  for (const ch of diff.mcpChanges) {
+    postGlobalMcp[ch.name] = Boolean(ch.to);
+  }
 
   if (diff.totalChanges === 0) {
     let savedProfile = null;
@@ -396,6 +407,8 @@ export function applyProfile(profileId, options = {}) {
         {
           name: saveAsName,
           description: `基于「${diff.profile.name}」保存`,
+          plugins: postPlugins,
+          globalMcp: postGlobalMcp,
         },
         options
       );
@@ -478,16 +491,14 @@ export function applyProfile(profileId, options = {}) {
         },
         options
       );
-      const { governanceDir } = getDataPaths(options);
-      ensureDir(governanceDir);
-      const tmp = `${governanceDisabledMcpFile}.tmp.${process.pid}.${Date.now()}`;
-      fs.writeFileSync(tmp, `${JSON.stringify(disabledStore, null, 2)}\n`, 'utf8');
-      fs.renameSync(tmp, governanceDisabledMcpFile);
+      saveDisabledGlobalMcp(disabledStore, options);
     }
   } catch (err) {
     rollbackSnapshot(snapshot.id, options);
     throw new Error(`批量切换预设失败并已自动回滚: ${err.message}`);
   }
+
+  clearEcosystemInventoryCache();
 
   let savedProfile = null;
   if (saveAsName) {
@@ -495,6 +506,8 @@ export function applyProfile(profileId, options = {}) {
       {
         name: saveAsName,
         description: `基于「${diff.profile.name}」微调保存`,
+        plugins: postPlugins,
+        globalMcp: postGlobalMcp,
       },
       options
     );

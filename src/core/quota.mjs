@@ -198,7 +198,7 @@ export function getQuotaSnapshot(params = {}, options = {}) {
   const nowMs = params.nowMs || Date.now();
   const calls = Array.isArray(params.calls)
     ? params.calls
-    : queryCalls({ sinceMs: nowMs - SEVEN_DAYS_MS, limit: 2000 }, options);
+    : queryCalls({ sinceMs: nowMs - SEVEN_DAYS_MS, limit: 0 }, options);
   const provider = options.provider || defaultProvider;
   return provider.getSnapshot({ calls, config, nowMs });
 }

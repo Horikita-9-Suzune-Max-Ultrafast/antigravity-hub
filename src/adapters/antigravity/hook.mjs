@@ -7,6 +7,7 @@ import {
   recordHookTiming,
   syncConversationTelemetry,
   formatUserMarkdownBanner,
+  calcWeightedAvgTps,
 } from '../../core/telemetry.mjs';
 import { recordActiveSession } from '../../core/session-tracker.mjs';
 import { normalizeHookPayload } from './normalize.mjs';
@@ -149,7 +150,7 @@ export async function handleHookEvent(rawInput, fallbackEvent = '', options = {}
       if (p.projectDir && synced.calls.length > 0 && p.terminationReason !== 'USER_CANCELED') {
         const latest = synced.calls.find((c) => c.agentType === 'main') || synced.calls[0];
         const totalCost = synced.calls.reduce((s, c) => s + c.estimatedCostUsd, 0);
-        const avgTps = synced.calls.reduce((s, c) => s + c.effectiveTps, 0) / synced.calls.length;
+        const avgTps = calcWeightedAvgTps(synced.calls);
         const goalHint = p.lastUserInput
           ? p.lastUserInput.replace(/<\/?USER_REQUEST>/gi, '').replace(/\s+/g, ' ').trim().slice(0, 72)
           : `会话 ${p.conversationId.slice(0, 8)}`;

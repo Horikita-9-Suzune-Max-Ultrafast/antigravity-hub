@@ -1,7 +1,14 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import crypto from 'node:crypto';
 import { getDataPaths } from './paths.mjs';
+import { atomicWriteFileSafe } from './fs-utils.mjs';
+
+const ENSURED_DATA_DIRS = new Set();
+const MAX_ENSURED_DIRS = 64;
+
+export function clearEnsuredDirsCache() {
+  ENSURED_DATA_DIRS.clear();
+}
 
 export function ensureDir(dirPath) {
   fs.mkdirSync(dirPath, { recursive: true });
@@ -9,43 +16,32 @@ export function ensureDir(dirPath) {
 
 export function ensureDataDirs(options = {}) {
   const paths = getDataPaths(options);
+  const key = process.platform === 'win32' ? path.resolve(paths.dataDir).toLowerCase() : path.resolve(paths.dataDir);
+  if (ENSURED_DATA_DIRS.has(key) && fs.existsSync(paths.dataDir)) {
+    return paths;
+  }
   ensureDir(paths.dataDir);
   ensureDir(paths.projectsDir);
   ensureDir(paths.telemetryDir);
   ensureDir(paths.diagnosticsDir);
   ensureDir(paths.exportsDir);
+  if (ENSURED_DATA_DIRS.size >= MAX_ENSURED_DIRS) {
+    const oldest = ENSURED_DATA_DIRS.values().next().value;
+    if (oldest !== undefined) ENSURED_DATA_DIRS.delete(oldest);
+  }
+  ENSURED_DATA_DIRS.add(key);
   return paths;
 }
 
 /**
- * Atomic file write using temp file + rename (Windows-safe fallback).
+ * Atomic file write using Windows EPERM/EBUSY-resilient fs-utils implementation.
  */
 export function atomicWriteFile(filePath, content) {
-  const dir = path.dirname(filePath);
-  ensureDir(dir);
-  const tmpName = `.${path.basename(filePath)}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`;
-  const tmpPath = path.join(dir, tmpName);
-  try {
-    fs.writeFileSync(tmpPath, content, 'utf8');
-    try {
-      fs.renameSync(tmpPath, filePath);
-    } catch {
-      // On Windows, concurrent readers can briefly hold rename locks
-      fs.copyFileSync(tmpPath, filePath);
-      fs.unlinkSync(tmpPath);
-    }
-  } catch (err) {
-    try {
-      if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
-    } catch {
-      // ignore cleanup error
-    }
-    throw err;
-  }
+  atomicWriteFileSafe(filePath, content);
 }
 
 export function atomicWriteJson(filePath, data) {
-  atomicWriteFile(filePath, JSON.stringify(data, null, 2) + '\n');
+  atomicWriteFileSafe(filePath, JSON.stringify(data, null, 2) + '\n');
 }
 
 export function readJsonSafe(filePath, fallback = null) {
@@ -63,6 +59,16 @@ export function readJsonSafe(filePath, fallback = null) {
 export function appendJsonl(filePath, record) {
   ensureDir(path.dirname(filePath));
   fs.appendFileSync(filePath, JSON.stringify(record) + '\n', 'utf8');
+}
+
+/**
+ * Append multiple JSON object lines in a single batched write syscall.
+ */
+export function appendJsonlBatch(filePath, records) {
+  if (!Array.isArray(records) || records.length === 0) return;
+  ensureDir(path.dirname(filePath));
+  const payload = records.map((r) => JSON.stringify(r)).join('\n') + '\n';
+  fs.appendFileSync(filePath, payload, 'utf8');
 }
 
 /**
