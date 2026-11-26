@@ -5,7 +5,7 @@
 **Modular Native Control Center (MCP App) for Google Antigravity: Context Cache & Usage Stats, Local Code Review, Ecosystem & Harness Governance, Local Wallpaper Engine, and Zero-Dep Chinese Localization**
 
 [![Version: v1.6.0](https://img.shields.io/badge/Version-v1.6.0-0ea5e9.svg)](https://github.com/Horikita-9-Suzune-Max-Ultrafast/antigravity-hub/releases/tag/v1.6.0)
-[![Antigravity 2.35.1 Update Verified](https://img.shields.io/badge/Antigravity%202.35.1-Update%20Verified-10b981.svg)](#battle-tested-official-update-survival-proof)
+[![Antigravity 2.35.2 Update Verified](https://img.shields.io/badge/Antigravity%202.35.2-Update%20Verified-10b981.svg)](#battle-tested-official-update-survival-proof)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 [![Node.js >= 24](https://img.shields.io/badge/Node.js-%3E%3D24-339933.svg)](https://nodejs.org/)
 [![Zero Runtime Deps](https://img.shields.io/badge/Runtime%20Deps-0-brightgreen.svg)](#architecture--design-principles)
@@ -47,16 +47,16 @@
 
 The biggest fear with any client-enhancing plugin is simple: **"Will the next official Antigravity update lock the installer, break my IDE, wipe my data, or restore a stale backup?"**
 
-We intentionally ran a live, in-place official upgrade to **Antigravity `2.35.1`** while keeping the full "dirty production state" active — **ASAR localization ON + local wallpaper ON + native floating window running**, with **no pre-uninstall and no pre-restore** — and audited all 6 anti-fragility guarantees end to end:
+We intentionally ran live, in-place official upgrades through **Antigravity `2.35.1` → `2.35.2`** (Electron `44.9.1`) while keeping the full "dirty production state" active — **ASAR localization ON + local wallpaper ON + native floating window running**, with **no pre-uninstall and no pre-restore** — and audited all 6 anti-fragility guarantees end to end:
 
 | Anti-Fragility Check | Result | Verified Runtime Behavior |
 | :--- | :---: | :--- |
-| **1. Zero Installer Locks & Zero Orphan Processes** | **PASS** | Official updater cleanly overwrote `app.asar` and cold-started with zero file-lock errors or blank screens; old host processes exited cleanly, leaving exactly one healthy MCP Server + WebView2 floating host tree |
-| **2. 100% External Truth-Source Retention** | **PASS** | Verified item-by-item against the pre-update export snapshot: Vault memories, deduplicated SQLite call index, user config & quota calibrations, 1,972 active dictionary entries, and the local wallpaper library all survived with zero loss |
-| **3. Automatic Clean `.bak` Refresh on Re-Apply** | **PASS** | Clicking **Apply Localization** detected the fresh `2.35.1` binary (`current_clean_asar`), refreshed `app.asar.agy-console.bak` with the clean new `2.35.1` original first (eliminating stale-backup downgrade risk), and cleanly re-injected main + preload runtimes |
+| **1. Zero Installer Locks & Zero Orphan Processes** | **PASS** | Official updater cleanly overwrote `app.asar` and cold-started with `--updated` (zero file-lock errors or blank screens); old host processes exited cleanly, leaving exactly one healthy `language_server` → MCP Server → Win32 native WebView2 floating host tree |
+| **2. 100% External Truth-Source Retention** | **PASS** | Verified item-by-item post-upgrade: Vault memories (217/217), deduplicated SQLite call index (2,840/2,840), user config & quota calibrations, 1,972 active dictionary entries, and the local wallpaper library & rotation schedule all survived with zero loss |
+| **3. Automatic Clean `.bak` Refresh & Anti-Downgrade** | **PASS** | Post-upgrade detection accurately identified `outdated_after_update` + true `2.35.2` version and blocked stale-backup downgrade; re-applying refreshes `app.asar.agy-console.bak` from the clean `2.35.2` original (`current_clean_asar`), injects `dist/main.js` + `dist/preload.js`, and restores cleanly in one click |
 | **4. Automatic Wallpaper Recovery (Zero Re-Setup)** | **PASS** | Because the wallpaper engine adds zero new ASAR injection points, the existing library, rotation schedule, opacity, blur, scrim, and glass parameters came right back automatically |
-| **5. Hooks & New Transcript Schema Compatibility** | **PASS** | `SessionStart` brief injection, `PreInvocation`/`PostInvocation` millisecond timing, and live `transcript_full.jsonl` parsing worked out of the box; `ctx_doctor` reported `HEALTHY`, `0` schema drift, and circuit breaker `CLOSED (0/3)` |
-| **6. Ecosystem Governance Intact** | **PASS** | Post-upgrade `gov status` scored **`100/100`** (0 errors, 0 warnings, 0 secrets), with all plugins, MCP servers, skills, rules, and hooks intact |
+| **5. Hooks, Transcript & Native DB Compatibility** | **PASS** | `SessionStart` brief injection, `PreInvocation`/`PostInvocation` timing, `transcript_full.jsonl`, and native `conversations/<id>.db` (nanosecond TTFT & Decode TPS) worked out of the box; `ctx_doctor` reported `HEALTHY`, `0` schema drift, and circuit breaker `CLOSED (0/3)` |
+| **6. Ecosystem Governance & Regression Suite** | **PASS** | All plugins, MCP servers, skills, rules, and hooks remained intact (0 errors, 0 secrets), and all **86 automated tests** across 21 test suites passed |
 
 > Even if a future Antigravity release changes internal hook schemas, hooks fail open with `{}`, record redacted entries to `schema-drift.jsonl`, and trip the 3-strike circuit breaker so your conversations are never blocked. Running `ctx doctor --repair` rebuilds the SQLite index and resets state losslessly.
 
@@ -135,7 +135,7 @@ cd antigravity-hub
 # 2. Install dev-only UI build tools (never copied into deployed bundle)
 npm install
 
-# 3. Run full 18-file automated test suite (65 test cases, isolated temp dirs)
+# 3. Run full 21-file automated test suite (86 test cases, isolated temp dirs)
 npm test
 
 # 4. Build single-file MCP App UI and deploy to ~/.gemini/config/plugins/context-cache
@@ -208,7 +208,7 @@ npm run pack:release
 | Tier | Tools | Visibility | Model Context Impact |
 | :--- | :--- | :--- | :--- |
 | **Model-Visible (5 slim tools)** | `ctx_open_monitor`, `ctx_brief`, `ctx_save`, `ctx_search`, `ctx_doctor` | `["model", "app"]` | Minimal footprint (~`0.6K` tokens) |
-| **App-Only (10 UI private tools)** | `app_get_context_breakdown`, `app_get_calls`, `app_get_quota`, `app_calibrate_quota`, `app_vault_manage`, `app_config_manage`, `app_doctor_action`, `app_i18n_manage`, `app_governance_manage`, `app_appearance_manage` | `["app"]` | **0 tokens** (invisible to model) |
+| **App-Only (11 UI private tools)** | `app_get_context_breakdown`, `app_get_calls`, `app_get_quota`, `app_calibrate_quota`, `app_vault_manage`, `app_config_manage`, `app_doctor_action`, `app_i18n_manage`, `app_governance_manage`, `app_appearance_manage`, `app_review_manage` | `["app"]` | **0 tokens** (invisible to model) |
 
 ### Five-Layer Anti-Fragile Design
 1. **Zero Runtime Dependencies**: Core Engine, Hooks, MCP Stdio Server, and CLI run purely on Node.js 24 native modules (`node:sqlite`, `node:http`, `node:crypto`). Deployed bundles contain **zero `node_modules`**.
@@ -297,7 +297,7 @@ Ensure **Node.js >= 24.0.0** is installed (`node -v`). Antigravity Hub relies on
 <summary><strong>3. Will Localization or Wallpaper break Antigravity after an official update?</strong></summary>
 
 - **Wallpaper**: Introduces zero new ASAR injection points and can be disabled instantly in UI or via `ctx wallpaper off`.
-- **Localization**: Preserves a verified clean `app.asar` backup before patching and supports one-click restore. Battle-tested through a live in-place upgrade to **Antigravity `2.35.1`** with localization, wallpaper, and the floating window all running: the app starts normally after the update overwrites `app.asar`, the Hub prompts for a one-click re-apply, `.bak` is automatically refreshed with the new clean `2.35.1` original (preventing accidental downgrade), and your wallpaper settings return automatically.
+- **Localization**: Preserves a verified clean `app.asar` backup before patching and supports one-click restore. Battle-tested through live in-place upgrades to **Antigravity `2.35.1` → `2.35.2`** with localization, wallpaper, and the floating window all running: the app starts normally after the update overwrites `app.asar`, the Hub prompts for a one-click re-apply, `.bak` is automatically refreshed with the new clean original (preventing accidental downgrade), and your wallpaper settings return automatically.
 </details>
 
 <details>
@@ -333,21 +333,22 @@ context-cache/
 │   │   ├── client-restart.mjs           # Detached safe Antigravity restart (never touches app.asar)
 │   │   ├── self-update.mjs              # GitHub Release update check, SHA-256 verification & atomic swap
 │   │   ├── doctor.mjs                   # Diagnostics, schema-drift report, backup export & self-healing
-│   │   ├── governance/                  # Ecosystem governance (scanner, classifier, profiles, linter, snapshots)
+│   │   ├── review/                      # Local code review engine (Git diff parser, L1 static rules, native gates, L2 subagent flow)
+│   │   ├── governance/                  # Ecosystem governance (scanner, 4-pillar scoring, classifier, profiles, linter, snapshots)
 │   │   ├── appearance/                  # Local wallpaper engine (library, read-only scan, rotation, fallback)
 │   │   └── i18n/                        # Zero-dep streaming ASAR localization engine & dictionaries
 │   ├── adapters/antigravity/            # Thin fail-open Hook adapter (5s timeout, 3-strike circuit breaker)
-│   ├── mcp/server.mjs                   # Zero-dep MCP Stdio Server (5 Model + 10 App-Only tools)
+│   ├── mcp/server.mjs                   # Zero-dep MCP Stdio Server (5 Model + 11 App-Only tools)
 │   └── ui/                              # Self-contained single-file modular console frontend
 │       ├── index.html                   # Console shell & Asset Inspector / Capsule / Settings modals
 │       ├── styles.css                   # Light/dark Radix UI Colors theme & Mini Bar semantic chips
 │       ├── app.mjs                      # Monitor UI, alert jump-to-step & floating host integration
 │       ├── i18n-ui.mjs                  # Zero-dep zh-CN / English UI dictionary
 │       ├── build-ui.mjs                 # esbuild single-file bundler
-│       └── modules/                     # appearance-module / governance-module / i18n-module
+│       └── modules/                     # review-module / appearance-module / governance-module / i18n-module
 ├── plugin/                              # Antigravity plugin manifest, hooks, rules, skills & logo
 ├── scripts/                             # deploy.mjs, pack-release.mjs & doctor.mjs
-├── tests/                               # 18 automated test suites (65 E2E / unit / resilience test cases)
+├── tests/                               # 21 automated test suites (86 E2E / unit / resilience test cases)
 ├── LICENSE                              # MIT License
 ├── README.md                            # Simplified Chinese documentation
 ├── README.en.md                         # English documentation
