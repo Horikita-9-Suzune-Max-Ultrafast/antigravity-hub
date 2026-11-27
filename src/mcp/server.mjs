@@ -22,7 +22,7 @@ const ROOT_DIR = path.resolve(__dirname, '..', '..');
 export { APP_RESOURCE_URI, APP_RESOURCE_MIME, TOOL_DEFINITIONS };
 export const SERVER_INFO = {
   name: 'context-cache-server',
-  version: '1.6.0',
+  version: '1.6.1',
 };
 
 const WALLPAPER_MIME_BY_EXT = {

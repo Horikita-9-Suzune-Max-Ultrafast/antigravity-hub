@@ -3269,6 +3269,32 @@ body.native-popout .agy-header { padding-top: 10px; }
 .stats-model-row{gap:6px 12px;padding:10px 16px}
 @container agy-shell (max-width:460px){.stats-bento-grid{grid-template-columns:minmax(0,1fr)}.stats-card-wide{grid-column:auto}}
 
+/* ==================== Model & Parameters Editor Modal ==================== */
+.ctx-limit-edit-btn,.param-del-btn{width:24px;height:24px;padding:0;border-radius:var(--r-sm);border:1px solid transparent;background:transparent;color:var(--muted-foreground);display:inline-flex;align-items:center;justify-content:center;cursor:pointer;transition:background-color var(--t-fast),border-color var(--t-fast),color var(--t-fast)}
+.ctx-limit-edit-btn:hover{background:var(--muted);border-color:var(--border);color:var(--foreground)}
+.param-del-btn:hover{background:var(--error-subtle);border-color:var(--red-6);color:var(--error)}
+.param-del-spacer{display:inline-block;width:24px;height:24px}
+.param-modal-card{max-height:calc(100vh - 32px);display:flex;flex-direction:column;overflow:hidden}
+.param-modal-stage{flex:1 1 auto;min-height:0;max-height:54vh;overflow-y:auto;padding-right:2px}
+.param-preset-bar,.param-row-label,.param-row-ctrl,.param-input-unit,.param-add-bar{display:flex;align-items:center}
+.param-preset-bar,.param-add-bar{flex-wrap:wrap;gap:6px}
+.param-row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 12px}
+.param-row[data-matched="true"]{background:var(--primary-subtle)}
+.param-row-label{gap:6px;flex:1 1 0%}
+.param-row-ctrl{gap:6px}
+.param-input-unit{gap:4px}
+.param-match-pill{background:var(--card);border-color:var(--blue-6);color:var(--link)}
+.param-num-input{width:84px;height:28px;padding:0 8px;font-size:12px;text-align:right}
+.param-unit-suffix{font-size:12px;color:var(--muted-foreground);min-width:12px}
+.param-add-key{flex:1 1 140px;min-width:0;height:30px;padding:0 10px;font-size:12px}
+.param-pricing-head,.param-pricing-row{display:grid;grid-template-columns:minmax(0,1.3fr) repeat(3,minmax(56px,.7fr)) 24px;align-items:center;gap:6px;padding:8px 10px}
+.param-pricing-head{padding:0 10px;font-size:12px}
+.param-price-input,.param-price-key-input{width:100%;min-width:0;height:28px;font-size:12px}
+.param-price-input{padding:0 6px;text-align:right}
+.param-price-key-input{padding:0 8px}
+.param-pricing-add{display:grid;grid-template-columns:minmax(0,1.3fr) repeat(3,minmax(52px,.7fr)) auto;align-items:center;gap:6px}
+@media (max-width:480px){.param-modal-card .grid-2{grid-template-columns:minmax(0,1fr)}.param-pricing-head,.param-pricing-row,.param-pricing-add{grid-template-columns:minmax(0,1fr) repeat(3,minmax(46px,60px)) auto;gap:4px}}
+
 /* ==================== Reduced Motion Safeguard ==================== */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {

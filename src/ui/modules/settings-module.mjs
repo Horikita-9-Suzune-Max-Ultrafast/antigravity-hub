@@ -35,6 +35,8 @@ export function createSettingsModule({
   onMiniBarOrderChanged,
   onOpenPopout,
   onSetSharedWidth,
+  onOpenModelParams,
+  onAfterConfigReset,
   showToast,
   openModal,
   closeModal,
@@ -414,6 +416,15 @@ export function createSettingsModule({
     if (budgetEl) budgetEl.value = cfg.sessionStartBudgetTokens ?? 450;
     if (warnEl) warnEl.value = cfg.alerts?.contextWarningPct ?? 75;
     if (dropEl) dropEl.value = cfg.alerts?.cacheDropThresholdPct ?? 50;
+
+    const mpSummaryEl = document.getElementById('settingsModelParamsSummary');
+    if (mpSummaryEl) {
+      const limits = cfg.modelLimits || {};
+      const geminiLimit = Number(limits['gemini-4-neon'] || limits.gemini || 512000);
+      const geminiLabel = geminiLimit >= 1_000_000 ? `${(geminiLimit / 1_000_000).toFixed(2)}M` : `${Math.round(geminiLimit / 1000)}K`;
+      const count = Object.keys(limits).length;
+      mpSummaryEl.textContent = tr('settings.modelParams.summary', { gemini: geminiLabel, count });
+    }
 
     const rep = state.doctorReport;
     const verEl = document.getElementById('settingsVersionLabel');
@@ -821,16 +832,46 @@ export function createSettingsModule({
         });
     });
 
+    document.getElementById('openModelParamsBtn')?.addEventListener('click', () => {
+      onOpenModelParams?.('limits');
+    });
+
     document.getElementById('settingsResetDefaultsBtn')?.addEventListener('click', () => {
       void (async () => {
         try {
+          const defs = state.configDefaults;
+          const resetLimits = {};
+          if (defs?.modelLimits) {
+            for (const k of Object.keys(state.config?.modelLimits || {})) {
+              if (!Object.prototype.hasOwnProperty.call(defs.modelLimits, k)) resetLimits[k] = null;
+            }
+            Object.assign(resetLimits, defs.modelLimits);
+          }
+          const resetPricing = {};
+          if (defs?.pricing) {
+            for (const k of Object.keys(state.config?.pricing || {})) {
+              if (!Object.prototype.hasOwnProperty.call(defs.pricing, k)) resetPricing[k] = null;
+            }
+            Object.assign(resetPricing, defs.pricing);
+          }
           await persistConfigPatch({
             uiLanguage: defaultUiLang,
+            cnyPerUsd: defs?.cnyPerUsd ?? 7.2,
             pollIntervalSec: 5,
             auxAutoOpen: true,
             uiBanner: { enabled: true },
             sessionStartBudgetTokens: 450,
-            alerts: { contextWarningPct: 75, cacheDropThresholdPct: 50 },
+            alerts: defs?.alerts || {
+              contextWarningPct: 75,
+              cacheDropThresholdPct: 50,
+              lowTpsThreshold: 15,
+              lowTpsStreak: 3,
+              subagentShareThresholdPct: 35,
+              subagentContextWarnTokens: 100000,
+              mcpServerWarnTokens: 15000,
+            },
+            ...(Object.keys(resetLimits).length ? { modelLimits: resetLimits } : {}),
+            ...(Object.keys(resetPricing).length ? { pricing: resetPricing } : {}),
             kvCache: { enabled: true, ttlMinutes: 15 },
             popout: {
               autoLaunchOnStartup: true,
@@ -846,6 +887,7 @@ export function createSettingsModule({
           applyUiLanguage(state.config?.uiLanguage || defaultUiLang);
           restartPollTimer();
           renderContext(false);
+          await onAfterConfigReset?.();
           showToast(tr('toast.configReset'), 'success');
         } catch (err) {
           renderSettings();

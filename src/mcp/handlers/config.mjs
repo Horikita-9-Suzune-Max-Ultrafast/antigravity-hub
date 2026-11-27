@@ -1,7 +1,19 @@
-import { loadConfig, saveConfig } from '../../core/config.mjs';
+import { DEFAULT_CONFIG, loadConfig, saveConfig } from '../../core/config.mjs';
+import { clearTelemetryCache } from '../../core/telemetry.mjs';
 import { recordActiveSession } from '../../core/session-tracker.mjs';
 import { restartAntigravity } from '../../core/client-restart.mjs';
 import { checkForUpdate, applySelfUpdate } from '../../core/self-update.mjs';
+
+function getEditableDefaults() {
+  return {
+    modelLimits: structuredClone(DEFAULT_CONFIG.modelLimits),
+    pricing: structuredClone(DEFAULT_CONFIG.pricing),
+    alerts: structuredClone(DEFAULT_CONFIG.alerts),
+    sessionStartBudgetTokens: DEFAULT_CONFIG.sessionStartBudgetTokens,
+    kvCache: structuredClone(DEFAULT_CONFIG.kvCache),
+    cnyPerUsd: DEFAULT_CONFIG.cnyPerUsd,
+  };
+}
 
 function toolOk(text, structuredContent) {
   return {
@@ -19,14 +31,23 @@ function toolErr(message) {
 
 export async function handleConfigManage(args, { options, popout, invalidateActiveConvCache }) {
   if (args.action === 'get') {
-    return toolOk('ok', { config: loadConfig(options), popoutStatus: popout.getStatus() });
+    return toolOk('ok', {
+      config: loadConfig(options),
+      defaults: getEditableDefaults(),
+      popoutStatus: popout.getStatus(),
+    });
   }
   if (args.action === 'update') {
     const next = saveConfig(args.patch || {}, options);
+    clearTelemetryCache();
     if (args.patch?.popout && Object.prototype.hasOwnProperty.call(args.patch.popout, 'enabled') && !next.popout?.enabled) {
       await popout.stop({ userClosed: true });
     }
-    return toolOk('updated', { config: next, popoutStatus: popout.getStatus() });
+    return toolOk('updated', {
+      config: next,
+      defaults: getEditableDefaults(),
+      popoutStatus: popout.getStatus(),
+    });
   }
   if (args.action === 'open_popout') {
     const cfg = loadConfig(options);

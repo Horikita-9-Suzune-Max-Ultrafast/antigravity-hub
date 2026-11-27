@@ -64,6 +64,38 @@ test('config uiLanguage defaults, validation, persistence, defaultModule, and pr
     const clean = sanitizeConfig(malicious);
     assert.equal(clean.uiLanguage, 'en');
     assert.equal(({}).polluted, undefined);
+
+    // v1 -> v2 migration upgrades legacy Gemini 1M defaults to 512K, while preserving explicit v2 overrides
+    const migrated = sanitizeConfig({
+      version: 1,
+      modelLimits: { 'gemini-4-neon': 1000000, 'gemini-4-pro': 256000, 'claude-4': 200000 },
+    });
+    assert.equal(migrated.version, 2);
+    assert.equal(migrated.modelLimits['gemini-4-neon'], 512000);
+    assert.equal(migrated.modelLimits['gemini-4-pro'], 256000);
+
+    const savedCustom = saveConfig(
+      {
+        modelLimits: { 'gemini-4-neon': 1000000, 'deepseek-r1': 128000 },
+        pricing: { 'deepseek-r1': { input: 0.55, cacheRead: 0.14, output: 2.19 } },
+        alerts: { subagentShareThresholdPct: 45, subagentContextWarnTokens: 150000, mcpServerWarnTokens: 25000 },
+      },
+      opts
+    );
+    assert.equal(savedCustom.modelLimits['gemini-4-neon'], 1000000);
+    assert.equal(savedCustom.modelLimits['deepseek-r1'], 128000);
+    assert.equal(savedCustom.pricing['deepseek-r1'].output, 2.19);
+    assert.equal(savedCustom.alerts.subagentShareThresholdPct, 45);
+    assert.equal(savedCustom.alerts.subagentContextWarnTokens, 150000);
+    assert.equal(savedCustom.alerts.mcpServerWarnTokens, 25000);
+
+    // Deleting custom model limit & pricing keys via null removes them cleanly
+    const afterDelete = saveConfig(
+      { modelLimits: { 'deepseek-r1': null }, pricing: { 'deepseek-r1': null } },
+      opts
+    );
+    assert.equal(Object.prototype.hasOwnProperty.call(afterDelete.modelLimits, 'deepseek-r1'), false);
+    assert.equal(Object.prototype.hasOwnProperty.call(afterDelete.pricing, 'deepseek-r1'), false);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -148,12 +180,13 @@ test('MCP app_config_manage handles uiLanguage persistence, restart_antigravity,
 
   const dispatcher = createMcpDispatcher({ dataDir, projectDir: root });
   try {
-    assert.equal(SERVER_INFO.version, '1.6.0');
+    assert.equal(SERVER_INFO.version, '1.6.1');
 
     // Default config get
     const rGet = await dispatcher.callTool('app_config_manage', { action: 'get' });
     assert.ok(!rGet.isError);
     assert.equal(rGet.structuredContent.config.uiLanguage, 'zh-CN');
+    assert.equal(rGet.structuredContent.defaults.modelLimits['gemini-4-neon'], 512000);
 
     // Update uiLanguage -> en
     const rEn = await dispatcher.callTool('app_config_manage', {

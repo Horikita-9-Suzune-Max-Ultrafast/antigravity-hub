@@ -2,7 +2,7 @@
  * Centralized UI state, defaults, and lightweight reactive helpers.
  */
 
-export const APP_VERSION = '1.6.0';
+export const APP_VERSION = '1.6.1';
 export const CALLS_INITIAL_RENDER_LIMIT = 120;
 export const MINI_BAR_DEFAULT_ORDER = ['context', 'cache', 'kv', 'tps', 'model'];
 export const SHARED_WIDTH_PRESETS = [380, 460, 640];
@@ -118,6 +118,7 @@ export function createUiState({ defaultLang = 'zh-CN', initialPinned = true } = 
     capsuleData: null,
     reviewData: null,
     config: createDefaultUiConfig(defaultLang),
+    configDefaults: null,
     windowPinned: Boolean(initialPinned),
     windowCollapsed: false,
     windowMode: 'console', // 'console' | 'minibar' | 'orb'

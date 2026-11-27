@@ -114,6 +114,11 @@ export const ICON_SPRITE_HTML = `<svg id="agyIconSprite" class="hidden" aria-hid
     <path d="M18.36 6.64a9 9 0 1 1-12.73 0"/>
     <line x1="12" y1="2" x2="12" y2="12"/>
   </symbol>
+  <symbol id="ico-sliders" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M2.5 4.5h3M9.5 4.5h4M2.5 11.5h7M13.5 11.5h0"/>
+    <circle cx="7.5" cy="4.5" r="1.8"/>
+    <circle cx="11.5" cy="11.5" r="1.8"/>
+  </symbol>
 </svg>`;
 
 export function ensureIconSprite(doc = typeof document !== 'undefined' ? document : null) {

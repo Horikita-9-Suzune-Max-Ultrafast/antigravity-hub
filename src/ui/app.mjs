@@ -29,6 +29,7 @@ import { createGovernanceModule } from './modules/governance-module.mjs';
 import { createAppearanceModule } from './modules/appearance-module.mjs';
 import { createI18nModule } from './modules/i18n-module.mjs';
 import { createSettingsModule } from './modules/settings-module.mjs';
+import { createModelParamsModalModule } from './modules/model-params-modal.mjs';
 import { createNativeChromeModule, postHostWindowMsg } from './modules/native-chrome.mjs';
 import {
   DEFAULT_UI_LANG, normalizeUiLang, t as tUi, applyStaticTranslations,
@@ -121,6 +122,7 @@ async function sendToAgent(text) {
 async function persistConfigPatch(patch) {
   const res = await callAppTool('app_config_manage', { action: 'update', patch });
   if (res?.config) state.config = res.config;
+  if (res?.defaults) state.configDefaults = res.defaults;
   if (res?.popoutStatus) state.popoutStatus = res.popoutStatus;
   return res;
 }
@@ -169,6 +171,15 @@ const monitorVault = createMonitorVaultModule({
   state, tr, getUiLang, callAppTool, getMcpApp: () => mcpApp, showToast,
   openModal: modalCtrl.openModal, closeModal: modalCtrl.closeModal, positionIndicator, renderVaultSelects,
 });
+const modelParamsModal = createModelParamsModalModule({
+  state, tr, persistConfigPatch, showToast, openModal: modalCtrl.openModal, closeModal: modalCtrl.closeModal, positionIndicator,
+  onAfterSave: async () => {
+    settingsModule.renderSettings();
+    monitorContext.syncKvCountdownUi();
+    rpc.invalidateRev();
+    await pollAll(true);
+  },
+});
 const monitorContext = createMonitorContextModule({
   state, prevDisplay, tr, getUiLang, localizeBreakdownItem, localizeDeferredItem, localizeInventoryGroup,
   callAppTool, getMcpApp: () => mcpApp, showToast, openModal: modalCtrl.openModal, closeModal: modalCtrl.closeModal,
@@ -176,6 +187,7 @@ const monitorContext = createMonitorContextModule({
   onTelemetryUpdate: (ctx, metrics) => { nativeChrome.updateNativeTitleBarTelemetry(ctx, metrics); },
   onOpenCallsMatch: (alert, hay) => monitorCalls.focusAlertCall(alert, hay),
   onOpenCapsule: () => monitorVault.openCapsuleModal(),
+  onOpenModelParams: (tab) => modelParamsModal.open(tab),
 });
 const reviewModule = createReviewModule({
   callAppTool, esc, tr, getUiLang, showToast, openModal: modalCtrl.openModal, closeModal: modalCtrl.closeModal,
@@ -216,6 +228,8 @@ const settingsModule = createSettingsModule({
   },
   onOpenPopout: () => void openPopoutWindow({ manual: true }),
   onSetSharedWidth: (w) => nativeChrome.setSharedWidth(w),
+  onOpenModelParams: (tab) => modelParamsModal.open(tab),
+  onAfterConfigReset: async () => { rpc.invalidateRev(); await pollAll(true); },
   showToast, openModal: modalCtrl.openModal, closeModal: modalCtrl.closeModal,
 });
 
@@ -474,6 +488,7 @@ async function hydrateInitialConfig() {
   try {
     const res = await callAppTool('app_config_manage', { action: 'get' });
     if (res?.config) state.config = res.config;
+    if (res?.defaults) state.configDefaults = res.defaults;
     if (res?.popoutStatus) state.popoutStatus = res.popoutStatus;
     applyUiLanguage(state.config?.uiLanguage || DEFAULT_UI_LANG);
     state.windowPinned = state.config?.popout?.alwaysOnTop !== false;
@@ -511,6 +526,7 @@ async function bootstrap() {
   appearanceModule.init();
   i18nModule.init();
   settingsModule.bindEvents();
+  modelParamsModal.bindEvents();
   bindGlobalUiEvents({
     state, prevDisplay, tr, getUiLang, isNativePopout: IS_NATIVE_POPOUT, rpc, callAppTool, persistConfigPatch, modalCtrl,
     monitorContext, monitorCalls, monitorStats, monitorVault, reviewModule, governanceModule, appearanceModule, i18nModule,

@@ -290,9 +290,14 @@
           <div class="flex flex-wrap items-start justify-between gap-3">
             <div>
               <div class="text-xs font-medium text-muted" data-i18n="monitor.ctx.title">上下文占用</div>
-              <div class="flex items-baseline gap-3 mt-1 flex-wrap">
+              <div class="flex items-baseline gap-2.5 mt-1 flex-wrap">
                 <span id="ctxPctBig" class="text-3xl font-semibold mono-num tracking-tight">0.0%</span>
-                <span id="ctxRatioLabel" class="text-sm mono-num text-muted">0 / 1.00M</span>
+                <span class="inline-flex items-center gap-1.5">
+                  <span id="ctxRatioLabel" class="text-sm mono-num text-muted">0 / 512.0K</span>
+                  <button id="ctxLimitEditBtn" type="button" class="ctx-limit-edit-btn shrink-0" title="修改上下文窗口与监控参数" data-i18n-title="monitor.ctx.editParamsTitle" data-i18n-aria="monitor.ctx.editParamsTitle">
+                    <svg width="13" height="13" class="agy-ico" aria-hidden="true"><use href="#ico-sliders"/></svg>
+                  </button>
+                </span>
                 <span id="ctxHoverHint" class="agy-pill mono-num ctx-hover-hint" data-show="false"></span>
               </div>
             </div>
@@ -1239,7 +1244,7 @@
             <button id="exitSettingsBtn" type="button" class="agy-btn agy-btn-secondary" style="height: 30px; padding: 0 10px;" data-i18n="settings.back">← 返回</button>
             <span class="text-base font-semibold" data-i18n="settings.title">插件设置</span>
           </div>
-          <span id="settingsVersionLabel" class="agy-pill mono-num text-xs">Antigravity Hub v1.6.0</span>
+          <span id="settingsVersionLabel" class="agy-pill mono-num text-xs">Antigravity Hub v1.6.1</span>
         </div>
 
         <!-- 1. 通用与语言 -->
@@ -1341,6 +1346,20 @@
                 <span class="text-muted block" data-i18n="settings.dropPct.label">缓存击穿阈值 (%)</span>
                 <input id="cfgDropPctInput" type="number" value="50" min="20" max="90" step="5" class="agy-input w-full mono-num" />
               </label>
+            </div>
+
+            <div class="px-5 py-3.5 flex flex-wrap items-center justify-between gap-3">
+              <div class="min-w-0">
+                <div class="text-sm font-medium flex items-center gap-2 flex-wrap">
+                  <span data-i18n="settings.modelParams.title">模型上下文窗口与参数配置</span>
+                  <span id="settingsModelParamsSummary" class="agy-pill mono-num">Gemini 512K</span>
+                </div>
+                <div class="text-xs text-muted mt-0.5" data-i18n="settings.modelParams.desc">自定义各模型上下文大小、预警阈值、汇率与费率</div>
+              </div>
+              <button id="openModelParamsBtn" type="button" class="agy-btn agy-btn-secondary agy-btn-sm shrink-0">
+                <svg width="12" height="12" class="agy-ico" aria-hidden="true"><use href="#ico-sliders"/></svg>
+                <span data-i18n="settings.modelParams.openBtn">编辑参数</span>
+              </button>
             </div>
           </div>
         </div>
@@ -1459,7 +1478,7 @@
             </div>
             <div class="px-5 py-3 flex items-center justify-between gap-2">
               <span class="text-muted" data-i18n="settings.doctor.deploy">部署运行包</span>
-              <span id="docDeployVal" class="mono-num">v1.6.0 / 0 node_modules</span>
+              <span id="docDeployVal" class="mono-num">v1.6.1 / 0 node_modules</span>
             </div>
             <div class="px-5 py-3 flex items-center justify-between gap-2">
               <span class="text-muted" data-i18n="settings.update.label">插件版本更新</span>
@@ -1863,6 +1882,83 @@
         <button type="submit" class="agy-btn agy-btn-primary" data-i18n="review.importModal.submit">解析并导入</button>
       </div>
     </form>
+  </div>
+
+  <!-- 模态框 13：模型上下文窗口与监控参数配置 -->
+  <div id="modelParamsModal" class="modal-backdrop" data-open="false">
+    <div class="modal-card wide param-modal-card p-5 space-y-3.5">
+      <div class="flex items-center justify-between gap-2 shrink-0">
+        <div class="flex items-center gap-2 min-w-0">
+          <span class="text-base font-semibold truncate" data-i18n="paramsModal.title">模型与参数配置</span>
+          <span id="modelParamsActiveModelPill" class="agy-pill mono-num hidden truncate"></span>
+        </div>
+        <button type="button" data-close-modal="modelParamsModal" class="agy-btn agy-btn-secondary agy-icon-btn shrink-0" aria-label="Close"><svg width="14" height="14" class="agy-ico" aria-hidden="true"><use href="#ico-close"/></svg></button>
+      </div>
+
+      <div class="seg-nav seg-nav-full shrink-0" id="modelParamsTabNav" role="tablist">
+        <div class="seg-indicator" id="modelParamsTabIndicator"></div>
+        <button type="button" class="seg-tab" role="tab" data-ptab="limits" data-active="true" data-i18n="paramsModal.tab.limits">上下文窗口</button>
+        <button type="button" class="seg-tab" role="tab" data-ptab="thresholds" data-active="false" data-i18n="paramsModal.tab.thresholds">预警与阈值</button>
+        <button type="button" class="seg-tab" role="tab" data-ptab="pricing" data-active="false" data-i18n="paramsModal.tab.pricing">费率配置</button>
+      </div>
+
+      <div class="param-modal-stage scroll-thin">
+        <!-- Tab 1: 上下文窗口 -->
+        <div id="modelParamsPaneLimits" class="space-y-3">
+          <div class="agy-subtle px-3 py-2.5 flex flex-wrap items-center justify-between gap-2 text-xs">
+            <span class="text-muted font-medium" data-i18n="paramsModal.limits.geminiPreset">Gemini 窗口预设</span>
+            <div id="geminiLimitPresetRow" class="param-preset-bar" role="group">
+              <button type="button" class="kv-preset-btn mono-num" data-gemini-preset="256000" data-i18n="paramsModal.limits.preset256k">256K</button>
+              <button type="button" class="kv-preset-btn mono-num" data-gemini-preset="512000" data-active="true" data-i18n="paramsModal.limits.preset512k">512K（实测）</button>
+              <button type="button" class="kv-preset-btn mono-num" data-gemini-preset="1000000" data-i18n="paramsModal.limits.preset1m">1.00M（原生）</button>
+            </div>
+          </div>
+
+          <div id="modelLimitsEditorList" class="agy-group divide-y overflow-hidden"></div>
+
+          <div class="param-add-bar">
+            <input id="modelLimitAddKey" type="text" class="agy-input param-add-key mono-num text-xs" placeholder="模型前缀，如 deepseek-r1" data-i18n-placeholder="paramsModal.limits.addPrefixPlaceholder" />
+            <div class="param-input-unit shrink-0">
+              <input id="modelLimitAddVal" type="number" class="agy-input param-num-input mono-num" min="8" max="10000" step="any" placeholder="512" data-i18n-placeholder="paramsModal.limits.addValPlaceholder" />
+              <span class="param-unit-suffix mono-num">K</span>
+            </div>
+            <button id="modelLimitAddBtn" type="button" class="agy-btn agy-btn-secondary agy-btn-sm shrink-0" data-i18n="paramsModal.limits.addBtn">添加</button>
+          </div>
+        </div>
+
+        <!-- Tab 2: 预警与阈值 -->
+        <div id="modelParamsPaneThresholds" class="hidden space-y-3 text-xs">
+          <div id="modelParamsThresholdGrid" class="grid-2"></div>
+        </div>
+
+        <!-- Tab 3: 费率配置 -->
+        <div id="modelParamsPanePricing" class="hidden space-y-3 text-xs">
+          <div class="param-pricing-head text-muted">
+            <span data-i18n="paramsModal.pricing.colModel">模型前缀</span>
+            <span class="text-right" data-i18n="paramsModal.pricing.colInput">输入 ($/1M)</span>
+            <span class="text-right" data-i18n="paramsModal.pricing.colCache">缓存读 ($/1M)</span>
+            <span class="text-right" data-i18n="paramsModal.pricing.colOutput">输出 ($/1M)</span>
+            <span class="param-del-spacer" aria-hidden="true"></span>
+          </div>
+          <div id="modelPricingEditorList" class="agy-group divide-y overflow-hidden"></div>
+          <div class="param-pricing-add">
+            <input id="modelPricingAddKey" type="text" class="agy-input param-price-key-input mono-num text-xs" placeholder="模型前缀" data-i18n-placeholder="paramsModal.pricing.colModel" />
+            <input id="modelPricingAddIn" type="number" min="0" max="1000" step="any" class="agy-input param-price-input mono-num" placeholder="2.0" />
+            <input id="modelPricingAddCache" type="number" min="0" max="1000" step="any" class="agy-input param-price-input mono-num" placeholder="0.2" />
+            <input id="modelPricingAddOut" type="number" min="0" max="1000" step="any" class="agy-input param-price-input mono-num" placeholder="10" />
+            <button id="modelPricingAddBtn" type="button" class="agy-btn agy-btn-secondary agy-btn-sm shrink-0" data-i18n="paramsModal.limits.addBtn">添加</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="flex flex-wrap items-center justify-between gap-2 pt-2 border-t shrink-0">
+        <button id="modelParamsResetBtn" type="button" class="agy-btn agy-btn-secondary agy-btn-sm" data-i18n="paramsModal.resetTab">恢复当前页默认</button>
+        <div class="flex items-center gap-2">
+          <button type="button" data-close-modal="modelParamsModal" class="agy-btn agy-btn-secondary" data-i18n="common.cancel">取消</button>
+          <button id="modelParamsSaveBtn" type="button" class="agy-btn agy-btn-primary" data-i18n="paramsModal.saveBtn">保存并生效</button>
+        </div>
+      </div>
+    </div>
   </div>
 
   <div id="toast" class="agy-toast" data-show="false"></div>

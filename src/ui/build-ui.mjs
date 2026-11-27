@@ -23,6 +23,7 @@ function minifyHtmlTemplate(html) {
       if (/\bdata-i18n-title="/.test(t)) t = t.replace(/\s+title="[^"]*"/g, '');
       if (/\bdata-i18n-placeholder="/.test(t)) t = t.replace(/\s+placeholder="[^"]*"/g, '');
       if (/\bdata-i18n-aria="/.test(t)) t = t.replace(/\s+aria-label="[^"]*"/g, '');
+      t = t.replace(/\s+style="([^"]*)"/g, (_, s) => ` style="${s.replace(/\s*([:;])\s*/g, '$1').replace(/;+$/, '')}"`);
       return t;
     })
     .replace(/(<[^>]*\bdata-i18n="[^"]+"[^>]*>)[^<]+(<\/(?:span|div|button|p|h[1-6]|th|label|option|strong)>)/g, '$1$2')
@@ -192,16 +193,22 @@ export async function buildUi(options = {}) {
           const mod = await import(`${pathToFileURL(args.path).href}?v=${Date.now()}`);
           const dicts = mod.UI_DICTIONARIES;
           if (dicts?.['zh-CN'] && dicts?.en) {
-            const paired = {};
-            for (const k of Object.keys(dicts['zh-CN'])) {
-              paired[k] = [dicts['zh-CN'][k], dicts.en[k] ?? dicts['zh-CN'][k]];
-            }
-            for (const k of Object.keys(dicts.en)) {
-              if (!paired[k]) paired[k] = [dicts.en[k], dicts.en[k]];
+            const tree = {};
+            const allKeys = [...new Set([...Object.keys(dicts['zh-CN']), ...Object.keys(dicts.en)])];
+            for (const k of allKeys) {
+              const pair = [dicts['zh-CN'][k] ?? dicts.en[k], dicts.en[k] ?? dicts['zh-CN'][k]];
+              const parts = k.split('.');
+              let cur = tree;
+              for (let idx = 0; idx < parts.length - 1; idx++) {
+                if (!cur[parts[idx]] || Array.isArray(cur[parts[idx]])) cur[parts[idx]] = {};
+                cur = cur[parts[idx]];
+              }
+              cur[parts[parts.length - 1]] = pair;
             }
             const packedCode =
-              `const _P=${JSON.stringify(paired)};` +
-              `const ZH_CN={},EN={};for(const k in _P){ZH_CN[k]=_P[k][0];EN[k]=_P[k][1];}`;
+              `const _P=${JSON.stringify(tree)};` +
+              `const ZH_CN={},EN={};` +
+              `(function u(o,p){for(const k in o){const v=o[k],f=p?p+'.'+k:k;if(Array.isArray(v)){ZH_CN[f]=v[0];EN[f]=v[1]}else u(v,f)}})(_P,'');`;
             return { contents: src.replace(m[0], () => packedCode), loader: 'js' };
           }
         }
@@ -221,6 +228,7 @@ export async function buildUi(options = {}) {
     format: 'iife',
     platform: 'browser',
     target: ['es2022'],
+    charset: 'utf8',
     minify: true,
     legalComments: 'none',
     metafile: true,

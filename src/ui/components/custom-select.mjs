@@ -29,6 +29,7 @@ export function getModelSimOptions(tr) {
     { value: '', label: tr('monitor.ctx.modelSimNone') },
     { value: '200000', label: tr('monitor.ctx.modelSim200k') },
     { value: '256000', label: tr('monitor.ctx.modelSim256k') },
+    { value: '512000', label: tr('monitor.ctx.modelSim512k') },
     { value: '1000000', label: tr('monitor.ctx.modelSim1m') },
   ];
 }

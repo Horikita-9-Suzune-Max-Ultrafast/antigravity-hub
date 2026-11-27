@@ -27,6 +27,7 @@ export function createMonitorContextModule({
   onTelemetryUpdate,
   onOpenCallsMatch,
   onOpenCapsule,
+  onOpenModelParams,
 }) {
   let kvCountdownTimer = null;
   let lastKvSig = '';
@@ -300,7 +301,9 @@ export function createMonitorContextModule({
     const freeEl = document.getElementById('kpiFree');
     const costEl = document.getElementById('kpiCost');
 
-    if (pctEl) pctEl.style.color = pct >= warnPct ? 'var(--warning)' : 'var(--foreground)';
+    if (pctEl) {
+      pctEl.style.color = pct >= 100 ? 'var(--error)' : pct >= warnPct ? 'var(--warning)' : 'var(--foreground)';
+    }
     if (cacheEl) {
       cacheEl.style.color =
         cache < 60 && used > 0 ? 'var(--error)' : cache >= 85 ? 'var(--success)' : 'var(--warning)';
@@ -352,10 +355,11 @@ export function createMonitorContextModule({
       lastBreakdownSig = breakdownSig;
       const segBar = document.getElementById('ctxSegBar');
       if (segBar) {
+        const barDenom = Math.max(limit, used, 1);
         const existingSegs = segBar.querySelectorAll('.ctx-seg');
         if (existingSegs.length === breakdown.length) {
           breakdown.forEach((b, i) => {
-            const w = b.tokens > 0 ? Math.max(0.8, (b.tokens / limit) * 100) : 0;
+            const w = b.tokens > 0 ? Math.max(0.8, (b.tokens / barDenom) * 100) : 0;
             existingSegs[i].style.flex = `0 0 ${w.toFixed(3)}%`;
             existingSegs[i].style.background = b.color;
             existingSegs[i].dataset.id = b.id;
@@ -363,7 +367,7 @@ export function createMonitorContextModule({
         } else {
           segBar.innerHTML = breakdown
             .map((b) => {
-              const w = b.tokens > 0 ? Math.max(0.8, (b.tokens / limit) * 100) : 0;
+              const w = b.tokens > 0 ? Math.max(0.8, (b.tokens / barDenom) * 100) : 0;
               return `<div class="ctx-seg" data-id="${esc(b.id)}" style="flex:0 0 ${w.toFixed(3)}%; background:${esc(b.color)};"></div>`;
             })
             .join('');
@@ -725,6 +729,7 @@ export function createMonitorContextModule({
     });
     document.getElementById('jumpCallsBtn')?.addEventListener('click', () => switchTab('calls'));
     document.getElementById('openCapsuleFromCtxBtn')?.addEventListener('click', () => void onOpenCapsule?.());
+    document.getElementById('ctxLimitEditBtn')?.addEventListener('click', () => onOpenModelParams?.('limits'));
 
     document.getElementById('assetCopyPathBtn')?.addEventListener('click', () => {
       const p = state.inspectedAsset?.filePath;

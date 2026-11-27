@@ -110,6 +110,7 @@ test('Zero middle-dot (\\u00b7) across all newly created/modified UI files and b
     'src/ui/modules/monitor-calls.mjs',
     'src/ui/modules/monitor-vault.mjs',
     'src/ui/modules/settings-module.mjs',
+    'src/ui/modules/model-params-modal.mjs',
     'src/ui/modules/native-chrome.mjs',
   ];
   for (const rel of ownedFiles) {
@@ -635,9 +636,17 @@ test('v1.6.0 wiring regression gate: telemetry 2-arg handoff, resizeScheduler ca
   assert.equal(eventsSrc.includes('state.callsModelFilter'), false, 'events.mjs must use state.modelFilter');
   assert.equal(eventsSrc.includes('state.callsAgentFilter'), false, 'events.mjs must use state.agentFilter');
   assert.equal(eventsSrc.includes('state.vaultKindFilter'), false, 'events.mjs must use state.vaultKind');
-  for (const id of ['quickPopoutBtn', 'launcherOpenPopoutBtn', 'launcherUseEmbeddedBtn', 'launcherClosePopoutBtn']) {
+  for (const id of [
+    'quickPopoutBtn',
+    'launcherOpenPopoutBtn',
+    'launcherUseEmbeddedBtn',
+    'launcherClosePopoutBtn',
+  ]) {
     assert.ok(htmlSrc.includes(`id="${id}"`), `index.html missing #${id}`);
     assert.ok(eventsSrc.includes(`'${id}'`), `events.mjs missing binding for #${id}`);
+  }
+  for (const id of ['ctxLimitEditBtn', 'openModelParamsBtn', 'modelParamsModal', 'modelParamsSaveBtn']) {
+    assert.ok(htmlSrc.includes(`id="${id}"`), `index.html missing #${id}`);
   }
   assert.ok(eventsSrc.includes('[data-acc-idx]'), 'events.mjs must handle inventory accordion [data-acc-idx]');
   assert.ok(eventsSrc.includes('[data-inv-group][data-inv-item]'), 'events.mjs must handle [data-inv-group][data-inv-item]');

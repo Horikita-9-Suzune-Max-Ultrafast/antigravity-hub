@@ -13,6 +13,7 @@ export const DEFAULT_MODAL_IDS = [
   'restartIdeModal',
   'assetInspectorModal',
   'reviewImportModal',
+  'modelParamsModal',
 ];
 
 export function createModalController({ onOpen, onClose, modalIds = DEFAULT_MODAL_IDS } = {}) {

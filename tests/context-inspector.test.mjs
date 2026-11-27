@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { inspectContext, previewContextAsset } from '../src/core/context-inspector.mjs';
-import { getModelLimit } from '../src/core/config.mjs';
+import { getModelLimit, saveConfig } from '../src/core/config.mjs';
 import { saveMemory } from '../src/core/vault.mjs';
 
 function makeTmpDir(prefix) {
@@ -146,9 +146,20 @@ test('Context Inspector aligns usedTokens with transcript, scans MCP deferred/ea
     assert.match(result.attribution, /heavy-playwright/);
     assert.ok(result.alerts.some((a) => a.code === 'context_high'));
 
-    // New Gemini 4 Hydrogen and generic Gemini models resolve to 1M limit (never 200K fallback)
-    assert.equal(getModelLimit('gemini-4-hydrogen-medium'), 1000000);
-    assert.equal(getModelLimit('gemini-future-codename'), 1000000);
+    // Gemini models default to Antigravity's 512K effective ceiling (never 200K fallback)
+    assert.equal(getModelLimit('gemini-4-hydrogen-medium'), 512000);
+    assert.equal(getModelLimit('gemini-4-carbon-medium'), 512000);
+    assert.equal(getModelLimit('gemini-future-codename'), 512000);
+
+    // Custom user-configured limit is respected even when usedTokens exceeds it (never silently overwritten to 1M)
+    saveConfig({ modelLimits: { 'claude-4': 128000 } }, { dataDir });
+    const customRes = inspectContext(
+      { conversationId: convId, projectDir: workspaceDir },
+      { dataDir, appDataDir, configDir }
+    );
+    assert.equal(customRes.limitTokens, 128000);
+    assert.equal(customRes.freeTokens, 0);
+    assert.equal(customRes.usedPercent, 125.0);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

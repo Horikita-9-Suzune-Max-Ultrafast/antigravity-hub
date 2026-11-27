@@ -90,7 +90,7 @@ test('MCP App Stdio Server serves ui:// single-file HTML, exposes 5 model + 11 a
       clientInfo: { name: 'test-harness', version: '1.0.0' },
     });
     assert.equal(initResp.result.serverInfo.name, 'context-cache-server');
-    assert.equal(initResp.result.serverInfo.version, '1.6.0');
+    assert.equal(initResp.result.serverInfo.version, '1.6.1');
     assert.ok(initResp.result.capabilities.tools);
     assert.ok(initResp.result.capabilities.resources);
     client.notify('notifications/initialized', {});

@@ -25,7 +25,7 @@ export function detectDefaultCurrency() {
 const configReadCache = createLruCache(16);
 
 export const DEFAULT_CONFIG = {
-  version: 1,
+  version: 2,
   uiLanguage: 'zh-CN',
   currency: detectDefaultCurrency(),
   cnyPerUsd: 7.2,
@@ -81,28 +81,30 @@ export const DEFAULT_CONFIG = {
     mcpServerWarnTokens: 15000,
   },
   modelLimits: {
-    'gemini-4-hydrogen': 1000000,
-    'gemini-4-neon': 1000000,
-    'gemini-4-pro': 1000000,
-    'gemini-4-flash': 1000000,
-    'gemini-4-argon': 1000000,
-    'gemini-4': 1000000,
-    'gemini-2.5': 1000000,
-    'gemini-2.0': 1000000,
-    'gemini': 1000000,
+    'gemini-4-hydrogen': 512000,
+    'gemini-4-neon': 512000,
+    'gemini-4-carbon': 512000,
+    'gemini-4-pro': 512000,
+    'gemini-4-flash': 512000,
+    'gemini-4-argon': 512000,
+    'gemini-4': 512000,
+    'gemini-2.5': 512000,
+    'gemini-2.0': 512000,
+    gemini: 512000,
     'claude-4': 200000,
     'claude-3': 200000,
-    'claude': 200000,
+    claude: 200000,
     'gpt-5': 400000,
     'gpt-4': 128000,
-    'o3': 200000,
-    'o4': 200000,
+    o3: 200000,
+    o4: 200000,
     default: 200000,
   },
   // USD per 1,000,000 tokens
   pricing: {
     'gemini-4-hydrogen': { input: 2.5, cacheRead: 0.25, output: 15.0 },
     'gemini-4-neon': { input: 2.5, cacheRead: 0.25, output: 15.0 },
+    'gemini-4-carbon': { input: 2.5, cacheRead: 0.25, output: 15.0 },
     'gemini-4-pro': { input: 2.0, cacheRead: 0.2, output: 12.0 },
     'gemini-4-flash': { input: 0.3, cacheRead: 0.03, output: 1.5 },
     'gemini-4-argon': { input: 4.0, cacheRead: 0.4, output: 20.0 },
@@ -151,6 +153,63 @@ export const DEFAULT_CONFIG = {
 };
 
 const UNSAFE_MERGE_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+const LEGACY_V1_GEMINI_LIMIT_KEYS = new Set([
+  'gemini-4-hydrogen',
+  'gemini-4-neon',
+  'gemini-4-pro',
+  'gemini-4-flash',
+  'gemini-4-argon',
+  'gemini-4',
+  'gemini-2.5',
+  'gemini-2.0',
+  'gemini',
+]);
+
+function clampPrice(val, fallback = 0) {
+  const n = Number(val);
+  if (!Number.isFinite(n) || n < 0) return fallback;
+  return Number(Math.min(1000, n).toFixed(4));
+}
+
+function sanitizeModelLimits(rawLimits, isV1Migration) {
+  const out = {};
+  const src = rawLimits && typeof rawLimits === 'object' && !Array.isArray(rawLimits) ? rawLimits : DEFAULT_CONFIG.modelLimits;
+  for (const [rawKey, rawVal] of Object.entries(src)) {
+    const key = String(rawKey || '').trim().slice(0, 64);
+    if (!key || UNSAFE_MERGE_KEYS.has(key)) continue;
+    if (rawVal === null) continue;
+    let num = Number(rawVal);
+    if (!Number.isFinite(num) || num <= 0) continue;
+    if (isV1Migration && LEGACY_V1_GEMINI_LIMIT_KEYS.has(key.toLowerCase()) && Math.round(num) === 1_000_000) {
+      num = 512_000;
+    }
+    out[key] = Math.max(8_000, Math.min(10_000_000, Math.round(num)));
+  }
+  if (!Number.isFinite(out.default)) {
+    out.default = DEFAULT_CONFIG.modelLimits.default;
+  }
+  return out;
+}
+
+function sanitizePricing(rawPricing) {
+  const out = {};
+  const src = rawPricing && typeof rawPricing === 'object' && !Array.isArray(rawPricing) ? rawPricing : DEFAULT_CONFIG.pricing;
+  for (const [rawKey, rawVal] of Object.entries(src)) {
+    const key = String(rawKey || '').trim().slice(0, 64);
+    if (!key || UNSAFE_MERGE_KEYS.has(key)) continue;
+    if (rawVal === null || typeof rawVal !== 'object' || Array.isArray(rawVal)) continue;
+    const def = DEFAULT_CONFIG.pricing[key] || DEFAULT_CONFIG.pricing.default;
+    out[key] = {
+      input: clampPrice(rawVal.input, def.input),
+      cacheRead: clampPrice(rawVal.cacheRead, def.cacheRead),
+      output: clampPrice(rawVal.output, def.output),
+    };
+  }
+  if (!out.default) {
+    out.default = structuredClone(DEFAULT_CONFIG.pricing.default);
+  }
+  return out;
+}
 
 function deepMerge(base, patch) {
   if (!patch || typeof patch !== 'object' || Array.isArray(patch)) {
@@ -180,7 +239,9 @@ function deepMerge(base, patch) {
  * Clamp user-edited config fields into safe, valid bounds.
  */
 export function sanitizeConfig(cfg) {
+  const isV1Migration = Boolean(cfg && typeof cfg === 'object' && !Array.isArray(cfg) && Number(cfg.version) === 1);
   const out = deepMerge(DEFAULT_CONFIG, cfg);
+  out.version = DEFAULT_CONFIG.version;
   if (typeof out.uiLanguage === 'string') {
     const trimmedLang = out.uiLanguage.trim();
     if (VALID_UI_LANGUAGES.includes(trimmedLang)) {
@@ -276,7 +337,18 @@ export function sanitizeConfig(cfg) {
   out.alerts.contextWarningPct = Math.max(50, Math.min(95, Number(out.alerts.contextWarningPct) || 75));
   out.alerts.cacheDropThresholdPct = Math.max(20, Math.min(90, Number(out.alerts.cacheDropThresholdPct) || 50));
   out.alerts.lowTpsThreshold = Math.max(5, Math.min(100, Number(out.alerts.lowTpsThreshold) || 15));
-  out.alerts.lowTpsStreak = Math.max(2, Math.min(10, Number(out.alerts.lowTpsStreak) || 3));
+  out.alerts.lowTpsStreak = Math.max(2, Math.min(10, Math.round(Number(out.alerts.lowTpsStreak) || 3)));
+  out.alerts.subagentShareThresholdPct = Math.max(10, Math.min(90, Math.round(Number(out.alerts.subagentShareThresholdPct) || 35)));
+  out.alerts.subagentContextWarnTokens = Math.max(
+    10_000,
+    Math.min(2_000_000, Math.round(Number(out.alerts.subagentContextWarnTokens) || 100_000))
+  );
+  out.alerts.mcpServerWarnTokens = Math.max(
+    1_000,
+    Math.min(500_000, Math.round(Number(out.alerts.mcpServerWarnTokens) || 15_000))
+  );
+  out.modelLimits = sanitizeModelLimits(out.modelLimits, isV1Migration);
+  out.pricing = sanitizePricing(out.pricing);
 
   if (!VALID_CONSOLE_MODULES.includes(out.console?.defaultModule)) {
     out.console = { defaultModule: 'monitor' };

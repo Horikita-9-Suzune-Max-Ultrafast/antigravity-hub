@@ -234,11 +234,8 @@ export function inspectContext(params = {}, options = {}) {
 
   const matchedSession = sessionList.find((s) => s.conversationId === convId);
   const model = latestPlanner?.model || matchedSession?.lastModel || 'gemini-4-neon-high';
-  let limitTokens = getModelLimit(model, config);
+  const limitTokens = getModelLimit(model, config);
   const usedTokens = latestPlanner ? latestPlanner.inputTokens + latestPlanner.cacheReadTokens : 0;
-  if (usedTokens > limitTokens) {
-    limitTokens = usedTokens <= 1_000_000 ? 1_000_000 : 2_000_000;
-  }
 
   const msgRawTokens = acc ? acc.msgRawTokens : 0;
   const toolOutputTokens = acc ? acc.toolOutputTokens : 0;
