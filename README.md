@@ -4,8 +4,8 @@
 
 **专为 Google Antigravity 打造的模块化原生控制中心（MCP App）：集上下文监控与累计用量统计、本地代码审查、生态治理与场景预设、本地壁纸引擎、零依赖界面汉化于一体**
 
-[![Version: v1.6.0](https://img.shields.io/badge/Version-v1.6.0-0ea5e9.svg)](https://github.com/Horikita-9-Suzune-Max-Ultrafast/antigravity-hub/releases/tag/v1.6.0)
-[![Antigravity 2.35.2 Update Verified](https://img.shields.io/badge/Antigravity%202.35.2-Update%20Verified-10b981.svg)](#实测验证官方更新防破坏实录)
+[![Version: v1.6.1](https://img.shields.io/badge/Version-v1.6.1-0ea5e9.svg)](https://github.com/Horikita-9-Suzune-Max-Ultrafast/antigravity-hub/releases/tag/v1.6.1)
+[![Antigravity 2.36.0 Update Verified](https://img.shields.io/badge/Antigravity%202.36.0-Update%20Verified-10b981.svg)](#实测验证官方更新防破坏实录)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 [![Node.js >= 24](https://img.shields.io/badge/Node.js-%3E%3D24-339933.svg)](https://nodejs.org/)
 [![Zero Runtime Deps](https://img.shields.io/badge/Runtime%20Deps-0-brightgreen.svg)](#架构与设计原则)
@@ -18,7 +18,7 @@
 
 - [五大核心模块一览](#五大核心模块一览)
 - [实测验证：官方更新防破坏实录](#实测验证官方更新防破坏实录)
-- [v1.6.0 新版亮点](#v160-新版亮点)
+- [v1.6.1 / v1.6.0 新版亮点](#v161--v160-新版亮点)
 - [零门槛快速上手（3 步解压即用）](#快速开始)
 - [核心功能详解](#核心特性)
 - [架构与安全设计](#架构与设计原则)
@@ -47,30 +47,31 @@
 
 使用客户端增强类插件，大家最担心的往往不是功能够不够多，而是**「下次 Antigravity 官方一更新，会不会把客户端改崩、锁死安装器、丢数据或把旧版备份误还原回去？」**
 
-我们在真实生产环境中，刻意保持 **「ASAR 界面汉化已开启 + 本地壁纸已开启 + 原生悬浮窗运行中」** 的全开实战态，**不卸载插件、不提前还原原版**，连续经历官方原地升级至 **Antigravity `2.35.1` → `2.35.2`**（Electron `44.9.1`），对全链路进行了 6 维实测验收：
+我们在真实生产环境中，刻意保持 **「ASAR 界面汉化已开启 + 本地壁纸已开启 + 原生悬浮窗运行中」** 的全开实战态，**不卸载插件、不提前还原原版**，连续经历官方原地升级至 **Antigravity `2.35.1` → `2.35.2` → `2.36.0`**（Electron `44.9.1`），对全链路进行了 6 维实测验收：
 
 | 防破坏验收项 | 实测结果 | 真实链路表现 |
 | :--- | :---: | :--- |
-| **1. 原地升级防锁死与零孤儿进程** | **PASS** | 官方安装器平滑覆盖 `app.asar` 并以 `--updated` 完成冷启动，无白屏、无文件锁阻塞；升级重启后旧宿主进程自动退出，系统仅保留唯一健康 `language_server` → MCP Server → Win32 原生 WebView2 悬浮窗进程树 |
-| **2. 外置真相源 100% 零丢失** | **PASS** | 升级前后逐项核验：Vault 记忆库（217/217）、SQLite 派生调用索引（2840/2840）、个人配置与配额校准、激活词典（1972 条）及本地壁纸库与轮播计划全部无损保留 |
-| **3. 新版干净 `.bak` 自动刷新与防降级** | **PASS** | 升级后自动识别 `outdated_after_update` 与真实版本 `2.35.2` 并拦截旧版备份降级；重新应用汉化时先以 `2.35.2` 原版（`current_clean_asar`）刷新 `app.asar.agy-console.bak`，完整注入 `dist/main.js` 与 `dist/preload.js` 且支持一键无损还原 |
+| **1. 原地升级防锁死与零孤儿进程** | **PASS** | 官方安装器平滑覆盖 `app.asar` 并以 `--updated` 完成冷启动，无白屏、无文件锁阻塞；升级重启后旧宿主进程自动退出，系统仅保留唯一健康 `language_server`（`2.36.0`）→ MCP Server → Win32 原生 WebView2 悬浮窗进程树 |
+| **2. 外置真相源 100% 零丢失** | **PASS** | 升级前后逐项核验：Vault 记忆库（232/232）、SQLite 派生调用索引（3325/3325）、个人配置与模型参数、激活词典（1972 条）及本地壁纸库（5 张）与轮播计划全部无损保留 |
+| **3. 新版干净 `.bak` 自动刷新与防降级** | **PASS** | 升级后自动识别 `outdated_after_update` 与真实版本 `2.36.0` 并拦截旧版备份降级；对真实 `2.36.0` `app.asar` 执行端到端补丁/还原验收，确认以 `current_clean_asar` 生成字节级一致 `.bak`、完整注入 `dist/main.js` 与 `dist/preload.js` 且可一键字节级无损还原 |
 | **4. 本地壁纸免重配自动回归** | **PASS** | 壁纸引擎零新增 ASAR 侵入点；重打汉化后原有图库、轮播计划、透明度/模糊/遮罩/毛玻璃参数直接自动恢复，无需重新选图 |
-| **5. Hook、Transcript 与原生 DB 兼容** | **PASS** | `SessionStart` 简报、`PreInvocation`/`PostInvocation` 计时、`transcript_full.jsonl` 及原生 `conversations/<id>.db`（纳秒级 TTFT / 纯解码 TPS）开箱即通；`ctx_doctor` 实测 `HEALTHY`、Schema 漂移 `0`、熔断器 `CLOSED (0/3)` |
-| **6. 生态治理完整存活与回归全通** | **PASS** | 升级后全部插件、MCP、Skills、Rules 与 Hooks 挂载完好（0 错误 / 0 密钥泄露），21 个测试文件 **86 项自动化测试全部通过** |
+| **5. Hook、Transcript 与原生 DB 兼容** | **PASS** | `SessionStart` 简报、`PreInvocation`/`PostInvocation` 计时、`transcript_full.jsonl` 及原生 `conversations/<id>.db`（纳秒级 TTFT / 纯解码 TPS / 思考与正文拆分）开箱即通；`ctx_doctor` 实测 `HEALTHY (v1.6.1)`、Schema 漂移 `0`、熔断器 `CLOSED (0/3)` |
+| **6. 生态治理完整存活与回归全通** | **PASS** | 升级后全部插件（9/9）、MCP（4/4）、Skills（78/78）、Rules（3/3）与 Hooks（4/4）挂载完好（0 错误 / 0 密钥泄露），21 个测试文件 **86 项自动化测试全部通过** |
 
 > 即使未来 Antigravity 某次大版本改动了内部字段，Hook 也会自动 Fail-Open 返回 `{}`、脱敏录制 `schema-drift.jsonl` 并在连续 3 次异常后熔断，绝不拖慢或卡死主对话；终端运行 `ctx doctor --repair` 即可无损重建索引与复位状态。
 
 ---
 
-## v1.6.0 新版亮点
+## v1.6.1 / v1.6.0 新版亮点
 
-如果你是从旧版本升级或刚了解本项目，以下为 `v1.6.0` 核心大版本升级内容：
+如果你是从旧版本升级或刚了解本项目，以下为 `v1.6.1` 与 `v1.6.0` 核心升级内容：
 
+- **Gemini 默认 512K 上下文窗口与「模型与参数配置」编辑弹窗（v1.6.1）**：将 Gemini 系列默认上下文上限调整为 `512K` 以贴合 Antigravity 运行时实测压缩红线（补充 `gemini-4-carbon` 上限与费率，旧版 `v1` 配置自动无损迁移至 `v2` 并保留手动覆盖）；新增双入口（上下文卡片 `used / limit` 旁快捷按钮 + 插件设置页）「模型与参数配置」弹窗，支持一键切换 Gemini `256K / 512K / 1.00M` 预设、编辑模型上限与自定义前缀、集中调整全部预警阈值与汇率以及可视化编辑模型费率；切模型模拟器新增 `512K` 档位，启用 UTF-8 与 i18n 前缀树优化后单文件 UI 进一步瘦身至 **`466.6 KiB`**。
 - **全新第 5 一级模块：本地代码审查（v1.6.0）**：纯 Node.js 零依赖 Git Diff 解析引擎（支持 `未提交 / 已暂存 / 最近提交 / 分支对比`，自动折叠 lockfile/dist/二进制）；内置 8 条 L1 毫秒级确定性安全与质量规则（仅扫描新增行，杜绝历史旧代码误报）；支持白名单探测并手动执行项目原生门禁（`lint / typecheck / test / ruff / mypy / cargo / go vet`）；提供 L2 隔离 Subagent 深度审查 Prompt 构造、报告落盘导入与勾选发现项一键生成精准修复指令。
 - **跨会话累计用量统计看板（v1.6.0）**：在「监控」页新增 **「统计」** 标签（`上下文 / 明细 / 统计 / 记忆库`），基于本地 SQLite 全历史调用库提供 `今天 / 24 小时 / 7 天 / 30 天 / 全部` 时段筛选与模型筛选；一屏呈现累计 Token（含输入/输出/缓存拆分）、请求次数、按时区默认人民币 `¥` 并可一键切换 `¥ / $` 的估算费用、缓存命中率进度条、加权纯解码速度 & 首字平均 TTFT 以及按模型明细。
 - **Win32 原生 120fps 透明悬浮球、共享焦点连续形变与编译缓存（v1.6.0）**：悬浮窗宿主升级为本地 `.NET 4 csc.exe` 编译缓存（`floating-host-<hash>.exe`，命中缓存 `< 5ms` 启动），支持原生 60–240Hz DWM 拖拽缩放；最小化收起为 `WS_EX_LAYERED` + `UpdateLayeredWindow` 逐像素抗锯齿 48px 圆形悬浮球（带柔和投影、实时进度环与右键原生菜单）；悬浮球 ↔ 迷你条共享同一焦点锚点，原地完成 **220ms `cubic ease-out` 灵动岛式胶囊连续形变与透明叠化交接**，迷你条与完整窗强制同宽联动且高分屏上下精准居中。
 - **生态治理 4 支柱连续评分与核心性能全链路压榨（v1.6.0）**：合并 `ecosystem-inventory.mjs` 统一扫描底座（严格区分 `eager / deferred` MCP 与插件启停态），落地 4 支柱连续健康评分；引擎层完成 Transcript 增量字节累加解析、Git 5×→1× 单子进程收敛、SQLite `WeakMap` 预编译语句缓存、轮询 `rev` 摘要短路与 `ACTIVE_CONV_TTL_MS` 心跳提速。
-- **零 Zod 瘦身 33% 与 Radix 12 阶视觉统一（v1.6.0）**：自研轻量 SEP-1865 MCP App 桥接层彻底移除 `zod` 与重型 SDK，单文件 UI 从 `706 KiB` 骤降至 **`475.0 KiB`**；全界面收敛为 Radix UI Colors 12 阶色板与 4 级字号体系，统一 KV 倒计时药丸胶囊与可点击解释气泡，**86 项自动化测试全部通过**。
+- **零 Zod 瘦身 34% 与 Radix 12 阶视觉统一（v1.6.0 → v1.6.1）**：自研轻量 SEP-1865 MCP App 桥接层彻底移除 `zod` 与重型 SDK，单文件 UI 从 `706 KiB` 骤降至 **`466.6 KiB`**；全界面收敛为 Radix UI Colors 12 阶色板与 4 级字号体系，统一 KV 倒计时药丸胶囊与可点击解释气泡，**86 项自动化测试全部通过**。
 
 <details>
 <summary><strong>回顾 v1.5.5 核心亮点</strong></summary>
@@ -111,16 +112,16 @@
 
 ### 方式一：下载 Release 免构建插件包（推荐，3 步解压即用，零 `npm install`）
 
-1. 前往 [Releases 页面](https://github.com/Horikita-9-Suzune-Max-Ultrafast/antigravity-hub/releases/latest) 下载 `context-cache-v1.6.0-plugin.zip`（全明文 `.mjs` 源码 + 预编译单文件 UI，零 `node_modules`）。
+1. 前往 [Releases 页面](https://github.com/Horikita-9-Suzune-Max-Ultrafast/antigravity-hub/releases/latest) 下载 `context-cache-v1.6.1-plugin.zip`（全明文 `.mjs` 源码 + 预编译单文件 UI，零 `node_modules`）。
 2. 解压至 Antigravity 本地插件目录，确保目录结构为 `~/.gemini/config/plugins/context-cache/plugin.json`：
    - **Windows PowerShell**：
      ```powershell
-     Expand-Archive -Path .\context-cache-v1.6.0-plugin.zip -DestinationPath "$env:USERPROFILE\.gemini\config\plugins" -Force
+     Expand-Archive -Path .\context-cache-v1.6.1-plugin.zip -DestinationPath "$env:USERPROFILE\.gemini\config\plugins" -Force
      ```
    - **macOS / Linux**：
      ```bash
      mkdir -p ~/.gemini/config/plugins
-     unzip -o context-cache-v1.6.0-plugin.zip -d ~/.gemini/config/plugins
+     unzip -o context-cache-v1.6.1-plugin.zip -d ~/.gemini/config/plugins
      ```
 3. Antigravity 会自动发现并加载插件（无需重启）：
    - **左侧边栏**：点击 **`Antigravity Hub`** 打开全页控制台（带左侧窄图标导航栏）；
@@ -271,7 +272,7 @@ node --no-warnings bin/ctx.mjs i18n restore
 
 ### 平滑升级到最新版
 - **插件内一键更新（v1.5.4+ 推荐）**：进入 **「插件设置 → 维护与操作」** 点击 **「检查更新」**，发现新版后点击 **「一键更新（SHA-256 校验）」** 即可完成强校验下载、原子目录切换与安全重启引导（如遇网络超时或文件占用自动回滚并可跳转 Release 手动下载）。
-- **Release 包手动覆盖**：也可直接下载新版 `context-cache-v1.6.0-plugin.zip` 并覆盖解压到 `~/.gemini/config/plugins`。你的记忆库、壁纸库、汉化词典、治理偏好与配置快照全部存放在 `%USERPROFILE%\.context-cache`，**升级零数据丢失**。
+- **Release 包手动覆盖**：也可直接下载新版 `context-cache-v1.6.1-plugin.zip` 并覆盖解压到 `~/.gemini/config/plugins`。你的记忆库、壁纸库、汉化词典、治理偏好与配置快照全部存放在 `%USERPROFILE%\.context-cache`，**升级零数据丢失**。
 - **源码用户**：在仓库目录执行 `git pull && npm run deploy`。
 
 ### 完整卸载与无损还原
@@ -299,7 +300,7 @@ node --no-warnings bin/ctx.mjs i18n restore
 <summary><strong>3. 汉化或壁纸会不会把 Antigravity 改坏？官方更新后怎么办？</strong></summary>
 
 - **壁纸引擎**：不新增任何 ASAR 侵入点，随时可一键秒关或用 CLI `ctx wallpaper off` 急救关闭；若遇到旧配置冲突自动静默回退。
-- **界面汉化**：首次补丁前自动校验并留存纯净原版 `app.asar` 备份，支持一键无损还原；已连续通过 **Antigravity `2.35.1` → `2.35.2`** 全开实战态原地升级实测——官方更新覆盖 `app.asar` 后客户端正常启动不崩溃，Hub 自动提醒「官方更新待重打」，一键重新应用时会自动将 `.bak` 刷新为新版干净原版（杜绝旧版降级），同时原有壁纸与参数直接自动回归。
+- **界面汉化**：首次补丁前自动校验并留存纯净原版 `app.asar` 备份，支持一键无损还原；已连续通过 **Antigravity `2.35.1` → `2.35.2` → `2.36.0`** 全开实战态原地升级实测——官方更新覆盖 `app.asar` 后客户端正常启动不崩溃，Hub 自动提醒「官方更新待重打」，一键重新应用时会自动将 `.bak` 刷新为新版干净原版（杜绝旧版降级），同时原有壁纸与参数直接自动回归。
 </details>
 
 <details>

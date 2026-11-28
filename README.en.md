@@ -4,8 +4,8 @@
 
 **Modular Native Control Center (MCP App) for Google Antigravity: Context Cache & Usage Stats, Local Code Review, Ecosystem & Harness Governance, Local Wallpaper Engine, and Zero-Dep Chinese Localization**
 
-[![Version: v1.6.0](https://img.shields.io/badge/Version-v1.6.0-0ea5e9.svg)](https://github.com/Horikita-9-Suzune-Max-Ultrafast/antigravity-hub/releases/tag/v1.6.0)
-[![Antigravity 2.35.2 Update Verified](https://img.shields.io/badge/Antigravity%202.35.2-Update%20Verified-10b981.svg)](#battle-tested-official-update-survival-proof)
+[![Version: v1.6.1](https://img.shields.io/badge/Version-v1.6.1-0ea5e9.svg)](https://github.com/Horikita-9-Suzune-Max-Ultrafast/antigravity-hub/releases/tag/v1.6.1)
+[![Antigravity 2.36.0 Update Verified](https://img.shields.io/badge/Antigravity%202.36.0-Update%20Verified-10b981.svg)](#battle-tested-official-update-survival-proof)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 [![Node.js >= 24](https://img.shields.io/badge/Node.js-%3E%3D24-339933.svg)](https://nodejs.org/)
 [![Zero Runtime Deps](https://img.shields.io/badge/Runtime%20Deps-0-brightgreen.svg)](#architecture--design-principles)
@@ -18,7 +18,7 @@
 
 - [Five Core Modules at a Glance](#five-core-modules-at-a-glance)
 - [Battle-Tested: Official Update Survival Proof](#battle-tested-official-update-survival-proof)
-- [What's New in v1.6.0](#whats-new-in-v160)
+- [What's New in v1.6.1 & v1.6.0](#whats-new-in-v161--v160)
 - [Quick Start (3-Step Prebuilt Bundle)](#quick-start)
 - [Key Features](#key-features)
 - [Architecture & Design Principles](#architecture--design-principles)
@@ -47,28 +47,29 @@
 
 The biggest fear with any client-enhancing plugin is simple: **"Will the next official Antigravity update lock the installer, break my IDE, wipe my data, or restore a stale backup?"**
 
-We intentionally ran live, in-place official upgrades through **Antigravity `2.35.1` → `2.35.2`** (Electron `44.9.1`) while keeping the full "dirty production state" active — **ASAR localization ON + local wallpaper ON + native floating window running**, with **no pre-uninstall and no pre-restore** — and audited all 6 anti-fragility guarantees end to end:
+We intentionally ran live, in-place official upgrades through **Antigravity `2.35.1` → `2.35.2` → `2.36.0`** (Electron `44.9.1`) while keeping the full "dirty production state" active — **ASAR localization ON + local wallpaper ON + native floating window running**, with **no pre-uninstall and no pre-restore** — and audited all 6 anti-fragility guarantees end to end:
 
 | Anti-Fragility Check | Result | Verified Runtime Behavior |
 | :--- | :---: | :--- |
-| **1. Zero Installer Locks & Zero Orphan Processes** | **PASS** | Official updater cleanly overwrote `app.asar` and cold-started with `--updated` (zero file-lock errors or blank screens); old host processes exited cleanly, leaving exactly one healthy `language_server` → MCP Server → Win32 native WebView2 floating host tree |
-| **2. 100% External Truth-Source Retention** | **PASS** | Verified item-by-item post-upgrade: Vault memories (217/217), deduplicated SQLite call index (2,840/2,840), user config & quota calibrations, 1,972 active dictionary entries, and the local wallpaper library & rotation schedule all survived with zero loss |
-| **3. Automatic Clean `.bak` Refresh & Anti-Downgrade** | **PASS** | Post-upgrade detection accurately identified `outdated_after_update` + true `2.35.2` version and blocked stale-backup downgrade; re-applying refreshes `app.asar.agy-console.bak` from the clean `2.35.2` original (`current_clean_asar`), injects `dist/main.js` + `dist/preload.js`, and restores cleanly in one click |
+| **1. Zero Installer Locks & Zero Orphan Processes** | **PASS** | Official updater cleanly overwrote `app.asar` and cold-started with `--updated` (zero file-lock errors or blank screens); old host processes exited cleanly, leaving exactly one healthy `language_server` (`2.36.0`) → MCP Server → Win32 native WebView2 floating host tree |
+| **2. 100% External Truth-Source Retention** | **PASS** | Verified item-by-item post-upgrade: Vault memories (232/232), deduplicated SQLite call index (3,325/3,325), user config & model parameters, 1,972 active dictionary entries, and the local wallpaper library (5 images) & rotation schedule all survived with zero loss |
+| **3. Automatic Clean `.bak` Refresh & Anti-Downgrade** | **PASS** | Post-upgrade detection accurately identified `outdated_after_update` + true `2.36.0` version and blocked stale-backup downgrade; isolated E2E apply/restore on the real `2.36.0` `app.asar` verified byte-exact `.bak` creation from `current_clean_asar`, clean `dist/main.js` + `dist/preload.js` injection, and byte-identical one-click restore |
 | **4. Automatic Wallpaper Recovery (Zero Re-Setup)** | **PASS** | Because the wallpaper engine adds zero new ASAR injection points, the existing library, rotation schedule, opacity, blur, scrim, and glass parameters came right back automatically |
-| **5. Hooks, Transcript & Native DB Compatibility** | **PASS** | `SessionStart` brief injection, `PreInvocation`/`PostInvocation` timing, `transcript_full.jsonl`, and native `conversations/<id>.db` (nanosecond TTFT & Decode TPS) worked out of the box; `ctx_doctor` reported `HEALTHY`, `0` schema drift, and circuit breaker `CLOSED (0/3)` |
-| **6. Ecosystem Governance & Regression Suite** | **PASS** | All plugins, MCP servers, skills, rules, and hooks remained intact (0 errors, 0 secrets), and all **86 automated tests** across 21 test suites passed |
+| **5. Hooks, Transcript & Native DB Compatibility** | **PASS** | `SessionStart` brief injection, `PreInvocation`/`PostInvocation` timing, `transcript_full.jsonl`, and native `conversations/<id>.db` (nanosecond TTFT, Decode TPS & thinking/content token split) worked out of the box; `ctx_doctor` reported `HEALTHY (v1.6.1)`, `0` schema drift, and circuit breaker `CLOSED (0/3)` |
+| **6. Ecosystem Governance & Regression Suite** | **PASS** | All plugins (9/9), MCP servers (4/4), skills (78/78), rules (3/3), and hooks (4/4) remained intact (0 errors, 0 secrets), and all **86 automated tests** across 21 test suites passed |
 
 > Even if a future Antigravity release changes internal hook schemas, hooks fail open with `{}`, record redacted entries to `schema-drift.jsonl`, and trip the 3-strike circuit breaker so your conversations are never blocked. Running `ctx doctor --repair` rebuilds the SQLite index and resets state losslessly.
 
 ---
 
-## What's New in v1.6.0
+## What's New in v1.6.1 & v1.6.0
 
+- **Gemini 512K Default Context Window & Model/Parameter Editor Modal (v1.6.1)**: Adjusted default Gemini context window to `512K` to match Antigravity's observed auto-compact threshold (added `gemini-4-carbon` limits & pricing with lossless `v1 → v2` config migration preserving custom overrides); added a dual-entry **Model & Parameter Editor** modal (from the Context `used / limit` card and Settings) with one-click Gemini `256K / 512K / 1.00M` presets, per-model limit & custom prefix editing, alert threshold & FX tuning, and a visual pricing editor; added a `512K` simulator tier and UTF-8 / i18n trie bundling, slimming the single-file UI further to **`466.6 KiB`**.
 - **New 5th Top-Level Module: Local Code Review (v1.6.0)**: Zero-dependency Git diff parser (`uncommitted / staged / last_commit / branch`, auto-folding lockfiles/dist/binaries); 8 millisecond L1 static security & quality rules (scanning added lines only); whitelisted native project gate detection & manual runner (`lint / typecheck / test / ruff / mypy / cargo / go vet`); L2 isolated subagent deep-review prompt builder, JSON report import, persistent ignores, 20-report history, and checkbox-driven targeted fix instructions.
 - **Cross-Session Cumulative Usage Stats Tab (v1.6.0)**: Added a **Stats** tab (`Context / Calls / Stats / Vault`) backed by SQLite aggregation over all historical calls with `Today / 24h / 7d / 30d / All` time ranges and model filtering; displays cumulative Tokens (input / output / cache breakdown), total requests, timezone-aware `¥ CNY` / `$ USD` cost toggle, cache hit rate progress bar, weighted Decode TPS & average TTFT, and per-model breakdown.
 - **Win32 Native 120fps Per-Pixel Alpha Orb, Shared-Anchor Morphing & Compiled `.exe` Cache (v1.6.0)**: Compiles and caches `floating-host-<hash>.exe` via built-in `.NET 4 csc.exe` (`< 5ms` cache hit); native 60–240Hz DWM drag & resize; minimizes into a crisp `WS_EX_LAYERED` + `UpdateLayeredWindow` 48px anti-aliased circular Orb with soft elevation shadow, live telemetry ring, and native right-click menu; Orb ↔ Mini Bar share one focal anchor with a continuous **220ms `cubic ease-out` Dynamic-Island pill morph & opacity crossfade**, shared width sync, and exact vertical centering across high-DPI scales.
 - **4-Pillar Governance Scoring & Core Engine Performance Overhaul (v1.6.0)**: Unified `ecosystem-inventory.mjs` scanner (honoring plugin enabled state and splitting `eager` vs. `deferred` MCP tokens) with continuous 4-pillar health scoring; incremental byte-offset transcript parsing, 5×→1× Git subprocess convergence, `WeakMap` SQLite prepared-statement cache, and `rev` digest short-circuiting.
-- **Zero-Zod -33% Bundle Diet & Unified Radix Visual System (v1.6.0)**: Replaced heavy SDK + `zod` with a lightweight native SEP-1865 MCP App bridge, slimming the single-file UI from `706 KiB` down to **`475.0 KiB`**; standardized on Radix UI Colors 12-step scales, 4 font sizes, and a unified KV countdown pill with clickable help popover; **86 automated tests passing**.
+- **Zero-Zod -34% Bundle Diet & Unified Radix Visual System (v1.6.0 → v1.6.1)**: Replaced heavy SDK + `zod` with a lightweight native SEP-1865 MCP App bridge, slimming the single-file UI from `706 KiB` down to **`466.6 KiB`**; standardized on Radix UI Colors 12-step scales, 4 font sizes, and a unified KV countdown pill with clickable help popover; **86 automated tests passing**.
 
 <details>
 <summary><strong>Previous Highlights (v1.5.5)</strong></summary>
@@ -109,16 +110,16 @@ We intentionally ran live, in-place official upgrades through **Antigravity `2.3
 
 ### Option A: Prebuilt Release Bundle (Recommended, 3 Steps, Zero `npm install`)
 
-1. Download `context-cache-v1.6.0-plugin.zip` (readable `.mjs` source + pre-bundled single-file UI, zero `node_modules`) from [Releases](https://github.com/Horikita-9-Suzune-Max-Ultrafast/antigravity-hub/releases/latest).
+1. Download `context-cache-v1.6.1-plugin.zip` (readable `.mjs` source + pre-bundled single-file UI, zero `node_modules`) from [Releases](https://github.com/Horikita-9-Suzune-Max-Ultrafast/antigravity-hub/releases/latest).
 2. Extract into `~/.gemini/config/plugins/` so `plugin.json` lives at `~/.gemini/config/plugins/context-cache/plugin.json`:
    - **Windows PowerShell**:
      ```powershell
-     Expand-Archive -Path .\context-cache-v1.6.0-plugin.zip -DestinationPath "$env:USERPROFILE\.gemini\config\plugins" -Force
+     Expand-Archive -Path .\context-cache-v1.6.1-plugin.zip -DestinationPath "$env:USERPROFILE\.gemini\config\plugins" -Force
      ```
    - **macOS / Linux**:
      ```bash
      mkdir -p ~/.gemini/config/plugins
-     unzip -o context-cache-v1.6.0-plugin.zip -d ~/.gemini/config/plugins
+     unzip -o context-cache-v1.6.1-plugin.zip -d ~/.gemini/config/plugins
      ```
 3. Antigravity discovers and loads the plugin automatically (no restart required):
    - **Left Sidebar**: Open **`Antigravity Hub`** for the full-page console;
@@ -269,7 +270,7 @@ node --no-warnings bin/ctx.mjs i18n restore
 
 ### Smooth Upgrade
 - **In-App One-Click Update (v1.5.4+ Recommended)**: Open **Settings → Maintenance & Actions**, click **Check Updates**, then click **Update Now (SHA-256)** to verify checksums, atomically swap the plugin directory (auto-rollback on lock/error), and safely restart Antigravity.
-- **Prebuilt Bundle Manual Extract**: Download the latest `context-cache-v1.6.0-plugin.zip` and extract over `~/.gemini/config/plugins`. All vault memories, wallpapers, custom dictionaries, governance preferences, and snapshots live in `%USERPROFILE%\.context-cache` with **zero data loss**.
+- **Prebuilt Bundle Manual Extract**: Download the latest `context-cache-v1.6.1-plugin.zip` and extract over `~/.gemini/config/plugins`. All vault memories, wallpapers, custom dictionaries, governance preferences, and snapshots live in `%USERPROFILE%\.context-cache` with **zero data loss**.
 - **Source Users**: Run `git pull && npm run deploy`.
 
 ### Clean Uninstall & Lossless Rollback
@@ -297,7 +298,7 @@ Ensure **Node.js >= 24.0.0** is installed (`node -v`). Antigravity Hub relies on
 <summary><strong>3. Will Localization or Wallpaper break Antigravity after an official update?</strong></summary>
 
 - **Wallpaper**: Introduces zero new ASAR injection points and can be disabled instantly in UI or via `ctx wallpaper off`.
-- **Localization**: Preserves a verified clean `app.asar` backup before patching and supports one-click restore. Battle-tested through live in-place upgrades to **Antigravity `2.35.1` → `2.35.2`** with localization, wallpaper, and the floating window all running: the app starts normally after the update overwrites `app.asar`, the Hub prompts for a one-click re-apply, `.bak` is automatically refreshed with the new clean original (preventing accidental downgrade), and your wallpaper settings return automatically.
+- **Localization**: Preserves a verified clean `app.asar` backup before patching and supports one-click restore. Battle-tested through live in-place upgrades to **Antigravity `2.35.1` → `2.35.2` → `2.36.0`** with localization, wallpaper, and the floating window all running: the app starts normally after the update overwrites `app.asar`, the Hub prompts for a one-click re-apply, `.bak` is automatically refreshed with the new clean original (preventing accidental downgrade), and your wallpaper settings return automatically.
 </details>
 
 <details>
